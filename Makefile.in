@@ -208,7 +208,7 @@ appdatadir=$(datarootdir)/metainfo
 # Other options include ~/.config/systemd/user/,
 # $XDG_RUNTIME_DIR/systemd/user/
 # It seems the user may end up having to make a manual link...
-systemdunitdir=$(libdir)/systemd/user
+systemdunitdir=$(libexecdir)/systemd/user
 
 # Where the etc/images/icons/hicolor directory is to be installed.
 icondir=$(datarootdir)/icons
