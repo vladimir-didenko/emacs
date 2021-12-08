@@ -1,0 +1,57 @@
+! /etc/X11/app-defaults/Emacs
+!
+! X resources defaults for GNU Emacs (a powerful editor).
+! 
+! February 2001
+! Ivan Zakharyaschev <imz@altlinux.ru> 
+! You may use this file as specified under the GNU General Public License
+
+! Moved here from Emacs' site-start configuration:
+
+!Emacs*cursorColor: red
+!Emacs*bitmapIcon: on
+
+Emacs.Foreground: black
+Emacs.Background: honeydew
+
+!Emacs.mode-line.attributeForeground: red
+!Emacs.mode-line.attributeBackground: lemon chiffon
+
+! To distinguish this face by color if there is no bold-italic font.
+Emacs.bold-italic.attributeForeground: blue
+
+! to use russian fonts in main menu
+Emacs.paned.menubar.font: fixed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! Use similar lines in your ~/.Xdefaults
+! to override the colour everywhere:
+
+!Emacs*background: green
+!Emacs*foreground: red
+
+! end of colour override
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+! Copied here from /etc/X11/Xresources owned by xinitrc pkg:
+! Parts (C) 1996 By Greg J. Badros <gjb@cs.duke.edu>
+! Modification for Linux-Mandrake by Chmouel Boudjnah <chmouel@mandraksoft.com>
+! You may use this file as specified under the GNU General Public License
+
+!Emacs.Background: DarkSlateGray
+!Emacs.Foreground: Wheat
+!Emacs*pointerColor: Orchid
+Emacs*cursorColor: Orchid
+Emacs*bitmapIcon: on
+!Emacs*font: 8x13
+!Emacs.Font: -misc-*-medium-r-normal--15-*-*-*-*-*-microsoft-cp1251
+!Emacs.Font: -cronyx-fixed-medium-r-normal--15-*-*-*-*-*-koi8-u
+!Emacs.geometry: 80x25
+Emacs.default.attributeFamily: fixed
+
+! Other additions:
+
+!Emacs*menu*attributeFamily: helv
+!Emacs.menu.attributeBackground: peach puff
+
+! End of /etc/X11/app-defaults/Emacs

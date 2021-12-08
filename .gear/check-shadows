@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# Shell script for checking duplicate Emacs Lisp libraries with the
+# same name.
+
+if [ -z "$EMACS_BIN" ]; then
+    EMACS_BIN=emacs
+fi
+
+shadows=`$EMACS_BIN -q -batch -f list-load-path-shadows 2>&1 | \
+         sed -n -e '/duplicate Lisp libraries/,$p'`
+
+if [ "$shadows" = "" ]; then
+    echo "No duplicate Lisp libraries found"
+    exit 0
+else
+    echo "$shadows"
+    exit 1
+fi
