@@ -790,6 +790,7 @@ load_pdump (int argc, char **argv)
   /* Look for an explicitly-specified dump file.  */
   const char *path_exec = PATH_EXEC;
   char *dump_file = NULL;
+  char *exename = NULL;
   int skip_args = 0;
   while (skip_args < argc - 1)
     {
@@ -833,6 +834,7 @@ load_pdump (int argc, char **argv)
                dump_file, strerror (errno));
       xfree (dump_file);
       dump_file = real_exename;
+      exename = strdup(real_exename);
 #endif
       ptrdiff_t exenamelen = strlen (dump_file);
 #ifndef WINDOWSNT
@@ -891,12 +893,17 @@ load_pdump (int argc, char **argv)
 	 file in PATH_EXEC, and have several Emacs configurations in
 	 the same versioned libexec subdirectory.  */
       char *p, *last_sep = NULL;
-      for (p = argv[0]; *p; p++)
+
+      if (!exename)
+        fatal ("could not resolve realpath of \"%s\": %s",
+               argv[0], strerror (errno));
+
+      for (p = exename; *p; p++)
 	{
 	  if (IS_DIRECTORY_SEP (*p))
 	    last_sep = p;
 	}
-      argv0_base = last_sep ? last_sep + 1 : argv[0];
+      argv0_base = last_sep ? last_sep + 1 : exename;
       ptrdiff_t needed = (strlen (path_exec)
 			  + 1
 			  + strlen (argv0_base)
