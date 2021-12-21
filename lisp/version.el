@@ -1,4 +1,4 @@
-;;; version.el --- record version number of Emacs
+;;; version.el --- record version number of Emacs  -*- lexical-binding:t -*-
 
 ;; Copyright (C) 1985, 1992, 1994-1995, 1999-2021 Free Software
 ;; Foundation, Inc.
@@ -29,14 +29,12 @@
 (defconst emacs-major-version
   (progn (string-match "^[0-9]+" emacs-version)
          (string-to-number (match-string 0 emacs-version)))
-  "Major version number of this version of Emacs.
-This variable first existed in version 19.23.")
+  "Major version number of this version of Emacs.")
 
 (defconst emacs-minor-version
   (progn (string-match "^[0-9]+\\.\\([0-9]+\\)" emacs-version)
          (string-to-number (match-string 1 emacs-version)))
-  "Minor version number of this version of Emacs.
-This variable first existed in version 19.23.")
+  "Minor version number of this version of Emacs.")
 
 (defconst emacs-build-system (system-name)
   "Name of the system on which Emacs was built, or nil if not available.")
@@ -54,6 +52,8 @@ developing Emacs.")
 (defvar gtk-version-string)
 (defvar ns-version-string)
 (defvar cairo-version-string)
+
+(declare-function haiku-get-version-string "haikufns.c")
 
 (defun emacs-version (&optional here)
   "Return string describing the version of Emacs that is running.
@@ -73,6 +73,8 @@ to the system configuration; look at `system-configuration' instead."
 		       ((featurep 'x-toolkit) ", X toolkit")
 		       ((featurep 'ns)
 			(format ", NS %s" ns-version-string))
+                       ((featurep 'haiku)
+                        (format ", Haiku %s" (haiku-get-version-string)))
 		       (t ""))
 		 (if (featurep 'cairo)
 		     (format ", cairo version %s" cairo-version-string)
@@ -123,7 +125,7 @@ or if we could not determine the revision.")
 		  (looking-at "[[:xdigit:]]\\{40\\}"))
 	   (match-string 0)))))
 
-(defun emacs-repository-get-version (&optional dir external)
+(defun emacs-repository-get-version (&optional dir _external)
   "Try to return as a string the repository revision of the Emacs sources.
 The format of the returned string is dependent on the VCS in use.
 Value is nil if the sources do not seem to be under version

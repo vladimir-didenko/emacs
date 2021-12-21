@@ -23,13 +23,14 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include "lisp.h"
 #include "frame.h"
-#include "ptr-bounds.h"
 #include "window.h"
 #include "dispextern.h"
 #include "buffer.h"
 #include "blockinput.h"
 #include "termhooks.h"
 #include "pdumper.h"
+
+#include "pgtkterm.h"
 
 /* Fringe bitmaps are represented in three different ways:
 
@@ -101,7 +102,7 @@ struct fringe_bitmap
   ...xx...
 */
 static unsigned short question_mark_bits[] = {
-  0x3c, 0x7e, 0x7e, 0x0c, 0x18, 0x18, 0x00, 0x18, 0x18};
+  0x3c, 0x7e, 0xc3, 0xc3, 0x0c, 0x18, 0x18, 0x00, 0x18, 0x18};
 
 /* An exclamation mark.  */
 /*
@@ -117,7 +118,7 @@ static unsigned short question_mark_bits[] = {
   ...XX...
 */
 static unsigned short exclamation_mark_bits[] = {
-  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18};
+  0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x18};
 
 /* An arrow like this: `<-'.  */
 /*
@@ -970,6 +971,14 @@ update_window_fringes (struct window *w, bool keep_current_p)
   if (w->pseudo_window_p)
     return 0;
 
+  ptrdiff_t count = SPECPDL_INDEX ();
+
+  /* This function could be called for redisplaying non-selected
+     windows, in which case point has been temporarily moved to that
+     window's window-point.  So we cannot afford quitting out of here,
+     as point is restored after this function returns.  */
+  specbind (Qinhibit_quit, Qt);
+
   if (!MINI_WINDOW_P (w)
       && (ind = BVAR (XBUFFER (w->contents), indicate_buffer_boundaries), !NILP (ind)))
     {
@@ -1332,6 +1341,8 @@ update_window_fringes (struct window *w, bool keep_current_p)
       row->fringe_bitmap_periodic_p = periodic_p;
     }
 
+  unbind_to (count, Qnil);
+
   return redraw_p && !keep_current_p;
 }
 
@@ -1399,7 +1410,7 @@ If BITMAP overrides a standard fringe bitmap, the original bitmap is restored.  
    On W32 and MAC (little endian), there's no need to do this.
 */
 
-#if defined (HAVE_X_WINDOWS)
+#if defined (HAVE_X_WINDOWS) || defined (HAVE_PGTK)
 static const unsigned char swap_nibble[16] = {
   0x0, 0x8, 0x4, 0xc,           /* 0000 1000 0100 1100 */
   0x2, 0xa, 0x6, 0xe,           /* 0010 1010 0110 1110 */
@@ -1461,6 +1472,25 @@ init_fringe_bitmap (int which, struct fringe_bitmap *fb, int once_p)
 	}
 #endif /* not USE_CAIRO */
 #endif /* HAVE_X_WINDOWS */
+
+#if !defined(HAVE_X_WINDOWS) && defined (HAVE_PGTK)
+      unsigned short *bits = fb->bits;
+      int j;
+
+      for (j = 0; j < fb->height; j++)
+	{
+	  unsigned short b = *bits;
+#ifdef WORDS_BIGENDIAN
+	  *bits++ = (b << (16 - fb->width));
+#else
+	  b = (unsigned short)((swap_nibble[b & 0xf] << 12)
+			       | (swap_nibble[(b>>4) & 0xf] << 8)
+			       | (swap_nibble[(b>>8) & 0xf] << 4)
+			       | (swap_nibble[(b>>12) & 0xf]));
+	  *bits++ = (b >> (16 - fb->width));
+#endif
+	}
+#endif /* !HAVE_X_WINDOWS && HAVE_PGTK */
 
 #ifdef HAVE_NTGUI
       unsigned short *bits = fb->bits;
@@ -1607,9 +1637,7 @@ If BITMAP already exists, the existing definition is replaced.  */)
   fb.dynamic = true;
 
   xfb = xmalloc (sizeof fb + fb.height * BYTES_PER_BITMAP_ROW);
-  fb.bits = b = ((unsigned short *)
-		 ptr_bounds_clip (xfb + 1, fb.height * BYTES_PER_BITMAP_ROW));
-  xfb = ptr_bounds_clip (xfb, sizeof *xfb);
+  fb.bits = b = (unsigned short *) (xfb + 1);
 
   j = 0;
   while (j < fb.height)
@@ -1675,10 +1703,10 @@ Return nil if POS is not visible in WINDOW.  */)
 
   if (!NILP (pos))
     {
-      CHECK_FIXNUM_COERCE_MARKER (pos);
-      if (! (BEGV <= XFIXNUM (pos) && XFIXNUM (pos) <= ZV))
+      EMACS_INT p = fix_position (pos);
+      if (! (BEGV <= p && p <= ZV))
 	args_out_of_range (window, pos);
-      textpos = XFIXNUM (pos);
+      textpos = p;
     }
   else if (w == XWINDOW (selected_window))
     textpos = PT;
@@ -1736,11 +1764,7 @@ If nil, also continue lines which are exactly as wide as the window.  */);
 void
 mark_fringe_data (void)
 {
-  int i;
-
-  for (i = 0; i < max_fringe_bitmaps; i++)
-    if (!NILP (fringe_faces[i]))
-      mark_object (fringe_faces[i]);
+  mark_objects (fringe_faces, max_fringe_bitmaps);
 }
 
 /* Initialize this module when Emacs starts.  */
@@ -1783,14 +1807,15 @@ gui_init_fringe (struct redisplay_interface *rif)
   for (bt = NO_FRINGE_BITMAP + 1; bt < MAX_STANDARD_FRINGE_BITMAPS; bt++)
     {
       struct fringe_bitmap *fb = &standard_bitmaps[bt];
-      rif->define_fringe_bitmap (bt, fb->bits, fb->height, fb->width);
+      if (!fringe_bitmaps[bt])
+        rif->define_fringe_bitmap (bt, fb->bits, fb->height, fb->width);
     }
 
   /* Set up user-defined fringe bitmaps that might have been defined
      before the frame of this kind was initialized.  This can happen
      if Emacs is started as a daemon and the init files define fringe
      bitmaps.  */
-  for ( ; bt < max_used_fringe_bitmap; bt++)
+  for (bt = NO_FRINGE_BITMAP + 1; bt < max_used_fringe_bitmap; bt++)
     {
       struct fringe_bitmap *fb = fringe_bitmaps[bt];
       if (fb)

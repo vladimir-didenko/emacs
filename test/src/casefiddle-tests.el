@@ -247,7 +247,8 @@
   ;;             input upcase downcase [titlecase]
   (dolist (test '((?a ?A ?a) (?A ?A ?a)
                   (?ł ?Ł ?ł) (?Ł ?Ł ?ł)
-                  (?ß ?ß ?ß) (?ẞ ?ẞ ?ß)
+                  ;; We char-upcase ß to ẞ; see bug #11309.
+                  (?ß ?ẞ ?ß) (?ẞ ?ẞ ?ß)
                   (?ⅷ ?Ⅷ ?ⅷ) (?Ⅷ ?Ⅷ ?ⅷ)
                   (?Ǆ ?Ǆ ?ǆ ?ǅ) (?ǅ ?Ǆ ?ǆ ?ǅ) (?ǆ ?Ǆ ?ǆ ?ǅ)))
     (let ((ch (car test))
@@ -276,5 +277,21 @@
   (dolist (region-extract-function '(casefiddle-badfunc casefiddle-loopfunc))
     (with-temp-buffer
       (should-error (upcase-region nil nil t)))))
+
+(ert-deftest casefiddle-turkish ()
+  (skip-unless (member "tr_TR.utf8" (get-locale-names)))
+  ;; See bug#50752.  The point is that unibyte and multibyte strings
+  ;; are upcased differently in the "dotless i" case in Turkish,
+  ;; turning ASCII into non-ASCII, which is very unusual.
+  (with-locale-environment "tr_TR.utf8"
+    (should (string-equal (downcase "I ı") "ı ı"))
+    (should (string-equal (downcase "İ i") "i̇ i"))
+    (should (string-equal (downcase "I") "i"))
+    (should (string-equal (capitalize "bIte") "Bite"))
+    (should (string-equal (capitalize "bIté") "Bıté"))
+    (should (string-equal (capitalize "indIa") "India"))
+    ;; This does not work -- it produces "Indıa".
+    ;;(should (string-equal (capitalize "indIá") "İndıa"))
+    ))
 
 ;;; casefiddle-tests.el ends here

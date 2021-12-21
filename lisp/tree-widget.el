@@ -110,10 +110,8 @@
 ;; `tree-widget-themes-directory', and `tree-widget-theme' options for
 ;; more details.
 
-;;; History:
-;;
-
 ;;; Code:
+
 (require 'wid-edit)
 
 ;;; Customization
@@ -216,8 +214,8 @@ Give the image the specified properties PROPS."
 See also the option `widget-image-conversion'."
   (delq nil
         (mapcar
-         #'(lambda (fmt)
-             (and (image-type-available-p (car fmt)) fmt))
+         (lambda (fmt)
+           (and (image-type-available-p (car fmt)) fmt))
          widget-image-conversion)))
 
 ;; Buffer local cache of theme data.
@@ -260,10 +258,9 @@ Typically it should contain something like this:
      \\='(:ascent center :mask (heuristic t)))"
   (or name (setq name (or tree-widget-theme "default")))
   (unless (string-equal name (tree-widget-theme-name))
-    (set (make-local-variable 'tree-widget--theme)
-         (make-vector 4 nil))
-      (tree-widget-set-parent-theme name)
-      (tree-widget-set-parent-theme "default")))
+    (setq-local tree-widget--theme (make-vector 4 nil))
+    (tree-widget-set-parent-theme name)
+    (tree-widget-set-parent-theme "default")))
 
 (defun tree-widget--locate-sub-directory (name path)
   "Locate all occurrences of the sub-directory NAME in PATH.

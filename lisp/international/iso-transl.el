@@ -1,4 +1,4 @@
-;;; iso-transl.el --- keyboard input for ISO 10646 chars -*- coding: utf-8 -*-
+;;; iso-transl.el --- keyboard input for ISO 10646 chars -*- coding: utf-8; lexical-binding: t; -*-
 
 ;; Copyright (C) 1987, 1993-1999, 2001-2021 Free Software Foundation,
 ;; Inc.
@@ -30,21 +30,11 @@
 ;; A-umlaut as `C-x 8 " A' or `Alt-" A' (if you have an Alt key) or
 ;; `umlaut A' (if you have an umlaut/diaeresis key).
 
-;; C-x 8 is set up to autoload this package,
-;; but Alt keys and dead accent keys are only defined
-;; once you have loaded the package.  It is nontrivial
-;; to make all of the Alt keys autoload, and it is not clear
-;; that the dead accent keys SHOULD autoload this package.
-
 ;; This package supports all characters defined by ISO 8859-1, along
 ;; with a few other ISO 10646 characters commonly used in English and
 ;; basic math.
 
 ;;; Code:
-
-;;; Provide some binding for startup:
-;;;###autoload (define-key key-translation-map "\C-x8" 'iso-transl-ctl-x-8-map)
-;;;###autoload (autoload 'iso-transl-ctl-x-8-map "iso-transl" "Keymap for C-x 8 prefix." t 'keymap)
 
 (defvar iso-transl-dead-key-alist
   '((?\' . mute-acute)
@@ -96,33 +86,46 @@
     ("\"y"  . [?ÿ])
     ("''"   . [?´])
     ("'A"   . [?Á])
+    ("'C"   . [?Ć])
     ("'E"   . [?É])
     ("'I"   . [?Í])
+    ("'N"   . [?Ń])
     ("'O"   . [?Ó])
+    ("'S"   . [?Ś])
     ("'U"   . [?Ú])
     ("'Y"   . [?Ý])
+    ("'Z"   . [?Ź])
     ("'a"   . [?á])
+    ("'c"   . [?ć])
     ("'e"   . [?é])
     ("'i"   . [?í])
+    ("'n"   . [?ń])
     ("'o"   . [?ó])
+    ("'s"   . [?ś])
     ("'u"   . [?ú])
     ("'y"   . [?ý])
+    ("'z"   . [?ź])
     ("*$"   . [?¤])
     ("$"    . [?¤])
     ("*+"   . [?±])
     ("+"    . [?±])
     (",,"   . [?¸])
+    (",A"   . [?Ą])
     (",C"   . [?Ç])
+    (",a"   . [?ą])
     (",c"   . [?ç])
     ("*-"   . [?­])
     ("-"    . [?­])
     ("*."   . [?·])
-    ("."    . [?·])
+    (".."   . [?·])
+    (".z"   . [?ż])
     ("//"   . [?÷])
     ("/A"   . [?Å])
+    ("/L"   . [?Ł])
     ("/E"   . [?Æ])
     ("/O"   . [?Ø])
     ("/a"   . [?å])
+    ("/l"   . [?ł])
     ("/e"   . [?æ])
     ("/o"   . [?ø])
     ("1/2"  . [?½])
@@ -304,6 +307,14 @@ sequence VECTOR.  (VECTOR is normally one character long.)")
     (setq alist (cdr alist))))
 
 (defun iso-transl-set-language (lang)
+  "Set shorter key bindings for some characters relevant for LANG.
+This affects the `C-x 8' prefix.
+
+Note that only a few languages are supported, and for more
+rigorous support it is recommended to use an input method
+instead.  Also note that many of these characters can be input
+with the regular `C-x 8' map without having to specify a language
+here."
   (interactive (list (let ((completion-ignore-case t))
 		       (completing-read "Set which language? "
 					iso-transl-language-alist nil t))))

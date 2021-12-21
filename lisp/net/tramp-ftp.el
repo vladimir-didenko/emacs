@@ -31,8 +31,6 @@
 (require 'tramp)
 
 ;; Pacify byte-compiler.
-(eval-when-compile
-  (require 'custom))
 (defvar ange-ftp-ftp-name-arg)
 (defvar ange-ftp-ftp-name-res)
 (defvar ange-ftp-name-format)
@@ -79,9 +77,9 @@ present for backward compatibility."
   ;;; This regexp recognizes absolute filenames with only one component
   ;;; on Windows, for the sake of hostname completion.
   (and (memq system-type '(ms-dos windows-nt))
-       (or (assoc "^[a-zA-Z]:/[^/:]*\\'" file-name-handler-alist)
+       (or (assoc "^[[:alpha:]]:/[^/:]*\\'" file-name-handler-alist)
 	   (setq file-name-handler-alist
-		 (cons '("^[a-zA-Z]:/[^/:]*\\'" .
+		 (cons '("^[:alpha:]]:/[^/:]*\\'" .
 			 ange-ftp-completion-hook-function)
 		       file-name-handler-alist)))))
 
@@ -122,15 +120,15 @@ pass to the OPERATION."
 		 (nth 2 tramp-file-name-structure)
 		 (nth 4 tramp-file-name-structure)))
 	  ;; ange-ftp uses `ange-ftp-ftp-name-arg' and `ange-ftp-ftp-name-res'
-	  ;; for optimization in `ange-ftp-ftp-name'. If Tramp wasn't active,
+	  ;; for optimization in `ange-ftp-ftp-name'.  If Tramp wasn't active,
 	  ;; there could be incorrect values from previous calls in case the
-	  ;; "ftp" method is used in the Tramp file name. So we unset
+	  ;; "ftp" method is used in the Tramp file name.  So we unset
 	  ;; those values.
 	  (ange-ftp-ftp-name-arg "")
 	  (ange-ftp-ftp-name-res nil))
       (cond
        ;; If argument is a symlink, `file-directory-p' and
-       ;; `file-exists-p' call the traversed file recursively. So we
+       ;; `file-exists-p' call the traversed file recursively.  So we
        ;; cannot disable the file-name-handler this case.  We set the
        ;; connection property "started" in order to put the remote
        ;; location into the cache, which is helpful for further
@@ -177,11 +175,10 @@ pass to the OPERATION."
 ;; It must be a `defsubst' in order to push the whole code into
 ;; tramp-loaddefs.el.  Otherwise, there would be recursive autoloading.
 ;;;###tramp-autoload
-(defsubst tramp-ftp-file-name-p (filename)
-  "Check if it's a FILENAME that should be forwarded to Ange-FTP."
-  (and (tramp-tramp-file-p filename)
-       (string= (tramp-file-name-method (tramp-dissect-file-name filename))
-		tramp-ftp-method)))
+(defsubst tramp-ftp-file-name-p (vec-or-filename)
+  "Check if it's a VEC-OR-FILENAME that should be forwarded to Ange-FTP."
+  (when-let* ((vec (tramp-ensure-dissected-file-name vec-or-filename)))
+    (string= (tramp-file-name-method vec) tramp-ftp-method)))
 
 ;;;###tramp-autoload
 (tramp--with-startup

@@ -19,6 +19,11 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include <config.h>
 
+/* Work around GCC bug 102671.  */
+#if 10 <= __GNUC__
+# pragma GCC diagnostic ignored "-Wanalyzer-null-dereference"
+#endif
+
 #include "systime.h"
 
 #include "blockinput.h"
@@ -62,16 +67,6 @@ enum { TM_YEAR_BASE = 1900 };
    allow easier testing of some slow-path code.  */
 #ifndef FASTER_TIMEFNS
 # define FASTER_TIMEFNS 1
-#endif
-
-/* Whether to warn about Lisp timestamps (TICKS . HZ) that may be
-   instances of obsolete-format timestamps (HI . LO) where HI is
-   the high-order bits and LO the low-order 16 bits.  Currently this
-   is true, but it should change to false in a future version of
-   Emacs.  Compile with -DWARN_OBSOLETE_TIMESTAMPS=0 to see what the
-   future will be like.  */
-#ifndef WARN_OBSOLETE_TIMESTAMPS
-enum { WARN_OBSOLETE_TIMESTAMPS = true };
 #endif
 
 /* Although current-time etc. generate list-format timestamps
@@ -593,31 +588,29 @@ timespec_to_lisp (struct timespec t)
 }
 
 /* Return NUMERATOR / DENOMINATOR, rounded to the nearest double.
-   Arguments must be Lisp integers, and DENOMINATOR must be nonzero.  */
+   Arguments must be Lisp integers, and DENOMINATOR must be positive.  */
 static double
 frac_to_double (Lisp_Object numerator, Lisp_Object denominator)
 {
-  intmax_t intmax_numerator;
-  if (FASTER_TIMEFNS && EQ (denominator, make_fixnum (1))
-      && integer_to_intmax (numerator, &intmax_numerator))
-    return intmax_numerator;
+  intmax_t intmax_numerator, intmax_denominator;
+  if (FASTER_TIMEFNS
+      && integer_to_intmax (numerator, &intmax_numerator)
+      && integer_to_intmax (denominator, &intmax_denominator)
+      && intmax_numerator % intmax_denominator == 0)
+    return intmax_numerator / intmax_denominator;
 
   /* Compute number of base-FLT_RADIX digits in numerator and denominator.  */
   mpz_t const *n = bignum_integer (&mpz[0], numerator);
   mpz_t const *d = bignum_integer (&mpz[1], denominator);
-  ptrdiff_t nbits = mpz_sizeinbase (*n, 2);
-  ptrdiff_t dbits = mpz_sizeinbase (*d, 2);
-  eassume (0 < nbits);
-  eassume (0 < dbits);
-  ptrdiff_t ndig = (nbits + LOG2_FLT_RADIX - 1) / LOG2_FLT_RADIX;
-  ptrdiff_t ddig = (dbits + LOG2_FLT_RADIX - 1) / LOG2_FLT_RADIX;
+  ptrdiff_t ndig = mpz_sizeinbase (*n, FLT_RADIX);
+  ptrdiff_t ddig = mpz_sizeinbase (*d, FLT_RADIX);
 
   /* Scale with SCALE when doing integer division.  That is, compute
      (N * FLT_RADIX**SCALE) / D [or, if SCALE is negative, N / (D *
      FLT_RADIX**-SCALE)] as a bignum, convert the bignum to double,
      then divide the double by FLT_RADIX**SCALE.  First scale N
      (or scale D, if SCALE is negative) ...  */
-  ptrdiff_t scale = ddig - ndig + DBL_MANT_DIG + 1;
+  ptrdiff_t scale = ddig - ndig + DBL_MANT_DIG;
   if (scale < 0)
     {
       mpz_mul_2exp (mpz[1], *d, - (scale * LOG2_FLT_RADIX));
@@ -645,7 +638,7 @@ frac_to_double (Lisp_Object numerator, Lisp_Object denominator)
      round to the nearest integer; otherwise, it is less than
      FLT_RADIX ** (DBL_MANT_DIG + 1) and round it to the nearest
      multiple of FLT_RADIX.  Break ties to even.  */
-  if (mpz_sizeinbase (*q, 2) < DBL_MANT_DIG * LOG2_FLT_RADIX)
+  if (mpz_sizeinbase (*q, FLT_RADIX) <= DBL_MANT_DIG)
     {
       /* Converting to double will use the whole quotient so add 1 to
 	 its absolute value as per round-to-even; i.e., if the doubled
@@ -770,54 +763,54 @@ decode_time_components (enum timeform form,
   /* Normalize out-of-range lower-order components by carrying
      each overflow into the next higher-order component.  */
   us += ps / 1000000 - (ps % 1000000 < 0);
-  mpz_set_intmax (mpz[0], us / 1000000 - (us % 1000000 < 0));
-  mpz_add (mpz[0], mpz[0], *bignum_integer (&mpz[1], low));
-  mpz_addmul_ui (mpz[0], *bignum_integer (&mpz[1], high), 1 << LO_TIME_BITS);
+  mpz_t *s = &mpz[1];
+  mpz_set_intmax (*s, us / 1000000 - (us % 1000000 < 0));
+  mpz_add (*s, *s, *bignum_integer (&mpz[0], low));
+  mpz_addmul_ui (*s, *bignum_integer (&mpz[0], high), 1 << LO_TIME_BITS);
   ps = ps % 1000000 + 1000000 * (ps % 1000000 < 0);
   us = us % 1000000 + 1000000 * (us % 1000000 < 0);
 
-  if (result)
+  Lisp_Object hz;
+  switch (form)
     {
-      switch (form)
-	{
-	case TIMEFORM_HI_LO:
-	  /* Floats and nil were handled above, so it was an integer.  */
-	  result->hz = make_fixnum (1);
-	  break;
+    case TIMEFORM_HI_LO:
+      /* Floats and nil were handled above, so it was an integer.  */
+      mpz_swap (mpz[0], *s);
+      hz = make_fixnum (1);
+      break;
 
-	case TIMEFORM_HI_LO_US:
-	  mpz_mul_ui (mpz[0], mpz[0], 1000000);
-	  mpz_add_ui (mpz[0], mpz[0], us);
-	  result->hz = make_fixnum (1000000);
-	  break;
+    case TIMEFORM_HI_LO_US:
+      mpz_set_ui (mpz[0], us);
+      mpz_addmul_ui (mpz[0], *s, 1000000);
+      hz = make_fixnum (1000000);
+      break;
 
-	case TIMEFORM_HI_LO_US_PS:
-	  mpz_mul_ui (mpz[0], mpz[0], 1000000);
-	  mpz_add_ui (mpz[0], mpz[0], us);
-	  mpz_mul_ui (mpz[0], mpz[0], 1000000);
-	  mpz_add_ui (mpz[0], mpz[0], ps);
-	  result->hz = trillion;
-	  break;
+    case TIMEFORM_HI_LO_US_PS:
+      {
+	#if FASTER_TIMEFNS && TRILLION <= ULONG_MAX
+	  unsigned long i = us;
+	  mpz_set_ui (mpz[0], i * 1000000 + ps);
+	  mpz_addmul_ui (mpz[0], *s, TRILLION);
+	#else
+	  intmax_t i = us;
+	  mpz_set_intmax (mpz[0], i * 1000000 + ps);
+	  mpz_addmul (mpz[0], *s, ztrillion);
+	#endif
+	hz = trillion;
+      }
+      break;
 
-	default:
-	  eassume (false);
-	}
-      result->ticks = make_integer_mpz ();
+    default:
+      eassume (false);
     }
-  else
-    *dresult = mpz_get_d (mpz[0]) + (us * 1e6L + ps) / 1e12L;
 
-  return 0;
+  return decode_ticks_hz (make_integer_mpz (), hz, result, dresult);
 }
-
-enum { DECODE_SECS_ONLY = WARN_OBSOLETE_TIMESTAMPS + 1 };
 
 /* Decode a Lisp timestamp SPECIFIED_TIME that represents a time.
 
-   FLAGS specifies conversion flags.  If FLAGS & DECODE_SECS_ONLY,
-   ignore and do not validate any sub-second components of an
-   old-format SPECIFIED_TIME.  If FLAGS & WARN_OBSOLETE_TIMESTAMPS,
-   diagnose what could be obsolete (HIGH . LOW) timestamps.
+   If DECODE_SECS_ONLY, ignore and do not validate any sub-second
+   components of an old-format SPECIFIED_TIME.
 
    If RESULT is not null, store into *RESULT the converted time;
    otherwise, store into *DRESULT the number of seconds since the
@@ -826,7 +819,7 @@ enum { DECODE_SECS_ONLY = WARN_OBSOLETE_TIMESTAMPS + 1 };
 
    Return the form of SPECIFIED-TIME.  Signal an error if unsuccessful.  */
 static enum timeform
-decode_lisp_time (Lisp_Object specified_time, int flags,
+decode_lisp_time (Lisp_Object specified_time, bool decode_secs_only,
 		  struct lisp_time *result, double *dresult)
 {
   Lisp_Object high = make_fixnum (0);
@@ -847,7 +840,7 @@ decode_lisp_time (Lisp_Object specified_time, int flags,
 	{
 	  Lisp_Object low_tail = XCDR (low);
 	  low = XCAR (low);
-	  if (! (flags & DECODE_SECS_ONLY))
+	  if (! decode_secs_only)
 	    {
 	      if (CONSP (low_tail))
 		{
@@ -870,9 +863,6 @@ decode_lisp_time (Lisp_Object specified_time, int flags,
 	}
       else
 	{
-	  if (flags & WARN_OBSOLETE_TIMESTAMPS
-	      && RANGED_FIXNUMP (0, low, (1 << LO_TIME_BITS) - 1))
-	    message ("obsolete timestamp with cdr %"pI"d", XFIXNUM (low));
 	  form = TIMEFORM_TICKS_HZ;
 	}
 
@@ -1001,8 +991,7 @@ static struct lisp_time
 lisp_time_struct (Lisp_Object specified_time, enum timeform *pform)
 {
   struct lisp_time t;
-  enum timeform form
-    = decode_lisp_time (specified_time, WARN_OBSOLETE_TIMESTAMPS, &t, 0);
+  enum timeform form = decode_lisp_time (specified_time, false, &t, 0);
   if (pform)
     *pform = form;
   return t;
@@ -1027,9 +1016,8 @@ lisp_time_argument (Lisp_Object specified_time)
 static time_t
 lisp_seconds_argument (Lisp_Object specified_time)
 {
-  int flags = WARN_OBSOLETE_TIMESTAMPS | DECODE_SECS_ONLY;
   struct lisp_time lt;
-  decode_lisp_time (specified_time, flags, &lt, 0);
+  decode_lisp_time (specified_time, true, &lt, 0);
   struct timespec t = lisp_to_timespec (lt);
   if (! timespec_valid_p (t))
     time_overflow ();
@@ -1131,24 +1119,6 @@ time_arith (Lisp_Object a, Lisp_Object b, bool subtract)
       mpz_t *ihz = &mpz[0];
       mpz_mul (*ihz, *fa, *db);
 
-      /* When warning about obsolete timestamps, if the smaller
-	 denominator comes from a non-(TICKS . HZ) timestamp and could
-	 generate a (TICKS . HZ) timestamp that would look obsolete,
-	 arrange for the result to have a higher HZ to avoid a
-	 spurious warning by a later consumer of this function's
-	 returned value.  */
-      verify (1 << LO_TIME_BITS <= ULONG_MAX);
-      if (WARN_OBSOLETE_TIMESTAMPS
-	  && (da_lt_db ? aform : bform) == TIMEFORM_FLOAT
-	  && (da_lt_db ? bform : aform) != TIMEFORM_TICKS_HZ
-	  && mpz_cmp_ui (*hzmin, 1) > 0
-	  && mpz_cmp_ui (*hzmin, 1 << LO_TIME_BITS) < 0)
-	{
-	  mpz_t *hzmin1 = &mpz[2 - da_lt_db];
-	  mpz_set_ui (*hzmin1, 1 << LO_TIME_BITS);
-	  hzmin = hzmin1;
-	}
-
       /* iticks = (fb * na) OP (fa * nb), where OP is + or -.  */
       mpz_t const *na = bignum_integer (iticks, ta.ticks);
       mpz_mul (*iticks, *fb, *na);
@@ -1170,8 +1140,7 @@ time_arith (Lisp_Object a, Lisp_Object b, bool subtract)
 	     upwards by multiplying the normalized numerator and denominator
 	     so that the resulting denominator becomes at least hzmin.
 	     This rescaling avoids returning a timestamp that is less precise
-	     than both a and b, or a timestamp that looks obsolete when that
-	     might be a problem.  */
+	     than both a and b.  */
 	  if (!FASTER_TIMEFNS || mpz_cmp (*ihz, *hzmin) < 0)
 	    {
 	      /* Rescale straightforwardly.  Although this might not
@@ -1296,7 +1265,7 @@ or (if you need time as a string) `format-time-string'.  */)
   (Lisp_Object specified_time)
 {
   double t;
-  decode_lisp_time (specified_time, 0, 0, &t);
+  decode_lisp_time (specified_time, false, 0, &t);
   return make_float (t);
 }
 
@@ -1309,45 +1278,41 @@ or (if you need time as a string) `format-time-string'.  */)
    determine how many bytes would be written, use NULL for S and
    ((size_t) -1) for MAXSIZE.
 
-   This function behaves like nstrftime, except it allows NUL
-   bytes in FORMAT and it does not support nanoseconds.  */
+   This function behaves like nstrftime, except it allows null
+   bytes in FORMAT.  */
 static size_t
 emacs_nmemftime (char *s, size_t maxsize, const char *format,
 		 size_t format_len, const struct tm *tp, timezone_t tz, int ns)
 {
+  int saved_errno = errno;
   size_t total = 0;
 
-  /* Loop through all the NUL-terminated strings in the format
-     argument.  Normally there's just one NUL-terminated string, but
+  /* Loop through all the null-terminated strings in the format
+     argument.  Normally there's just one null-terminated string, but
      there can be arbitrarily many, concatenated together, if the
      format contains '\0' bytes.  nstrftime stops at the first
      '\0' byte so we must invoke it separately for each such string.  */
   for (;;)
     {
-      size_t len;
-      size_t result;
-
+      errno = 0;
+      size_t result = nstrftime (s, maxsize, format, tp, tz, ns);
+      if (result == 0 && errno != 0)
+	return result;
       if (s)
-	s[0] = '\1';
-
-      result = nstrftime (s, maxsize, format, tp, tz, ns);
-
-      if (s)
-	{
-	  if (result == 0 && s[0] != '\0')
-	    return 0;
-	  s += result + 1;
-	}
+	s += result + 1;
 
       maxsize -= result + 1;
       total += result;
-      len = strlen (format);
+      size_t len = strlen (format);
       if (len == format_len)
-	return total;
+	break;
       total++;
       format += len + 1;
       format_len -= len + 1;
     }
+
+  errno = saved_errno;
+  return total;
 }
 
 static Lisp_Object
@@ -1377,10 +1342,11 @@ format_time_string (char const *format, ptrdiff_t formatlen,
 
   while (true)
     {
-      buf[0] = '\1';
+      errno = 0;
       len = emacs_nmemftime (buf, size, format, formatlen, tmp, tz, ns);
-      if ((0 < len && len < size) || (len == 0 && buf[0] == '\0'))
+      if (len != 0 || errno == 0)
 	break;
+      eassert (errno == ERANGE);
 
       /* Buffer was too small, so make it bigger and try again.  */
       len = emacs_nmemftime (NULL, SIZE_MAX, format, formatlen, tmp, tz, ns);
@@ -1647,12 +1613,11 @@ saving flag to be guessed.
 
 As an obsolescent calling convention, if this function is called with
 6 or more arguments, the first 6 arguments are SECOND, MINUTE, HOUR,
-DAY, MONTH, and YEAR, and specify the components of a decoded time,
-where DST assumed to be -1 and FORM is omitted.  If there are more
-than 6 arguments the *last* argument is used as ZONE and any other
-extra arguments are ignored, so that (apply #\\='encode-time
-(decode-time ...)) works.  In this obsolescent convention, DST and
-ZONE default to -1 and nil respectively.
+DAY, MONTH, and YEAR, and specify the components of a decoded time.
+If there are more than 6 arguments the *last* argument is used as ZONE
+and any other extra arguments are ignored, so that (apply
+#\\='encode-time (decode-time ...)) works.  In this obsolescent
+convention, DST and ZONE default to -1 and nil respectively.
 
 Years before 1970 are not guaranteed to work.  On some systems,
 year values as low as 1901 do work.
@@ -1699,7 +1664,7 @@ usage: (encode-time TIME &rest OBSOLESCENT-ARGUMENTS)  */)
 
   /* Let SEC = floor (LT.ticks / HZ), with SUBSECTICKS the remainder.  */
   struct lisp_time lt;
-  decode_lisp_time (secarg, 0, &lt, 0);
+  decode_lisp_time (secarg, false, &lt, 0);
   Lisp_Object hz = lt.hz, sec, subsecticks;
   if (FASTER_TIMEFNS && EQ (hz, make_fixnum (1)))
     {
@@ -1752,9 +1717,7 @@ Truncate the returned value toward minus infinity.
 If FORM is nil (the default), return the same form as `current-time'.
 If FORM is a positive integer, return a pair of integers (TICKS . FORM),
 where TICKS is the number of clock ticks and FORM is the clock frequency
-in ticks per second.  (Currently the positive integer should be at least
-65536 if the returned value is expected to be given to standard functions
-expecting Lisp timestamps.)  If FORM is t, return (TICKS . PHZ), where
+in ticks per second.  If FORM is t, return (TICKS . PHZ), where
 PHZ is a suitable clock frequency in ticks per second.  If FORM is
 `integer', return an integer count of seconds.  If FORM is `list',
 return an integer list (HIGH LOW USEC PSEC), where HIGH has the most
@@ -1763,7 +1726,7 @@ bits, and USEC and PSEC are the microsecond and picosecond counts.  */)
      (Lisp_Object time, Lisp_Object form)
 {
   struct lisp_time t;
-  enum timeform input_form = decode_lisp_time (time, 0, &t, 0);
+  enum timeform input_form = decode_lisp_time (time, false, &t, 0);
   if (NILP (form))
     form = CURRENT_TIME_LIST ? Qlist : Qt;
   if (EQ (form, Qlist))
@@ -2046,7 +2009,7 @@ syms_of_timefns (void)
   defsubr (&Scurrent_time_zone);
   defsubr (&Sset_time_zone_rule);
 
-  flt_radix_power = make_vector (flt_radix_power_size, Qnil);
+  flt_radix_power = make_nil_vector (flt_radix_power_size);
   staticpro (&flt_radix_power);
 
 #ifdef NEED_ZTRILLION_INIT

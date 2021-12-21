@@ -36,8 +36,9 @@
 
 (ert-deftest timer-tests-debug-timer-check ()
   ;; This function exists only if --enable-checking.
-  (if (fboundp 'debug-timer-check)
-      (should (debug-timer-check)) t))
+  (skip-unless (fboundp 'debug-timer-check))
+  (when (fboundp 'debug-timer-check)    ; silence byte-compiler
+    (should (debug-timer-check))))
 
 (ert-deftest timer-test-multiple-of-time ()
   (should (time-equal-p

@@ -1,21 +1,23 @@
-;;; undo-tests.el --- Tests of primitive-undo
+;;; undo-tests.el --- Tests of primitive-undo -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2012-2021 Free Software Foundation, Inc.
 
 ;; Author: Aaron S. Hawley <aaron.s.hawley@gmail.com>
 
-;; This program is free software: you can redistribute it and/or
+;; This file is part of GNU Emacs.
+;;
+;; GNU Emacs is free software: you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License as
 ;; published by the Free Software Foundation, either version 3 of the
 ;; License, or (at your option) any later version.
 ;;
-;; This program is distributed in the hope that it will be useful, but
+;; GNU Emacs is distributed in the hope that it will be useful, but
 ;; WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 ;; General Public License for more details.
 ;;
 ;; You should have received a copy of the GNU General Public License
-;; along with this program.  If not, see `https://www.gnu.org/licenses/'.
+;; along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -44,6 +46,8 @@
 ;;; Code:
 
 (require 'ert)
+(require 'ert-x)
+(require 'facemenu)
 
 (ert-deftest undo-test0 ()
   "Test basics of \\[undo]."
@@ -85,6 +89,7 @@
 
 (ert-deftest undo-test1 ()
   "Test undo of \\[undo] command (redo)."
+  (require 'facemenu)
   (with-temp-buffer
     (buffer-enable-undo)
     (undo-boundary)
@@ -214,17 +219,14 @@
 
 (ert-deftest undo-test-file-modified ()
   "Test undoing marks buffer visiting file unmodified."
-  (let ((tempfile (make-temp-file "undo-test")))
-    (unwind-protect
-        (progn
-          (with-current-buffer (find-file-noselect tempfile)
-            (insert "1")
-            (undo-boundary)
-            (set-buffer-modified-p nil)
-            (insert "2")
-            (undo)
-            (should-not (buffer-modified-p))))
-      (delete-file tempfile))))
+  (ert-with-temp-file tempfile
+    (with-current-buffer (find-file-noselect tempfile)
+      (insert "1")
+      (undo-boundary)
+      (set-buffer-modified-p nil)
+      (insert "2")
+      (undo)
+      (should-not (buffer-modified-p)))))
 
 (ert-deftest undo-test-region-not-most-recent ()
   "Test undo in region of an edit not the most recent."
@@ -452,7 +454,7 @@ Demonstrates bug 25599."
     (insert ";; aaaaaaaaa
 ;; bbbbbbbb")
     (let ((overlay-modified
-           (lambda (ov after-p _beg _end &optional length)
+           (lambda (ov after-p _beg _end &optional _length)
              (unless after-p
                (when (overlay-buffer ov)
                  (delete-overlay ov))))))

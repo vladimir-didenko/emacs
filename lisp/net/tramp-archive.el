@@ -54,6 +54,7 @@
 ;; * ".ar" - UNIX archiver formats
 ;; * ".cab", ".CAB" - Microsoft Windows cabinets
 ;; * ".cpio" - CPIO archives
+;; * ".crate" - Cargo (Rust) packages
 ;; * ".deb" - Debian packages
 ;; * ".depot" - HP-UX SD depots
 ;; * ".exe" - Self extracting Microsoft Windows EXE files
@@ -103,7 +104,7 @@
 ;; It is even possible to access file archives in file archives, as
 
 ;;   (find-file
-;;    "http://ftp.debian.org/debian/pool/main/c/coreutils/coreutils_8.28-1_amd64.deb/control.tar.gz/control")
+;;    "https://ftp.debian.org/debian/pool/main/c/coreutils/coreutils_8.28-1_amd64.deb/control.tar.gz/control")
 
 ;;; Code:
 
@@ -141,6 +142,7 @@
     "ar" ;; UNIX archiver formats.
     "cab" "CAB" ;; Microsoft Windows cabinets.
     "cpio" ;; CPIO archives.
+    "crate" ;; Cargo (Rust) packages.  Not in libarchive testsuite.
     "deb" ;; Debian packages.  Not in libarchive testsuite.
     "depot" ;; HP-UX SD depot.  Not in libarchive testsuite.
     "exe" ;; Self extracting Microsoft Windows EXE files.
@@ -163,7 +165,7 @@
   "List of suffixes which indicate a file archive.
 It must be supported by libarchive(3).")
 
-;; <http://unix-memo.readthedocs.io/en/latest/vfs.html>
+;; <https://unix-memo.readthedocs.io/en/latest/vfs.html>
 ;;    read and write: tar, cpio, pax , gzip , zip, bzip2, xz, lzip, lzma, ar, mtree, iso9660, compress.
 ;;    read only: 7-Zip, mtree, xar, lha/lzh, rar, microsoft cab.
 
@@ -190,7 +192,7 @@ It must be supported by libarchive(3).")
 
 ;; In older Emacsen (prior 27.1), `tramp-archive-autoload-file-name-regexp'
 ;; is not autoloaded.  So we cannot expect it to be known in
-;; tramp-loaddefs.el. But it exists, when tramp-archive.el is loaded.
+;; tramp-loaddefs.el.  But it exists, when tramp-archive.el is loaded.
 ;;;###tramp-autoload
 (defconst tramp-archive-file-name-regexp
   (ignore-errors (tramp-archive-autoload-file-name-regexp))
@@ -211,7 +213,8 @@ It must be supported by libarchive(3).")
 ;; New handlers should be added here.
 ;;;###tramp-autoload
 (defconst tramp-archive-file-name-handler-alist
-  '((access-file . tramp-archive-handle-access-file)
+  '(;; `abbreviate-file-name' performed by default handler.
+    (access-file . tramp-archive-handle-access-file)
     (add-name-to-file . tramp-archive-handle-not-implemented)
     ;; `byte-compiler-base-file-name' performed by default handler.
     ;; `copy-directory' performed by default handler.
@@ -236,6 +239,7 @@ It must be supported by libarchive(3).")
     (file-exists-p . tramp-handle-file-exists-p)
     (file-in-directory-p . tramp-handle-file-in-directory-p)
     (file-local-copy . tramp-archive-handle-file-local-copy)
+    (file-locked-p . ignore)
     (file-modes . tramp-handle-file-modes)
     (file-name-all-completions . tramp-archive-handle-file-name-all-completions)
     ;; `file-name-as-directory' performed by default handler.
@@ -262,9 +266,11 @@ It must be supported by libarchive(3).")
     (insert-directory . tramp-archive-handle-insert-directory)
     (insert-file-contents . tramp-archive-handle-insert-file-contents)
     (load . tramp-archive-handle-load)
+    (lock-file . ignore)
     (make-auto-save-file-name . ignore)
     (make-directory . tramp-archive-handle-not-implemented)
     (make-directory-internal . tramp-archive-handle-not-implemented)
+    (make-lock-file-name . ignore)
     (make-nearby-temp-file . tramp-handle-make-nearby-temp-file)
     (make-process . ignore)
     (make-symbolic-link . tramp-archive-handle-not-implemented)
@@ -279,8 +285,11 @@ It must be supported by libarchive(3).")
     (start-file-process . tramp-archive-handle-not-implemented)
     ;; `substitute-in-file-name' performed by default handler.
     (temporary-file-directory . tramp-archive-handle-temporary-file-directory)
-    ;; `tramp-set-file-uid-gid' performed by default handler.
+    (tramp-get-remote-gid . ignore)
+    (tramp-get-remote-uid . ignore)
+    (tramp-set-file-uid-gid . ignore)
     (unhandled-file-name-directory . ignore)
+    (unlock-file . ignore)
     (vc-registered . ignore)
     (verify-visited-file-modtime . tramp-handle-verify-visited-file-modtime)
     (write-region . tramp-archive-handle-not-implemented))
@@ -326,6 +335,8 @@ arguments to pass to the OPERATION."
         ;; `filename' could be a quoted file name.  Or the file
         ;; archive could be a directory, see Bug#30293.
         (if (or (null archive)
+                (not (tramp-archive-run-real-handler
+                      #'file-exists-p (list archive)))
 	        (tramp-archive-run-real-handler
                  #'file-directory-p (list archive)))
             (tramp-archive-run-real-handler operation args)
@@ -343,8 +354,17 @@ arguments to pass to the OPERATION."
 	      (tramp-archive-run-real-handler operation args)))))))
 
 ;;;###autoload
-(defalias
-  'tramp-archive-autoload-file-name-handler #'tramp-autoload-file-name-handler)
+(progn (defun tramp-archive-autoload-file-name-handler (operation &rest args)
+  "Load Tramp archive file name handler, and perform OPERATION."
+  (defvar tramp-archive-autoload)
+  (when tramp-archive-enabled
+    ;; We cannot use `tramp-compat-temporary-file-directory' here due
+    ;; to autoload.  When installing Tramp's GNU ELPA package, there
+    ;; might be an older, incompatible version active.  We try to
+    ;; overload this.
+    (let ((default-directory temporary-file-directory)
+          (tramp-archive-autoload t))
+      (apply #'tramp-autoload-file-name-handler operation args)))))
 
 ;;;###autoload
 (progn (defun tramp-register-archive-file-name-handler ()
@@ -353,7 +373,7 @@ arguments to pass to the OPERATION."
     (add-to-list 'file-name-handler-alist
 	         (cons (tramp-archive-autoload-file-name-regexp)
 		       #'tramp-archive-autoload-file-name-handler))
-    (put 'tramp-archive-autoload-file-name-handler 'safe-magic t))))
+    (put #'tramp-archive-autoload-file-name-handler 'safe-magic t))))
 
 ;;;###autoload
 (progn
@@ -369,7 +389,7 @@ arguments to pass to the OPERATION."
 (tramp-register-archive-file-name-handler)
 
 ;; Mark `operations' the handler is responsible for.
-(put 'tramp-archive-file-name-handler 'operations
+(put #'tramp-archive-file-name-handler 'operations
      (mapcar #'car tramp-archive-file-name-handler-alist))
 
 ;; `tramp-archive-file-name-handler' must be placed before `url-file-handler'.
@@ -520,13 +540,16 @@ offered."
   (declare (debug (form symbolp body))
            (indent 2))
   (let ((bindings
-         (mapcar (lambda (elem)
-                   `(,(if var (intern (format "%s-%s" var elem)) elem)
-                     (,(intern (format "tramp-file-name-%s" elem))
-                      ,(or var 'v))))
-		 `,(cons
-		    'archive
-		    (delete 'hop (tramp-compat-tramp-file-name-slots))))))
+         (mapcar
+	  (lambda (elem)
+            `(,(if var (intern (format "%s-%s" var elem)) elem)
+              (,(intern (format "tramp-file-name-%s" elem))
+               ,(or var 'v))))
+	  (cons
+	   'archive
+	   (delete
+	    'hop
+	    (cdr (mapcar #'car (cl-struct-slot-info 'tramp-file-name))))))))
     `(let* ((,(or var 'v) (tramp-archive-dissect-file-name ,filename))
             ,@bindings)
        ;; We don't know which of those vars will be used, so we bind them all,
@@ -552,9 +575,8 @@ offered."
    preserve-uid-gid preserve-extended-attributes)
   "Like `copy-file' for file archives."
   (when (tramp-archive-file-name-p newname)
-    (tramp-error
-     (tramp-archive-dissect-file-name newname) 'file-error
-      "Permission denied: %s" newname))
+    (tramp-compat-permission-denied
+     (tramp-archive-dissect-file-name newname) newname))
   (copy-file
    (tramp-archive-gvfs-file-name filename) newname ok-if-already-exists
    keep-date preserve-uid-gid preserve-extended-attributes))
@@ -598,7 +620,7 @@ offered."
 (defun tramp-archive-handle-file-system-info (filename)
   "Like `file-system-info' for file archives."
   (with-parsed-tramp-archive-file-name filename nil
-    (list (tramp-compat-file-attribute-size (file-attributes archive)) 0 0)))
+    (list (file-attribute-size (file-attributes archive)) 0 0)))
 
 (defun tramp-archive-handle-file-truename (filename)
   "Like `file-truename' for file archives."
@@ -623,10 +645,8 @@ offered."
   (let ((result
 	 (insert-file-contents
 	  (tramp-archive-gvfs-file-name filename) visit beg end replace)))
-    (prog1
-	(list (expand-file-name filename)
-	      (cadr result))
-      (when visit (setq buffer-file-name filename)))))
+    (when visit (setq buffer-file-name filename))
+    (cons (expand-file-name filename) (cdr result))))
 
 (defun tramp-archive-handle-load
     (file &optional noerror nomessage nosuffix must-suffix)
@@ -640,7 +660,7 @@ offered."
   ;; mounted directory, it is returned as it.  Not what we want.
   (with-parsed-tramp-archive-file-name default-directory nil
     (let ((default-directory (file-name-directory archive)))
-      (tramp-compat-temporary-file-directory))))
+      (temporary-file-directory))))
 
 (defun tramp-archive-handle-not-implemented (operation &rest args)
   "Generic handler for operations not implemented for file archives."

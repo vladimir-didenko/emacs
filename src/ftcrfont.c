@@ -22,13 +22,27 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include <cairo-ft.h>
 
 #include "lisp.h"
+#ifdef HAVE_X_WINDOWS
 #include "xterm.h"
+#elif HAVE_HAIKU
+#include "haikuterm.h"
+#include "haiku_support.h"
+#include "termchar.h"
+#else
+#include "pgtkterm.h"
+#endif
 #include "blockinput.h"
 #include "charset.h"
 #include "composite.h"
 #include "font.h"
 #include "ftfont.h"
 #include "pdumper.h"
+
+#ifdef USE_BE_CAIRO
+#define RED_FROM_ULONG(color)	(((color) >> 16) & 0xff)
+#define GREEN_FROM_ULONG(color)	(((color) >> 8) & 0xff)
+#define BLUE_FROM_ULONG(color)	((color) & 0xff)
+#endif
 
 #define METRICS_NCOLS_PER_ROW	(128)
 
@@ -84,7 +98,12 @@ ftcrfont_glyph_extents (struct font *font,
       cache->lbearing = floor (extents.x_bearing);
       cache->rbearing = ceil (extents.width + extents.x_bearing);
       cache->width = lround (extents.x_advance);
-      cache->ascent = ceil (- extents.y_bearing);
+      /* The subtraction of a small number is to avoid rounding up due
+	 to floating-point inaccuracies with some fonts, which then
+	 could cause unpleasant effects while scrolling (see bug
+	 #44284), since we then think that a glyph row's ascent is too
+	 small to accommodate a glyph with a higher phys_ascent.  */
+      cache->ascent = ceil (- extents.y_bearing - 1.0 / 256);
       cache->descent = ceil (extents.height + extents.y_bearing);
     }
 
@@ -200,7 +219,8 @@ ftcrfont_open (struct frame *f, Lisp_Object entity, int pixel_size)
 
   block_input ();
   cairo_glyph_t stack_glyph;
-  font->min_width = font->average_width = font->space_width = 0;
+  font->min_width = font->max_width = 0;
+  font->average_width = font->space_width = 0;
   for (char c = 32; c < 127; c++)
     {
       cairo_glyph_t *glyphs = &stack_glyph;
@@ -224,6 +244,8 @@ ftcrfont_open (struct frame *f, Lisp_Object entity, int pixel_size)
 	  && (! font->min_width
 	      || font->min_width > this_width))
 	font->min_width = this_width;
+      if (this_width > font->max_width)
+	font->max_width = this_width;
       if (c == 32)
 	font->space_width = this_width;
       font->average_width += this_width;
@@ -278,6 +300,7 @@ ftcrfont_open (struct frame *f, Lisp_Object entity, int pixel_size)
   font->relative_compose = 0;
   font->default_ascent = 0;
   font->vertical_centering = false;
+  eassert (font->max_width < 512 * 1024 * 1024);
 
   return font_object;
 }
@@ -340,14 +363,13 @@ ftcrfont_encode_char (struct font *font, int c)
   struct font_info *ftcrfont_info = (struct font_info *) font;
   unsigned code = FONT_INVALID_CODE;
   unsigned char utf8[MAX_MULTIBYTE_LENGTH];
-  unsigned char *p = utf8;
+  int utf8len = CHAR_STRING (c, utf8);
   cairo_glyph_t stack_glyph;
   cairo_glyph_t *glyphs = &stack_glyph;
   int num_glyphs = 1;
 
-  CHAR_STRING_ADVANCE (c, p);
   if (cairo_scaled_font_text_to_glyphs (ftcrfont_info->cr_scaled_font, 0, 0,
-					(char *) utf8, p - utf8,
+					(char *) utf8, utf8len,
 					&glyphs, &num_glyphs,
 					NULL, NULL, NULL)
       == CAIRO_STATUS_SUCCESS)
@@ -505,11 +527,52 @@ ftcrfont_draw (struct glyph_string *s,
 
   block_input ();
 
+#ifndef USE_BE_CAIRO
+#ifdef HAVE_X_WINDOWS
   cr = x_begin_cr_clip (f, s->gc);
+#else
+  cr = pgtk_begin_cr_clip (f);
+#endif
+#else
+  BView_draw_lock (FRAME_HAIKU_VIEW (f));
+  EmacsWindow_begin_cr_critical_section (FRAME_HAIKU_WINDOW (f));
+  cr = haiku_begin_cr_clip (f, s);
+  if (!cr)
+    {
+      BView_draw_unlock (FRAME_HAIKU_VIEW (f));
+      EmacsWindow_end_cr_critical_section (FRAME_HAIKU_WINDOW (f));
+      unblock_input ();
+      return 0;
+    }
+  BView_cr_dump_clipping (FRAME_HAIKU_VIEW (f), cr);
+
+  if (s->left_overhang && s->clip_head && !s->for_overlaps)
+    {
+      cairo_rectangle (cr, s->clip_head->x, 0,
+		       FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
+      cairo_clip (cr);
+    }
+#endif
 
   if (with_background)
     {
+#ifndef USE_BE_CAIRO
+#ifdef HAVE_X_WINDOWS
       x_set_cr_source_with_gc_background (f, s->gc);
+#else
+      pgtk_set_cr_source_with_color (f, s->xgcv.background);
+#endif
+#else
+      struct face *face = s->face;
+
+      uint32_t col = s->hl == DRAW_CURSOR ?
+	FRAME_CURSOR_COLOR (s->f).pixel : face->background;
+
+      cairo_set_source_rgb (cr, RED_FROM_ULONG (col) / 255.0,
+			    GREEN_FROM_ULONG (col) / 255.0,
+			    BLUE_FROM_ULONG (col) / 255.0);
+#endif
+      s->background_filled_p = 1;
       cairo_rectangle (cr, x, y - FONT_BASE (face->font),
 		       s->width, FONT_HEIGHT (face->font));
       cairo_fill (cr);
@@ -525,13 +588,33 @@ ftcrfont_draw (struct glyph_string *s,
                                                        glyphs[i].index,
                                                        NULL));
     }
-
+#ifndef USE_BE_CAIRO
+#ifdef HAVE_X_WINDOWS
   x_set_cr_source_with_gc_foreground (f, s->gc);
+#else
+  pgtk_set_cr_source_with_color (f, s->xgcv.foreground);
+#endif
+#else
+  uint32_t col = s->hl == DRAW_CURSOR ?
+    FRAME_OUTPUT_DATA (s->f)->cursor_fg : face->foreground;
+
+  cairo_set_source_rgb (cr, RED_FROM_ULONG (col) / 255.0,
+			GREEN_FROM_ULONG (col) / 255.0,
+			BLUE_FROM_ULONG (col) / 255.0);
+#endif
   cairo_set_scaled_font (cr, ftcrfont_info->cr_scaled_font);
   cairo_show_glyphs (cr, glyphs, len);
-
+#ifndef USE_BE_CAIRO
+#ifdef HAVE_X_WINDOWS
   x_end_cr_clip (f);
-
+#else
+  pgtk_end_cr_clip (f);
+#endif
+#else
+  haiku_end_cr_clip (cr);
+  EmacsWindow_end_cr_critical_section (FRAME_HAIKU_WINDOW (f));
+  BView_draw_unlock (FRAME_HAIKU_VIEW (f));
+#endif
   unblock_input ();
 
   return len;

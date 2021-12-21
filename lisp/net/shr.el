@@ -40,10 +40,11 @@
 (require 'image)
 (require 'puny)
 (require 'url-cookie)
+(require 'pixel-fill)
 (require 'text-property-search)
 
 (defgroup shr nil
-  "Simple HTML Renderer"
+  "Simple HTML Renderer."
   :version "25.1"
   :group 'web)
 
@@ -56,8 +57,15 @@ fit these criteria."
   :version "24.1"
   :type 'float)
 
+(defcustom shr-allowed-images nil
+  "If non-nil, only images that match this regexp are displayed.
+If nil, all URLs are allowed.  Also see `shr-blocked-images'."
+  :version "29.1"
+  :type '(choice (const nil) regexp))
+
 (defcustom shr-blocked-images nil
-  "Images that have URLs matching this regexp will be blocked."
+  "Images that have URLs matching this regexp will be blocked.
+If nil, no images are blocked.  Also see `shr-allowed-images'."
   :version "24.1"
   :type '(choice (const nil) regexp))
 
@@ -95,14 +103,30 @@ If nil, don't draw horizontal table lines."
   :type 'character)
 
 (defcustom shr-width nil
-  "Frame width to use for rendering.
+  "Window width to use for HTML rendering.
 May either be an integer specifying a fixed width in characters,
-or nil, meaning that the full width of the window should be used.
-If `shr-use-fonts' is set, the mean character width is used to
-compute the pixel width, which is used instead."
+or nil, meaning use the full width of the window.
+If `shr-use-fonts' is set, the value is interpreted as a multiple
+of the mean character width of the default face's font.
+
+Also see `shr-max-width'."
   :version "25.1"
   :type '(choice (integer :tag "Fixed width in characters")
 		 (const   :tag "Use the width of the window" nil)))
+
+(defcustom shr-max-width 120
+  "Maximum text width to use for HTML rendering.
+May either be an integer specifying a fixed width in characters,
+or nil, meaning that there is no width limit.
+
+If `shr-use-fonts' is set, the value of this variable is
+interpreted as a multiple of the mean character width of the
+default face's font.
+
+If `shr-width' is non-nil, it overrides this variable."
+  :version "28.1"
+  :type '(choice (integer :tag "Fixed width in characters")
+		 (const :tag "No width limit" nil)))
 
 (defcustom shr-bullet "* "
   "Bullet used for unordered lists.
@@ -130,13 +154,25 @@ same domain as the main data."
   :version "24.4"
   :type 'boolean)
 
+(defcustom shr-offer-extend-specpdl t
+  "Non-nil means offer to extend the specpdl if the HTML nests deeply.
+Complicated HTML can require more nesting than the current specpdl
+size permits.  If this variable is t, ask the user whether to increase
+the specpdl size.  If nil, just give up."
+  :version "28.1"
+  :type 'boolean)
+
 (defvar shr-content-function nil
   "If bound, this should be a function that will return the content.
 This is used for cid: URLs, and the function is called with the
 cid: URL as the argument.")
 
-(defvar shr-put-image-function 'shr-put-image
+(defvar shr-put-image-function #'shr-put-image
   "Function called to put image and alt string.")
+
+(defface shr-text '((t :inherit variable-pitch-text))
+  "Face used for rendering text."
+  :version "29.1")
 
 (defface shr-strike-through '((t :strike-through t))
   "Face for <s> elements."
@@ -159,8 +195,42 @@ temporarily blinks with this face."
   "Face for <abbr> elements."
   :version "27.1")
 
-(defvar shr-inhibit-images nil
-  "If non-nil, inhibit loading images.")
+(defface shr-sup
+  '((t :height 0.8))
+  "Face for <sup> and <sub> elements."
+  :version "29.1")
+
+(defface shr-h1
+  '((t :height 1.3 :weight bold))
+  "Face for <h1> elements."
+  :version "28.1")
+
+(defface shr-h2
+  '((t :weight bold))
+  "Face for <h2> elements."
+  :version "28.1")
+
+(defface shr-h3
+  '((t :slant italic))
+  "Face for <h3> elements."
+  :version "28.1")
+
+(defface shr-h4 nil
+  "Face for <h4> elements."
+  :version "28.1")
+
+(defface shr-h5 nil
+  "Face for <h5> elements."
+  :version "28.1")
+
+(defface shr-h6 nil
+  "Face for <h6> elements."
+  :version "28.1")
+
+(defcustom shr-inhibit-images nil
+  "If non-nil, inhibit loading images."
+  :version "28.1"
+  :type 'boolean)
 
 (defvar shr-external-rendering-functions nil
   "Alist of tag/function pairs used to alter how shr renders certain tags.
@@ -178,37 +248,37 @@ and other things:
 (defvar shr-internal-width nil)
 (defvar shr-list-mode nil)
 (defvar shr-content-cache nil)
-(defvar shr-kinsoku-shorten nil)
 (defvar shr-table-depth 0)
 (defvar shr-stylesheet nil)
 (defvar shr-base nil)
 (defvar shr-depth 0)
 (defvar shr-warning nil)
 (defvar shr-ignore-cache nil)
-(defvar shr-target-id nil)
 (defvar shr-table-separator-length 1)
 (defvar shr-table-separator-pixel-width 0)
 (defvar shr-table-id nil)
 (defvar shr-current-font nil)
 (defvar shr-internal-bullet nil)
 
-(defvar shr-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map "a" 'shr-show-alt-text)
-    (define-key map "i" 'shr-browse-image)
-    (define-key map "z" 'shr-zoom-image)
-    (define-key map [?\t] 'shr-next-link)
-    (define-key map [?\M-\t] 'shr-previous-link)
-    (define-key map [follow-link] 'mouse-face)
-    (define-key map [mouse-2] 'shr-browse-url)
-    (define-key map [C-down-mouse-1] 'shr-mouse-browse-url-new-window)
-    (define-key map "I" 'shr-insert-image)
-    (define-key map "w" 'shr-maybe-probe-and-copy-url)
-    (define-key map "u" 'shr-maybe-probe-and-copy-url)
-    (define-key map "v" 'shr-browse-url)
-    (define-key map "O" 'shr-save-contents)
-    (define-key map "\r" 'shr-browse-url)
-    map))
+(defvar shr-target-id nil
+  "Target fragment identifier anchor.")
+(defvar shr--link-targets nil)
+
+(defvar-keymap shr-map
+  "a" #'shr-show-alt-text
+  "i" #'shr-browse-image
+  "z" #'shr-zoom-image
+  "TAB" #'shr-next-link
+  "C-M-i" #'shr-previous-link
+  "<follow-link>" 'mouse-face
+  "<mouse-2>" #'shr-browse-url
+  "C-<down-mouse-1>" #'shr-mouse-browse-url-new-window
+  "I" #'shr-insert-image
+  "w" #'shr-maybe-probe-and-copy-url
+  "u" #'shr-maybe-probe-and-copy-url
+  "v" #'shr-browse-url
+  "O" #'shr-save-contents
+  "RET" #'shr-browse-url)
 
 (defvar shr-image-map
   (let ((map (copy-keymap shr-map)))
@@ -250,6 +320,18 @@ and other things:
        (or (not (zerop (fringe-columns 'right)))
            (not (zerop (fringe-columns 'left))))))
 
+(defun shr--window-width ()
+  ;; Compute the width based on the window width.  We need to
+  ;; adjust the available width for when the user disables
+  ;; the fringes, which will cause the display engine usurp
+  ;; one column for the continuation glyph.
+  (if (not shr-use-fonts)
+      (- (window-body-width) 1
+         (if (shr--have-one-fringe-p)
+             1
+           0))
+    (pixel-fill-width)))
+
 ;;;###autoload
 (defun shr-insert-document (dom)
   "Render the parsed document DOM into the current buffer.
@@ -265,30 +347,30 @@ DOM should be a parse tree as generated by
 	(shr-table-separator-pixel-width (shr-string-pixel-width "-"))
 	(shr-internal-bullet (cons shr-bullet
 				   (shr-string-pixel-width shr-bullet)))
-	(shr-internal-width (or (and shr-width
-				     (if (not shr-use-fonts)
-					 shr-width
-				       (* shr-width (frame-char-width))))
-                                ;; We need to adjust the available
-                                ;; width for when the user disables
-                                ;; the fringes, which will cause the
-                                ;; display engine usurp one column for
-                                ;; the continuation glyph.
-				(if (not shr-use-fonts)
-				    (- (window-body-width) 1
-                                       (if (and (null shr-width)
-                                                (not (shr--have-one-fringe-p)))
-                                           0
-                                         1))
-				  (- (window-body-width nil t)
-                                     (* 2 (frame-char-width))
-                                     (if (and (null shr-width)
-                                              (not (shr--have-one-fringe-p)))
-                                         (* (frame-char-width) 2)
-                                       0)
-                                     1))))
+	(shr-internal-width
+         (if shr-width
+             ;; Specified width; use it.
+	     (if (not shr-use-fonts)
+		 shr-width
+	       (* shr-width (frame-char-width)))
+           (shr--window-width)))
         (max-specpdl-size max-specpdl-size)
+        (shr--link-targets nil)
+        ;; `bidi-display-reordering' is supposed to be only used for
+        ;; debugging purposes, but Shr's naïve filling algorithm
+        ;; cannot cope with the complexity of RTL text in an LTR
+        ;; paragraph, when a long line has been continued, and for
+        ;; most scripts the character metrics don't change when they
+        ;; are reordered, so...  this is the best we could do :-(
         bidi-display-reordering)
+    ;; Adjust for max width specification.
+    (when (and shr-max-width
+               (not shr-width))
+      (setq shr-internal-width
+            (min shr-internal-width
+                 (if shr-use-fonts
+                     (* shr-max-width (frame-char-width))
+                   shr-max-width))))
     ;; If the window was hscrolled for some reason, shr-fill-lines
     ;; below will misbehave, because it silently assumes that it
     ;; starts with a non-hscrolled window (vertical-motion will move
@@ -297,8 +379,21 @@ DOM should be a parse tree as generated by
     (shr-descend dom)
     (shr-fill-lines start (point))
     (shr--remove-blank-lines-at-the-end start (point))
+    (shr--set-target-ids shr--link-targets)
     (when shr-warning
       (message "%s" shr-warning))))
+
+(defun shr--set-target-ids (ids)
+  ;; If the buffer is empty, there's no point in setting targets.
+  (unless (zerop (buffer-size))
+    ;; We may have several targets in the same place (if you have
+    ;; several <span id='foo'> things after one another).  So group
+    ;; them by position.
+    (dolist (group (seq-group-by #'cdr ids))
+      (let ((point (min (1- (point-max)) (car group))))
+        (put-text-property point (1+ point)
+                           'shr-target-id
+                           (mapcar #'car (cdr group)))))))
 
 (defun shr--remove-blank-lines-at-the-end (start end)
   (save-restriction
@@ -365,25 +460,20 @@ If the URL is already at the front of the kill ring act like
     (shr-copy-url url)))
 
 (defun shr--current-link-region ()
-  (let ((current (get-text-property (point) 'shr-url))
-        start)
-    (save-excursion
-      ;; Go to the beginning.
-      (while (and (not (bobp))
-		  (equal (get-text-property (point) 'shr-url) current))
-        (forward-char -1))
-      (unless (equal (get-text-property (point) 'shr-url) current)
-        (forward-char 1))
-      (setq start (point))
-      ;; Go to the end.
-      (while (and (not (eobp))
-                  (equal (get-text-property (point) 'shr-url) current))
-        (forward-char 1))
-      (list start (point)))))
+  "Return the start and end positions of the URL at point, if any.
+Value is a pair of positions (START . END) if there is a non-nil
+`shr-url' text property at point; otherwise nil."
+  (when (get-text-property (point) 'shr-url)
+    (let* ((end (or (next-single-property-change (point) 'shr-url)
+                    (point-max)))
+           (beg (or (previous-single-property-change end 'shr-url)
+                    (point-min))))
+      (cons beg end))))
 
 (defun shr--blink-link ()
-  (let* ((region (shr--current-link-region))
-         (overlay (make-overlay (car region) (cadr region))))
+  "Briefly fontify URL at point with the face `shr-selected-link'."
+  (when-let* ((region  (shr--current-link-region))
+              (overlay (make-overlay (car region) (cdr region))))
     (overlay-put overlay 'face 'shr-selected-link)
     (run-at-time 1 nil (lambda ()
                          (delete-overlay overlay)))))
@@ -406,6 +496,7 @@ If the URL is already at the front of the kill ring act like
 
 (defun shr-show-alt-text ()
   "Show the ALT text of the image under point."
+  (declare (completion (lambda (_ b) (command-completion-button-p 'shr b))))
   (interactive)
   (let ((text (get-text-property (point) 'shr-alt)))
     (if (not text)
@@ -437,7 +528,7 @@ the URL of the image to the kill buffer instead."
     (if (not url)
 	(message "No image under point")
       (message "Inserting %s..." url)
-      (url-retrieve url 'shr-image-fetched
+      (url-retrieve url #'shr-image-fetched
 		    (list (current-buffer) (1- (point)) (point-marker))
 		    t))))
 
@@ -463,7 +554,7 @@ size, and full-buffer size."
 	(when (> (- (point) start) 2)
 	  (delete-region start (1- (point)))))
       (message "Inserting %s..." url)
-      (url-retrieve url 'shr-image-fetched
+      (url-retrieve url #'shr-image-fetched
 		    (list (current-buffer) (1- (point)) (point-marker)
 			  (list (cons 'size
 				      (cond ((or (eq size 'default)
@@ -483,6 +574,12 @@ size, and full-buffer size."
 	(shr-insert sub)
       (shr-descend sub))))
 
+(defun shr-image-blocked-p (url)
+  (or (and shr-blocked-images
+           (string-match shr-blocked-images url))
+      (and shr-allowed-images
+           (not (string-match shr-allowed-images url)))))
+
 (defun shr-indirect-call (tag-name dom &rest args)
   (let ((function (intern (concat "shr-tag-" (symbol-name tag-name)) obarray))
 	;; Allow other packages to override (or provide) rendering
@@ -493,7 +590,7 @@ size, and full-buffer size."
 	  ((fboundp function)
 	   (apply function dom args))
 	  (t
-	   (apply 'shr-generic dom args)))))
+           (apply #'shr-generic dom args)))))
 
 (defun shr-descend (dom)
   (let ((function
@@ -507,12 +604,13 @@ size, and full-buffer size."
 	(start (point)))
     ;; shr uses many frames per nested node.
     (if (and (> shr-depth (/ max-specpdl-size 15))
-             (not (and (y-or-n-p "Too deeply nested to render properly; increase `max-specpdl-size'?")
+             (not (and shr-offer-extend-specpdl
+                       (y-or-n-p "Too deeply nested to render properly; increase `max-specpdl-size'?")
                        (setq max-specpdl-size (* max-specpdl-size 2)))))
         (setq shr-warning
               "Not rendering the complete page because of too-deep nesting")
       (when style
-	(if (string-match "color\\|display\\|border-collapse" style)
+	(if (string-match-p "color\\|display\\|border-collapse" style)
 	    (setq shr-stylesheet (nconc (shr-parse-style style)
 					shr-stylesheet))
 	  (setq style nil)))
@@ -531,13 +629,8 @@ size, and full-buffer size."
                (funcall function dom))
               (t
                (shr-generic dom)))
-	(when (and shr-target-id
-		   (equal (dom-attr dom 'id) shr-target-id))
-	  ;; If the element was empty, we don't have anything to put the
-	  ;; anchor on.  So just insert a dummy character.
-	  (when (= start (point))
-	    (insert "*"))
-	  (put-text-property start (1+ start) 'shr-target-id shr-target-id))
+        (when-let ((id (dom-attr dom 'id)))
+          (push (cons id (point)) shr--link-targets))
 	;; If style is set, then this node has set the color.
 	(when style
 	  (shr-colorize-region
@@ -551,42 +644,10 @@ size, and full-buffer size."
     (with-temp-buffer
       (let ((shr-indentation 0)
 	    (shr-start nil)
-	    (shr-internal-width (- (window-body-width nil t)
-                                   (* 2 (frame-char-width))
-                                   ;; Adjust the window width for when
-                                   ;; the user disables the fringes,
-                                   ;; which causes the display engine
-                                   ;; to usurp one column for the
-                                   ;; continuation glyph.
-                                   (if (and (null shr-width)
-                                            (not (shr--have-one-fringe-p)))
-                                       (* (frame-char-width) 2)
-                                     0))))
+	    (shr-internal-width (shr--window-width)))
 	(shr-insert text)
 	(shr-fill-lines (point-min) (point-max))
 	(buffer-string)))))
-
-(define-inline shr-char-breakable-p (char)
-  "Return non-nil if a line can be broken before and after CHAR."
-  (inline-quote (aref fill-find-break-point-function-table ,char)))
-(define-inline shr-char-nospace-p (char)
-  "Return non-nil if no space is required before and after CHAR."
-  (inline-quote (aref fill-nospace-between-words-table ,char)))
-
-;; KINSOKU is a Japanese word meaning a rule that should not be violated.
-;; In Emacs, it is a term used for characters, e.g. punctuation marks,
-;; parentheses, and so on, that should not be placed in the beginning
-;; of a line or the end of a line.
-(define-inline shr-char-kinsoku-bol-p (char)
-  "Return non-nil if a line ought not to begin with CHAR."
-  (inline-letevals (char)
-    (inline-quote (and (not (eq ,char ?'))
-                       (aref (char-category-set ,char) ?>)))))
-(define-inline shr-char-kinsoku-eol-p (char)
-  "Return non-nil if a line ought not to end with CHAR."
-  (inline-quote (aref (char-category-set ,char) ?<)))
-(unless (shr-char-kinsoku-bol-p (make-char 'japanese-jisx0208 33 35))
-  (load "kinsoku" nil t))
 
 (defun shr-pixel-column ()
   (if (not shr-use-fonts)
@@ -601,6 +662,7 @@ size, and full-buffer size."
       (car (window-text-pixel-size nil (line-beginning-position) (point))))))
 
 (defun shr-pixel-region ()
+  (declare (obsolete nil "29.1"))
   (- (shr-pixel-column)
      (save-excursion
        (goto-char (mark))
@@ -643,7 +705,7 @@ size, and full-buffer size."
 	(goto-char (point-max)))))
    (t
     (let ((font-start (point)))
-      (when (and (string-match "\\`[ \t\n\r]" text)
+      (when (and (string-match-p "\\`[ \t\n\r]" text)
 		 (not (bolp))
 		 (not (eq (char-after (1- (point))) ? )))
 	(insert " "))
@@ -655,8 +717,11 @@ size, and full-buffer size."
 	  (goto-char start)
 	  (when (looking-at "[ \t\n\r]+")
 	    (replace-match "" t t))
-	  (while (re-search-forward "[ \t\n\r]+" nil t)
+	  (while (re-search-forward "[\t\n\r]+" nil t)
 	    (replace-match " " t t))
+	  (goto-char start)
+          (while (re-search-forward "  +" nil t)
+            (replace-match " " t t))
           (shr--translate-insertion-chars)
 	  (goto-char (point-max)))
 	;; We may have removed everything we inserted if it was just
@@ -668,7 +733,7 @@ size, and full-buffer size."
 	  (when shr-use-fonts
 	    (put-text-property font-start (point)
 			       'face
-			       (or shr-current-font 'variable-pitch)))))))))
+			       (or shr-current-font 'shr-text)))))))))
 
 (defun shr-fill-lines (start end)
   (if (<= shr-internal-width 0)
@@ -694,7 +759,8 @@ size, and full-buffer size."
       (forward-char 1))))
 
 (defun shr-fill-line ()
-  (let ((shr-indentation (get-text-property (point) 'shr-indentation))
+  (let ((shr-indentation (or (get-text-property (point) 'shr-indentation)
+                             shr-indentation))
 	(continuation (get-text-property
 		       (point) 'shr-continuation-indentation))
 	start)
@@ -716,7 +782,7 @@ size, and full-buffer size."
       (while (not (eolp))
         ;; We have to do some folding.  First find the first
         ;; previous point suitable for folding.
-        (if (or (not (shr-find-fill-point (line-beginning-position)))
+        (if (or (not (pixel-fill-find-fill-point (line-beginning-position)))
 	        (= (point) start))
 	    ;; We had unbreakable text (for this width), so just go to
 	    ;; the first space and carry on.
@@ -730,10 +796,11 @@ size, and full-buffer size."
         (let ((gap-start (point))
               (face (get-text-property (point) 'face)))
           ;; Extend the background to the end of the line.
-          (if face
-              (insert (propertize "\n" 'face (shr-face-background face)))
-            (insert "\n"))
+          (insert ?\n)
 	  (shr-indent)
+          (when face
+            (put-text-property gap-start (point)
+                               'face (shr-face-background face)))
           (when (and (> (1- gap-start) (point-min))
                      (get-text-property (point) 'shr-url)
                      ;; The link on both sides of the newline are the
@@ -756,89 +823,11 @@ size, and full-buffer size."
         (when (looking-at " $")
 	  (delete-region (point) (line-end-position)))))))
 
-(defun shr-find-fill-point (start)
-  (let ((bp (point))
-	(end (point))
-	failed)
-    (while (not (or (setq failed (<= (point) start))
-		    (eq (preceding-char) ? )
-		    (eq (following-char) ? )
-		    (shr-char-breakable-p (preceding-char))
-		    (shr-char-breakable-p (following-char))
-		    (and (shr-char-kinsoku-bol-p (preceding-char))
-			 (shr-char-breakable-p (following-char))
-			 (not (shr-char-kinsoku-bol-p (following-char))))
-		    (shr-char-kinsoku-eol-p (following-char))
-		    (bolp)))
-      (backward-char 1))
-    (if failed
-	;; There's no breakable point, so we give it up.
-	(let (found)
-	  (goto-char bp)
-          ;; Don't overflow the window edge, even if
-          ;; shr-kinsoku-shorten is nil.
-	  (unless (or shr-kinsoku-shorten (null shr-width))
-	    (while (setq found (re-search-forward
-				"\\(\\c>\\)\\| \\|\\c<\\|\\c|"
-				(line-end-position) 'move)))
-	    (if (and found
-		     (not (match-beginning 1)))
-		(goto-char (match-beginning 0)))))
-      (or
-       (eolp)
-       ;; Don't put kinsoku-bol characters at the beginning of a line,
-       ;; or kinsoku-eol characters at the end of a line.
-       (cond
-        ;; Don't overflow the window edge, even if shr-kinsoku-shorten
-        ;; is nil.
-	((or shr-kinsoku-shorten (null shr-width))
-	 (while (and (not (memq (preceding-char) (list ?\C-@ ?\n ? )))
-		     (or (shr-char-kinsoku-eol-p (preceding-char))
-                         (shr-char-kinsoku-bol-p (following-char))))
-	   (backward-char 1))
-	 (when (setq failed (<= (point) start))
-	   ;; There's no breakable point that doesn't violate kinsoku,
-	   ;; so we look for the second best position.
-	   (while (and (progn
-			 (forward-char 1)
-			 (<= (point) end))
-		       (progn
-			 (setq bp (point))
-			 (shr-char-kinsoku-eol-p (following-char)))))
-	   (goto-char bp)))
-	((shr-char-kinsoku-eol-p (preceding-char))
-	 ;; Find backward the point where kinsoku-eol characters begin.
-	 (let ((count 4))
-	   (while
-	       (progn
-		 (backward-char 1)
-		 (and (> (setq count (1- count)) 0)
-		      (not (memq (preceding-char) (list ?\C-@ ?\n ? )))
-		      (or (shr-char-kinsoku-eol-p (preceding-char))
-			  (shr-char-kinsoku-bol-p (following-char)))))))
-	 (when (setq failed (<= (point) start))
-	   ;; There's no breakable point that doesn't violate kinsoku,
-	   ;; so we go to the second best position.
-	   (if (looking-at "\\(\\c<+\\)\\c<")
-	       (goto-char (match-end 1))
-	     (forward-char 1))))
-	((shr-char-kinsoku-bol-p (following-char))
-	 ;; Find forward the point where kinsoku-bol characters end.
-	 (let ((count 4))
-	   (while (progn
-		    (forward-char 1)
-		    (and (>= (setq count (1- count)) 0)
-			 (shr-char-kinsoku-bol-p (following-char))
-			 (shr-char-breakable-p (following-char))))))))
-       (when (eq (following-char) ? )
-	 (forward-char 1))))
-    (not failed)))
-
 (defun shr-parse-base (url)
   ;; Always chop off anchors.
   (when (string-match "#.*" url)
     (setq url (substring url 0 (match-beginning 0))))
-  ;; NB: <base href="" > URI may itself be relative to the document s URI
+  ;; NB: <base href=""> URI may itself be relative to the document's URI.
   (setq url (shr-expand-url url))
   (let* ((parsed (url-generic-parse-url url))
 	 (local (url-filename parsed)))
@@ -874,7 +863,7 @@ size, and full-buffer size."
   (cond ((zerop (length url))
          (nth 3 base))
         ((or (not base)
-	     (string-match "\\`[a-z]*:" url))
+	     (string-match-p "\\`[a-z]*:" url))
 	 ;; Absolute or empty URI
 	 url)
 	((eq (aref url 0) ?/)
@@ -935,12 +924,11 @@ size, and full-buffer size."
 
 (defun shr-indent ()
   (when (> shr-indentation 0)
-    (insert
-     (if (not shr-use-fonts)
-	 (make-string shr-indentation ?\s)
-       (propertize " "
-		   'display
-		   `(space :width (,shr-indentation)))))))
+    (if (not shr-use-fonts)
+        (insert-char ?\s shr-indentation)
+      (insert ?\s)
+      (put-text-property (1- (point)) (point)
+                         'display `(space :width (,shr-indentation))))))
 
 (defun shr-fontize-dom (dom &rest types)
   (let ((start (point)))
@@ -987,16 +975,11 @@ the mouse click event."
     (cond
      ((not url)
       (message "No link under point"))
-     ((string-match "^mailto:" url)
-      (browse-url-mail url))
+     (external
+      (funcall browse-url-secondary-browser-function url)
+      (shr--blink-link))
      (t
-      (if external
-          (progn
-	    (funcall browse-url-secondary-browser-function url)
-            (shr--blink-link))
-	(browse-url url (if new-window
-			    (not browse-url-new-window-flag)
-			  browse-url-new-window-flag)))))))
+      (browse-url url (xor new-window browse-url-new-window-flag))))))
 
 (defun shr-save-contents (directory)
   "Save the contents from URL in a file."
@@ -1005,7 +988,7 @@ the mouse click event."
     (if (not url)
 	(message "No link under point")
       (url-retrieve (shr-encode-url url)
-		    'shr-store-contents (list url directory)))))
+                    #'shr-store-contents (list url directory)))))
 
 (defun shr-store-contents (status url directory)
   (unless (plist-get status :error)
@@ -1049,14 +1032,14 @@ the mouse click event."
     (let ((param (match-string 4 data))
 	  (payload (url-unhex-string (match-string 5 data))))
       (when (and param
-                 (string-match "^.*\\(;[ \t]*base64\\)$" param))
+                 (string-match-p "^.*\\(;[ \t]*base64\\)$" param))
 	(setq payload (ignore-errors
                         (base64-decode-string payload))))
       payload)))
 
 ;; Behind display-graphic-p test.
 (declare-function image-size "image.c" (spec &optional pixels frame))
-(declare-function image-animate "image" (image &optional index limit))
+(declare-function image-animate "image" (image &optional index limit position))
 
 (defun shr-put-image (spec alt &optional flags)
   "Insert image SPEC with a string ALT.  Return image.
@@ -1093,13 +1076,14 @@ element is the data blob and the second element is the content-type."
 	  (when (and (> (current-column) 0)
 		     (> (car (image-size image t)) 400))
 	    (insert "\n"))
-	  (if (eq size 'original)
-	      (insert-sliced-image image (or alt "*") nil 20 1)
-	    (insert-image image (or alt "*")))
-	  (put-text-property start (point) 'image-size size)
-	  (when (and shr-image-animate
-                     (cdr (image-multi-frame-p image)))
-            (image-animate image nil 60)))
+          (let ((image-pos (point)))
+	    (if (eq size 'original)
+	        (insert-sliced-image image (or alt "*") nil 20 1)
+	      (insert-image image (or alt "*")))
+	    (put-text-property start (point) 'image-size size)
+	    (when (and shr-image-animate
+                       (cdr (image-multi-frame-p image)))
+              (image-animate image nil 60 image-pos))))
 	image)
     (insert (or alt ""))))
 
@@ -1156,7 +1140,6 @@ width/height instead."
 
 ;; url-cache-extract autoloads url-cache.
 (declare-function url-cache-create-filename "url-cache" (url))
-(autoload 'browse-url-mail "browse-url")
 
 (defun shr-get-image-data (url)
   "Get image data for URL.
@@ -1186,7 +1169,7 @@ Return a string with image data."
     ;; SVG images may contain references to further images that we may
     ;; want to block.  So special-case these by parsing the XML data
     ;; and remove anything that looks like a blocked bit.
-    (when (and shr-blocked-images
+    (when (and (or shr-allowed-images shr-blocked-images)
                (eq content-type 'image/svg+xml))
       (setq data
             ;; Note that libxml2 doesn't parse everything perfectly,
@@ -1195,44 +1178,27 @@ Return a string with image data."
             ;; that are non-ASCII.
 	    (shr-dom-to-xml
 	     (libxml-parse-xml-region (point) (point-max)) 'utf-8)))
-    ;; SVG images often do not have a specified foreground/background
-    ;; color, so wrap them in styles.
-    (when (and (display-images-p)
-               (eq content-type 'image/svg+xml))
-      (setq data (svg--wrap-svg data)))
     (list data content-type)))
-
-(defun svg--wrap-svg (data)
-  "Add a default foreground colour to SVG images."
-  (let ((size (image-size (create-image data nil t :scaling 1) t)))
-    (with-temp-buffer
-      (insert
-       (format
-        "<svg xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:xi=\"http://www.w3.org/2001/XInclude\" style=\"color: %s;\" viewBox=\"0 0 %d %d\"> <xi:include href=\"data:image/svg+xml;base64,%s\"></xi:include></svg>"
-        (face-foreground 'default)
-        (car size) (cdr size)
-        (base64-encode-string data t)))
-      (buffer-string))))
 
 (defun shr-image-displayer (content-function)
   "Return a function to display an image.
 CONTENT-FUNCTION is a function to retrieve an image for a cid url that
 is an argument.  The function to be returned takes three arguments URL,
 START, and END.  Note that START and END should be markers."
-  `(lambda (url start end)
-     (when url
-       (if (string-match "\\`cid:" url)
-	   ,(when content-function
-	      `(let ((image (funcall ,content-function
-				     (substring url (match-end 0)))))
-		 (when image
-		   (goto-char start)
-		   (funcall shr-put-image-function
-			    image (buffer-substring start end))
-		   (delete-region (point) end))))
-	 (url-retrieve url 'shr-image-fetched
-		       (list (current-buffer) start end)
-		       t t)))))
+  (lambda (url start end)
+    (when url
+      (if (string-match "\\`cid:" url)
+	  (when content-function
+	    (let ((image (funcall content-function
+				  (substring url (match-end 0)))))
+	      (when image
+		(goto-char start)
+		(funcall shr-put-image-function
+			 image (buffer-substring start end))
+		(delete-region (point) end))))
+        (url-retrieve url #'shr-image-fetched
+		      (list (current-buffer) start end)
+		      t t)))))
 
 (defun shr-heading (dom &rest types)
   (shr-ensure-paragraph)
@@ -1265,7 +1231,9 @@ START, and END.  Note that START and END should be markers."
                           (format "%s (%s)" iri title)
                         iri))
 	 'follow-link t
-	 'mouse-face 'highlight))
+         ;; Make separate regions not `eq' so that they'll get
+         ;; separate mouse highlights.
+	 'mouse-face (list 'highlight)))
   ;; Don't overwrite any keymaps that are already in the buffer (i.e.,
   ;; image keymaps).
   (while (and start
@@ -1316,7 +1284,7 @@ ones, in case fg and bg are nil."
 				  t))
 	(when bg
 	  (add-face-text-property start end
-				  (list :background (car new-colors))
+				  (list :background (car new-colors) :extend t)
 				  t)))
       new-colors)))
 
@@ -1380,8 +1348,7 @@ ones, in case fg and bg are nil."
        ((or (not (eq (dom-tag elem) 'image))
 	    ;; Filter out blocked elements inside the SVG image.
 	    (not (setq url (dom-attr elem ':xlink:href)))
-	    (not shr-blocked-images)
-	    (not (string-match shr-blocked-images url)))
+	    (not (shr-image-blocked-p url)))
 	(insert " ")
 	(shr-dom-print elem)))))
   (insert (format "</%s>" (dom-tag dom))))
@@ -1398,12 +1365,14 @@ ones, in case fg and bg are nil."
 (defun shr-tag-sup (dom)
   (let ((start (point)))
     (shr-generic dom)
-    (put-text-property start (point) 'display '(raise 0.2))))
+    (put-text-property start (point) 'display '(raise 0.2))
+    (add-face-text-property start (point) 'shr-sup)))
 
 (defun shr-tag-sub (dom)
   (let ((start (point)))
     (shr-generic dom)
-    (put-text-property start (point) 'display '(raise -0.2))))
+    (put-text-property start (point) 'display '(raise -0.2))
+    (add-face-text-property start (point) 'shr-sup)))
 
 (defun shr-tag-p (dom)
   (shr-ensure-paragraph)
@@ -1438,7 +1407,7 @@ ones, in case fg and bg are nil."
   (shr-fontize-dom dom 'underline))
 
 (defun shr-tag-code (dom)
-  (let ((shr-current-font 'default))
+  (let ((shr-current-font 'fixed-pitch))
     (shr-generic dom)))
 
 (defun shr-tag-tt (dom)
@@ -1465,9 +1434,7 @@ ones, in case fg and bg are nil."
 
 (defun shr-parse-style (style)
   (when style
-    (save-match-data
-      (when (string-match "\n" style)
-        (setq style (replace-match " " t t style))))
+    (setq style (replace-regexp-in-string "\n" " " style))
     (let ((plist nil))
       (dolist (elem (split-string style ";"))
 	(when elem
@@ -1485,8 +1452,9 @@ ones, in case fg and bg are nil."
       plist)))
 
 (defun shr-tag-base (dom)
-  (when-let* ((base (dom-attr dom 'href)))
-    (setq shr-base (shr-parse-base base)))
+  (let ((base (dom-attr dom 'href)))
+    (when (> (length base) 0)
+      (setq shr-base (shr-parse-base base))))
   (shr-generic dom))
 
 (defun shr-tag-a (dom)
@@ -1495,27 +1463,21 @@ ones, in case fg and bg are nil."
 	(start (point))
 	shr-start)
     (shr-generic dom)
-    (when (and shr-target-id
-	       (equal (dom-attr dom 'name) shr-target-id))
-      ;; We have a zero-length <a name="foo"> element, so just
-      ;; insert...  something.
-      (when (= start (point))
-	(shr-ensure-newline)
-	(insert " "))
-      (put-text-property start (1+ start) 'shr-target-id shr-target-id))
+    (when-let* ((id (and (not (dom-attr dom 'id)) ; Handled by `shr-descend'.
+                         (dom-attr dom 'name)))) ; Obsolete since HTML5.
+      (push (cons id (point)) shr--link-targets))
     (when url
       (shr-urlify (or shr-start start) (shr-expand-url url) title))))
 
 (defun shr-tag-abbr (dom)
-  (when-let* ((title (dom-attr dom 'title))
-	      (start (point)))
+  (let ((title (dom-attr dom 'title))
+	(start (point)))
     (shr-generic dom)
     (shr-add-font start (point) 'shr-abbreviation)
-    (add-text-properties
-     start (point)
-     (list
-      'help-echo title
-      'mouse-face 'highlight))))
+    (when title
+      (add-text-properties start (point)
+                           (list 'help-echo title
+                                 'mouse-face 'highlight)))))
 
 (defun shr-tag-acronym (dom)
   ;; `acronym' is deprecated in favor of `abbr'.
@@ -1526,7 +1488,7 @@ ones, in case fg and bg are nil."
     (let ((start (point))
 	  url multimedia image)
       (when-let* ((type (dom-attr dom 'type)))
-	(when (string-match "\\`image/svg" type)
+	(when (string-match-p "\\`image/svg" type)
 	  (setq url (dom-attr dom 'data)
 		image t)))
       (dolist (child (dom-non-text-children dom))
@@ -1561,6 +1523,14 @@ url if no type is specified.  The value should be a float in the range 0.0 to
 1.0.  Media elements with higher value are preferred."
   :version "24.4"
   :type '(alist :key-type regexp :value-type float))
+
+(defcustom shr-use-xwidgets-for-media nil
+  "If non-nil, use xwidgets to display video and audio elements.
+This also depends on Emacs being built with xwidgets capability.
+Note that this is experimental, and may lead to instability on
+some platforms."
+  :type 'boolean
+  :version "29.1")
 
 (defun shr--get-media-pref (elem)
   "Determine the preference for ELEM.
@@ -1598,16 +1568,39 @@ The preference is a float determined from `shr-prefer-media-type'."
                       pref (cdr ret)))))))))
   (cons url pref))
 
+(declare-function xwidget-webkit-execute-script "xwidget.c"
+                  (xwidget script &optional callback))
+
 (defun shr-tag-video (dom)
   (let ((image (dom-attr dom 'poster))
         (url (dom-attr dom 'src))
         (start (point)))
     (unless url
       (setq url (car (shr--extract-best-source dom))))
-    (if (> (length image) 0)
-	(shr-indirect-call 'img nil image)
-      (shr-insert " [video] "))
-    (shr-urlify start (shr-expand-url url))))
+    (if (and shr-use-xwidgets-for-media
+             (fboundp 'make-xwidget))
+        ;; Play the video.
+        (progn
+          (require 'xwidget)
+          (let ((widget (make-xwidget
+                         'webkit
+			 "Video"
+                         (truncate (* (window-pixel-width) 0.8))
+                         (truncate (* (window-pixel-width) 0.8 0.75)))))
+            (insert
+             (propertize
+              " [video] "
+              'display (list 'xwidget :xwidget widget)))
+            (xwidget-webkit-execute-script
+             widget (format "document.body.innerHTML = %S;"
+                            (format
+                             "<style>body { margin: 0px; }</style><div style='background: black; height: 100%%; display: flex; align-items: center; justify-content: center;'><video autoplay loop muted controls style='max-width: 100%%; max-height: 100%%;'><source src=%S type='video/mp4'></source></video></div>"
+                             url)))))
+      ;; No xwidgets.
+      (if (> (length image) 0)
+	  (shr-indirect-call 'img nil image)
+        (shr-insert " [video] "))
+      (shr-urlify start (shr-expand-url url)))))
 
 (defun shr-tag-audio (dom)
   (let ((url (dom-attr dom 'src))
@@ -1657,8 +1650,7 @@ The preference is a float determined from `shr-prefer-media-type'."
 	      (funcall shr-put-image-function image alt
                        (list :width width :height height)))))
 	 ((or shr-inhibit-images
-	      (and shr-blocked-images
-		   (string-match shr-blocked-images url)))
+	      (shr-image-blocked-p url))
 	  (setq shr-start (point))
           (shr-insert alt))
 	 ((and (not shr-ignore-cache)
@@ -1677,7 +1669,7 @@ The preference is a float determined from `shr-prefer-media-type'."
              (or alt "")))
           (insert " ")
 	  (url-queue-retrieve
-	   (shr-encode-url url) 'shr-image-fetched
+           (shr-encode-url url) #'shr-image-fetched
 	   (list (current-buffer) start (set-marker (make-marker) (point))
                  (list :width width :height height))
 	   t
@@ -1899,24 +1891,22 @@ BASE is the URL of the HTML being rendered."
   (shr-generic dom))
 
 (defun shr-tag-h1 (dom)
-  (shr-heading dom (if shr-use-fonts
-		       '(variable-pitch (:height 1.3 :weight bold))
-		     'bold)))
+  (shr-heading dom 'shr-h1))
 
 (defun shr-tag-h2 (dom)
-  (shr-heading dom 'bold))
+  (shr-heading dom 'shr-h2))
 
 (defun shr-tag-h3 (dom)
-  (shr-heading dom 'italic))
+  (shr-heading dom 'shr-h3))
 
 (defun shr-tag-h4 (dom)
-  (shr-heading dom))
+  (shr-heading dom 'shr-h4))
 
 (defun shr-tag-h5 (dom)
-  (shr-heading dom))
+  (shr-heading dom 'shr-h5))
 
 (defun shr-tag-h6 (dom)
-  (shr-heading dom))
+  (shr-heading dom 'shr-h6))
 
 (defun shr-tag-hr (_dom)
   (shr-ensure-newline)
@@ -1972,7 +1962,8 @@ BASE is the URL of the HTML being rendered."
   (setq dom (or (dom-child-by-tag dom 'tbody) dom))
   (let* ((shr-inhibit-images t)
 	 (shr-table-depth (1+ shr-table-depth))
-	 (shr-kinsoku-shorten t)
+         ;; Fill hard in CJK languages.
+	 (pixel-fill-respect-kinsoku nil)
 	 ;; Find all suggested widths.
 	 (columns (shr-column-specs dom))
 	 ;; Compute how many pixels wide each TD should be.
@@ -2004,12 +1995,11 @@ BASE is the URL of the HTML being rendered."
     (cond
      ((null tbodies)
       dom)
-     ((= (length tbodies) 1)
+     ((null (cdr tbodies))
       (car tbodies))
      (t
       ;; Table with multiple tbodies.  Convert into a single tbody.
-      `(tbody nil ,@(cl-reduce 'append
-                               (mapcar 'dom-non-text-children tbodies)))))))
+      `(tbody nil ,@(mapcan #'dom-non-text-children tbodies))))))
 
 (defun shr--fix-tbody (tbody)
   (nconc (list 'tbody (dom-attributes tbody))
@@ -2253,7 +2243,7 @@ flags that control whether to collect or render objects."
                           (not background))
                  (setq background (cadr elem))))
              (and background
-                  (list :background background))))))
+                  (list :background background :extend t))))))
 
 (defun shr-expand-alignments (start end)
   (while (< (setq start (next-single-property-change
@@ -2309,8 +2299,8 @@ flags that control whether to collect or render objects."
 	(dolist (column row)
 	  (aset natural-widths i (max (aref natural-widths i) column))
 	  (setq i (1+ i)))))
-    (let ((extra (- (apply '+ (append suggested-widths nil))
-		    (apply '+ (append widths nil))
+    (let ((extra (- (apply #'+ (append suggested-widths nil))
+                    (apply #'+ (append widths nil))
 		    (* shr-table-separator-pixel-width (1+ (length widths)))))
 	  (expanded-columns 0))
       ;; We have extra, unused space, so divide this space amongst the
@@ -2467,9 +2457,10 @@ flags that control whether to collect or render objects."
 	  (style (dom-attr dom 'style))
 	  (shr-stylesheet shr-stylesheet)
 	  (max-width 0)
+          (shr--link-targets nil)
 	  natural-width)
       (when style
-	(setq style (and (string-match "color" style)
+	(setq style (and (string-search "color" style)
 			 (shr-parse-style style))))
       (when bgcolor
 	(setq style (nconc (list (cons 'background-color bgcolor))
@@ -2508,6 +2499,7 @@ flags that control whether to collect or render objects."
 	 (end-of-line)
 	 (point)))
       (goto-char (point-min))
+      (shr--set-target-ids shr--link-targets)
       (list max-width
 	    natural-width
 	    (count-lines (point-min) (point-max))
@@ -2585,12 +2577,28 @@ flags that control whether to collect or render objects."
     i))
 
 (defun shr-max-columns (dom)
-  (let ((max 0))
+  (let ((max 0)
+        (this 0)
+        (rowspans nil))
     (dolist (row (dom-children dom))
       (when (and (not (stringp row))
 		 (eq (dom-tag row) 'tr))
-	(setq max (max max (+ (shr-count row 'td)
-			      (shr-count row 'th))))))
+        (setq this 0)
+        (dolist (column (dom-children row))
+          (when (and (not (stringp column))
+                     (memq (dom-tag column) '(td th)))
+            (setq this (+ 1 this (length rowspans)))
+            ;; We have a rowspan, which we emulate later in rendering
+            ;; by adding an extra column to the following rows.
+            (when-let* ((span (dom-attr column 'rowspan)))
+              (push (string-to-number span) rowspans))))
+	(setq max (max max this)))
+      ;; Count down the rowspans in effect.
+      (let ((new nil))
+        (dolist (span rowspans)
+          (when (> span 1)
+            (push (1- span) new)))
+        (setq rowspans new)))
     max))
 
 (provide 'shr)

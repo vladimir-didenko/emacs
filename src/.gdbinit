@@ -41,6 +41,11 @@ handle SIGUSR2 noprint pass
 # debugging.
 handle SIGALRM ignore
 
+# On selection send failed.
+if defined_HAVE_PGTK
+  handle SIGPIPE nostop noprint
+end
+
 # Use $bugfix so that the value isn't a constant.
 # Using a constant runs into GDB bugs sometimes.
 define xgetptr
@@ -500,6 +505,9 @@ define pgx
   # IMAGE_GLYPH
   if ($g.type == 3)
     printf "IMAGE[%d]", $g.u.img_id
+    if ($g.slice.img.x || $g.slice.img.y || $g.slice.img.width || $g.slice.img.height)
+      printf " slice=%d,%d,%d,%d" ,$g.slice.img.x, $g.slice.img.y, $g.slice.img.width, $g.slice.img.height
+    end
   end
   # STRETCH_GLYPH
   if ($g.type == 4)
@@ -550,9 +558,6 @@ define pgx
   end
   if ($g.right_box_line_p)
     printf " ]"
-  end
-  if ($g.slice.img.x || $g.slice.img.y || $g.slice.img.width || $g.slice.img.height)
-    printf " slice=%d,%d,%d,%d" ,$g.slice.img.x, $g.slice.img.y, $g.slice.img.width, $g.slice.img.height
   end
   printf "\n"
 end
@@ -1224,6 +1229,9 @@ set print pretty on
 set print sevenbit-strings
 
 show environment DISPLAY
+if defined_HAVE_PGTK
+  show environment WAYLAND_DISPLAY
+end
 show environment TERM
 
 # When debugging, it is handy to be able to "return" from

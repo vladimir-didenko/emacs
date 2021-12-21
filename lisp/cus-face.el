@@ -1,4 +1,4 @@
-;;; cus-face.el --- customization support for faces
+;;; cus-face.el --- customization support for faces  -*- lexical-binding: t; -*-
 ;;
 ;; Copyright (C) 1996-1997, 1999-2021 Free Software Foundation, Inc.
 ;;
@@ -27,12 +27,13 @@
 
 ;;; Code:
 
-(defalias 'custom-facep 'facep)
-
 ;;; Declaring a face.
 
 (defun custom-declare-face (face spec doc &rest args)
   "Like `defface', but with FACE evaluated as a normal argument."
+  (when (and doc
+             (not (stringp doc)))
+    (error "Invalid (or missing) doc string %S" doc))
   (unless (get face 'face-defface-spec)
     (face-spec-set face (purecopy spec) 'face-defface-spec)
     (push (cons 'defface face) current-load-list)
@@ -53,6 +54,7 @@
      (string :tag "Font Foundry"
 	     :help-echo "Font foundry name."))
 
+    ;; The width, weight, and slant should be in sync with font.c.
     (:width
      (choice :tag "Width"
 	     :help-echo "Font width."
@@ -62,15 +64,21 @@
 	     (const :tag "demiexpanded" semi-expanded)
 	     (const :tag "expanded" expanded)
 	     (const :tag "extracondensed" extra-condensed)
+	     (const :tag "extra-condensed" extra-condensed)
 	     (const :tag "extraexpanded" extra-expanded)
-	     (const :tag "medium" normal)
+	     (const :tag "extra-expanded" extra-expanded)
 	     (const :tag "narrow" condensed)
 	     (const :tag "normal" normal)
+	     (const :tag "medium" normal)
 	     (const :tag "regular" normal)
 	     (const :tag "semicondensed" semi-condensed)
+	     (const :tag "demicondensed" semi-condensed)
+	     (const :tag "semi-condensed" semi-condensed)
 	     (const :tag "semiexpanded" semi-expanded)
 	     (const :tag "ultracondensed" ultra-condensed)
+	     (const :tag "ultra-condensed" ultra-condensed)
 	     (const :tag "ultraexpanded" ultra-expanded)
+	     (const :tag "ultra-expanded" ultra-expanded)
 	     (const :tag "wide" extra-expanded)))
 
     (:height
@@ -84,22 +92,32 @@
      (choice :tag "Weight"
 	     :help-echo "Font weight."
 	     :value normal		; default
-	     (const :tag "ultralight" ultra-light)
-	     (const :tag "extralight" extra-light)
-	     (const :tag "light" light)
 	     (const :tag "thin" thin)
+	     (const :tag "ultralight" ultra-light)
+	     (const :tag "ultra-light" ultra-light)
+	     (const :tag "extralight" ultra-light)
+	     (const :tag "extra-light" ultra-light)
+	     (const :tag "light" light)
 	     (const :tag "semilight" semi-light)
-	     (const :tag "book" semi-light)
+	     (const :tag "semi-light" semi-light)
+	     (const :tag "demilight" semi-light)
 	     (const :tag "normal" normal)
-	     (const :tag "regular" normal)
-	     (const :tag "medium" normal)
+	     (const :tag "regular" regular)
+	     (const :tag "book" normal)
+	     (const :tag "medium" medium)
 	     (const :tag "semibold" semi-bold)
+	     (const :tag "semi-bold" semi-bold)
 	     (const :tag "demibold" semi-bold)
+	     (const :tag "demi-bold" semi-bold)
 	     (const :tag "bold" bold)
 	     (const :tag "extrabold" extra-bold)
-	     (const :tag "heavy" extra-bold)
-	     (const :tag "ultrabold" ultra-bold)
-	     (const :tag "black" ultra-bold)))
+	     (const :tag "extra-bold" extra-bold)
+	     (const :tag "ultrabold" extra-bold)
+	     (const :tag "ultra-bold" extra-bold)
+	     (const :tag "heavy" heavy)
+	     (const :tag "black" heavy)
+             (const :tag "ultra-heavy" ultra-heavy)
+             (const :tag "ultraheavy" ultra-heavy)))
 
     (:slant
      (choice :tag "Slant"
@@ -166,30 +184,37 @@
 	     :help-echo "Control box around text."
 	     (const :tag "Off" nil)
 	     (list :tag "Box"
-		   :value (:line-width 2 :color "grey75" :style released-button)
-		   (const :format "" :value :line-width)
-		   (integer :tag "Width")
+                   :value (:line-width (2 . 2) :color "grey75" :style released-button)
+                   (const :format "" :value :line-width)
+                   (cons :tag "Width" :extra-offset 2
+                         (integer :tag "Vertical")
+                         (integer :tag "Horizontal"))
 		   (const :format "" :value :color)
 		   (choice :tag "Color" (const :tag "*" nil) color)
 		   (const :format "" :value :style)
 		   (choice :tag "Style"
 			   (const :tag "Raised" released-button)
 			   (const :tag "Sunken" pressed-button)
+			   (const :tag "Flat"   flat-button)
 			   (const :tag "None" nil))))
      ;; filter to make value suitable for customize
      (lambda (real-value)
        (and real-value
 	    (let ((lwidth
 		   (or (and (consp real-value)
-			    (plist-get real-value :line-width))
+                            (if (listp (cdr real-value))
+                                (plist-get real-value :line-width)
+                              real-value))
 		       (and (integerp real-value) real-value)
-		       1))
+                       '(1 . 1)))
 		  (color
 		   (or (and (consp real-value) (plist-get real-value :color))
 		       (and (stringp real-value) real-value)
 		       nil))
 		  (style
 		   (and (consp real-value) (plist-get real-value :style))))
+              (if (integerp lwidth)
+                  (setq lwidth (cons (abs lwidth) lwidth)))
 	      (list :line-width lwidth :color color :style style))))
      ;; filter to make customized-value suitable for storing
      (lambda (cus-value)
@@ -388,7 +413,7 @@ Each of the arguments ARGS has this form:
 This means reset FACE to its value in FROM-THEME."
   (apply 'custom-theme-reset-faces 'user args))
 
-;;; The End.
+(define-obsolete-function-alias 'custom-facep #'facep "28.1")
 
 (provide 'cus-face)
 

@@ -67,9 +67,6 @@ timespec_valid_p (struct timespec t)
   return t.tv_nsec >= 0;
 }
 
-/* defined in sysdep.c */
-extern int set_file_times (int, const char *, struct timespec, struct timespec);
-
 /* defined in keyboard.c */
 extern void set_waiting_for_input (struct timespec *);
 
@@ -83,8 +80,7 @@ struct lisp_time
   /* Clock count as a Lisp integer.  */
   Lisp_Object ticks;
 
-  /* Clock frequency (ticks per second) as a positive Lisp integer.
-     (TICKS . HZ) is a valid Lisp timestamp unless HZ < 65536.  */
+  /* Clock frequency (ticks per second) as a positive Lisp integer.  */
   Lisp_Object hz;
 };
 

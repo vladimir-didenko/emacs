@@ -29,7 +29,15 @@ struct xwidget_view;
 struct window;
 
 #ifdef HAVE_XWIDGETS
-# include <gtk/gtk.h>
+
+#if defined (USE_GTK)
+#include <gtk/gtk.h>
+#include <X11/Xlib.h>
+#include "xterm.h"
+#elif defined (NS_IMPL_COCOA) && defined (__OBJC__)
+#import <AppKit/NSView.h>
+#import "nsxwidget.h"
+#endif
 
 struct xwidget
 {
@@ -53,10 +61,31 @@ struct xwidget
 
   int height;
   int width;
+  uint32_t xwidget_id;
+  char *find_text;
 
+#if defined (USE_GTK)
   /* For offscreen widgets, unused if not osr.  */
   GtkWidget *widget_osr;
   GtkWidget *widgetwindow_osr;
+  struct frame *embedder;
+  struct xwidget_view *embedder_view;
+  guint hit_result;
+#elif defined (NS_IMPL_COCOA)
+# ifdef __OBJC__
+  /* For offscreen widgets, unused if not osr.  */
+  NSView *xwWidget;
+  XwWindow *xwWindow;
+
+  /* Used only for xwidget types (such as webkit2) enforcing 1 to 1
+     relationship between model and view.  */
+  struct xwidget_view *xv;
+# else
+  void *xwWidget;
+  void *xwWindow;
+  struct xwidget_view *xv;
+# endif
+#endif
 
   /* Kill silently if Emacs is exited.  */
   bool_bf kill_without_query : 1;
@@ -75,9 +104,27 @@ struct xwidget_view
   /* The "live" instance isn't drawn.  */
   bool hidden;
 
-  GtkWidget *widget;
-  GtkWidget *widgetwindow;
-  GtkWidget *emacswindow;
+  enum glyph_row_area area;
+
+#if defined (USE_GTK)
+  Display *dpy;
+  Window wdesc;
+  Emacs_Cursor cursor;
+  struct frame *frame;
+
+  cairo_surface_t *cr_surface;
+  cairo_t *cr_context;
+  int just_resized;
+#elif defined (NS_IMPL_COCOA)
+# ifdef __OBJC__
+  XvWindow *xvWindow;
+  NSView *emacswindow;
+# else
+  void *xvWindow;
+  void *emacswindow;
+# endif
+#endif
+
   int x;
   int y;
   int clip_right;
@@ -94,8 +141,15 @@ struct xwidget_view
 #define XXWIDGET(a) (eassert (XWIDGETP (a)), \
 		     XUNTAG (a, Lisp_Vectorlike, struct xwidget))
 
+#define XWIDGET_LIVE_P(w) (!NILP ((w)->buffer))
+
 #define CHECK_XWIDGET(x) \
   CHECK_TYPE (XWIDGETP (x), Qxwidgetp, x)
+
+#define CHECK_LIVE_XWIDGET(x)				\
+  CHECK_TYPE ((XWIDGETP (x)				\
+	       && XWIDGET_LIVE_P (XXWIDGET (x))),	\
+	      Qxwidget_live_p, x)
 
 /* Test for xwidget_view pseudovector.  */
 #define XWIDGET_VIEW_P(x) PSEUDOVECTORP (x, PVEC_XWIDGET_VIEW)
@@ -116,6 +170,38 @@ void x_draw_xwidget_glyph_string (struct glyph_string *);
 struct xwidget *lookup_xwidget (Lisp_Object spec);
 void xwidget_end_redisplay (struct window *, struct glyph_matrix *);
 void kill_buffer_xwidgets (Lisp_Object);
+/* Defined in 'xwidget.c'.  */
+void store_xwidget_event_string (struct xwidget *xw,
+                                 const char *eventname,
+                                 const char *eventstr);
+
+void store_xwidget_download_callback_event (struct xwidget *xw,
+                                            const char *url,
+                                            const char *mimetype,
+                                            const char *filename);
+
+void store_xwidget_js_callback_event (struct xwidget *xw,
+                                      Lisp_Object proc,
+                                      Lisp_Object argument);
+
+extern struct xwidget *xwidget_from_id (uint32_t id);
+
+#ifdef HAVE_X_WINDOWS
+struct xwidget_view *xwidget_view_from_window (Window wdesc);
+void xwidget_expose (struct xwidget_view *xv);
+extern void lower_frame_xwidget_views (struct frame *f);
+extern void kill_frame_xwidget_views (struct frame *f);
+extern void xwidget_button (struct xwidget_view *, bool, int,
+			    int, int, int, Time);
+extern void xwidget_motion_or_crossing (struct xwidget_view *,
+					const XEvent *);
+#ifdef HAVE_XINPUT2
+extern void xwidget_motion_notify (struct xwidget_view *, double,
+				   double, uint, Time);
+extern void xwidget_scroll (struct xwidget_view *, double, double,
+                            double, double, uint, Time, bool);
+#endif
+#endif
 #else
 INLINE_HEADER_BEGIN
 INLINE void syms_of_xwidget (void) {}

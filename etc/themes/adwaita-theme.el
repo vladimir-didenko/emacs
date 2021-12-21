@@ -1,4 +1,4 @@
-;;; adwaita-theme.el --- Tango-based custom theme for faces
+;;; adwaita-theme.el --- Tango-based custom theme for faces  -*- lexical-binding:t -*-
 
 ;; Copyright (C) 2010-2021 Free Software Foundation, Inc.
 
@@ -95,6 +95,9 @@ default look of the Gnome 3 desktop.")
    `(gnus-button ((,class (:bold t :foreground "#00578E"))))
    `(gnus-cite-1 ((,class (:foreground "#00578E"))))
    `(gnus-cite-2 ((,class (:foreground "#0084C8"))))
+
+   `(image-dired-thumb-mark ((,class (:background "#CE5C00"))))
+   `(image-dired-thumb-flagged ((,class (:background "#B50000"))))
 
    `(diff-added ((,class (:bold t :foreground "#4E9A06"))))
    `(diff-removed ((,class (:bold t :foreground "#F5666D"))))))

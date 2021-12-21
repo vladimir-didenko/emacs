@@ -30,6 +30,8 @@
 (require 'ert)
 (require 'cl-lib)
 
+;;; Code:
+
 (defun generator-list-subrs ()
   (cl-loop for x being the symbols
         when (and (fboundp x)
@@ -43,6 +45,7 @@
 BODY twice: once using ordinary `eval' and once using
 lambda-generators.  The test ensures that the two forms produce
 identical output."
+  (declare (indent 1))
   `(progn
      (ert-deftest ,name ()
        (should
@@ -60,8 +63,6 @@ identical output."
            (let ((cps-inhibit-atomic-optimization t))
              (iter-lambda () (iter-yield (progn ,@body)))))))))))
 
-(put 'cps-testcase 'lisp-indent-function 1)
-
 (defvar *cps-test-i* nil)
 (defun cps-get-test-i ()
   *cps-test-i*)
@@ -73,7 +74,7 @@ identical output."
 (cps-testcase cps-prog1-b (prog1 1))
 (cps-testcase cps-prog1-c (prog2 1 2 3))
 (cps-testcase cps-quote (progn 'hello))
-(cps-testcase cps-function (progn #'hello))
+(cps-testcase cps-function (progn #'message))
 
 (cps-testcase cps-and-fail (and 1 nil 2))
 (cps-testcase cps-and-succeed (and 1 2 3))
@@ -84,9 +85,9 @@ identical output."
 (cps-testcase cps-or-empty (or))
 
 (cps-testcase cps-let* (let* ((i 10)) i))
-(cps-testcase cps-let*-shadow-empty (let* ((i 10)) (let (i) i)))
+(cps-testcase cps-let*-shadow-empty (let* ((i 10)) i (let ((i nil)) i)))
 (cps-testcase cps-let (let ((i 10)) i))
-(cps-testcase cps-let-shadow-empty (let ((i 10)) (let (i) i)))
+(cps-testcase cps-let-shadow-empty (let ((i 10)) i (let ((i nil)) i)))
 (cps-testcase cps-let-novars (let nil 42))
 (cps-testcase cps-let*-novars (let* nil 42))
 
@@ -94,7 +95,7 @@ identical output."
   (let ((a 5) (b 6)) (let ((a b) (b a)) (list a b))))
 
 (cps-testcase cps-let*-parallel
-  (let* ((a 5) (b 6)) (let* ((a b) (b a)) (list a b))))
+  (let* ((a 5) (b 6)) a (let* ((a b) (b a)) (list a b))))
 
 (cps-testcase cps-while-dynamic
   (setq *cps-test-i* 0)
@@ -218,7 +219,7 @@ identical output."
     (should (eql (iter-next it -1) 42))
     (should (eql (iter-next it -1) -1))))
 
-(ert-deftest cps-loop ()
+(ert-deftest cps-loop-2 ()
   (should
    (equal (cl-loop for x iter-by (mygenerator 42)
              collect x)
@@ -270,7 +271,7 @@ identical output."
                      (unwind-protect
                           (progn
                             (iter-yield 1)
-                            (error "test")
+                            (error "Test")
                             (iter-yield 2))
                        (cl-incf nr-unwound))))))
     (should (equal (iter-next iter) 1))
@@ -305,5 +306,15 @@ identical output."
                                             (lambda (it) (- it))
                                             (1+ it)))))))
                  -2)))
+
+(defun generator-tests-edebug ()) ; silence byte-compiler
+(ert-deftest generator-tests-edebug ()
+  "Check that Bug#40434 is fixed."
+  (with-temp-buffer
+    (prin1 '(iter-defun generator-tests-edebug ()
+              (iter-yield 123))
+           (current-buffer))
+    (edebug-defun))
+  (should (eql (iter-next (generator-tests-edebug)) 123)))
 
 ;;; generator-tests.el ends here

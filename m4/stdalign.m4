@@ -13,7 +13,8 @@ AC_DEFUN([gl_STDALIGN_H],
     [gl_cv_header_working_stdalign_h],
     [AC_COMPILE_IFELSE(
        [AC_LANG_PROGRAM(
-          [[#include <stdalign.h>
+          [[#include <stdint.h>
+            #include <stdalign.h>
             #include <stddef.h>
 
             /* Test that alignof yields a result consistent with offsetof.
@@ -32,6 +33,7 @@ AC_DEFUN([gl_STDALIGN_H],
             /* Test _Alignas only on platforms where gnulib can help.  */
             #if \
                 ((defined __cplusplus && 201103 <= __cplusplus) \
+                 || (__TINYC__ && defined __attribute__) \
                  || (defined __APPLE__ && defined __MACH__ \
                      ? 4 < __GNUC__ + (1 <= __GNUC_MINOR__) \
                      : __GNUC__) \
@@ -47,11 +49,8 @@ AC_DEFUN([gl_STDALIGN_H],
        [gl_cv_header_working_stdalign_h=no])])
 
   if test $gl_cv_header_working_stdalign_h = yes; then
-    STDALIGN_H=''
+    GL_GENERATE_STDALIGN_H=false
   else
-    STDALIGN_H='stdalign.h'
+    GL_GENERATE_STDALIGN_H=true
   fi
-
-  AC_SUBST([STDALIGN_H])
-  AM_CONDITIONAL([GL_GENERATE_STDALIGN_H], [test -n "$STDALIGN_H"])
 ])

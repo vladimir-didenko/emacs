@@ -88,6 +88,10 @@ typedef GtkWidget *xt_or_gtk_widget;
 #include <X11/Xlib-xcb.h>
 #endif
 
+#ifdef HAVE_XKB
+#include <X11/XKBlib.h>
+#endif
+
 #include "dispextern.h"
 #include "termhooks.h"
 
@@ -162,6 +166,39 @@ struct color_name_cache_entry
   XColor rgb;
   char *name;
 };
+
+#ifdef HAVE_XINPUT2
+struct xi_scroll_valuator_t
+{
+  bool invalid_p;
+  double current_value;
+  double emacs_value;
+  double increment;
+
+  int number;
+  int horizontal;
+};
+
+struct xi_touch_point_t
+{
+  struct xi_touch_point_t *next;
+
+  int number;
+  double x, y;
+};
+
+struct xi_device_t
+{
+  int device_id;
+  int scroll_valuator_count;
+  int grab;
+  bool master_p;
+  bool direct_p;
+
+  struct xi_scroll_valuator_t *valuators;
+  struct xi_touch_point_t *touchpoints;
+};
+#endif
 
 Status x_parse_color (struct frame *f, const char *color_name,
 		      XColor *color);
@@ -474,11 +511,29 @@ struct x_display_info
 #ifdef HAVE_XDBE
   bool supports_xdbe;
 #endif
+
+#ifdef HAVE_XINPUT2
+  bool supports_xi2;
+  int xi2_version;
+  int xi2_opcode;
+
+  int num_devices;
+  struct xi_device_t *devices;
+#endif
+
+#ifdef HAVE_XKB
+  XkbDescPtr xkb_desc;
+#endif
 };
 
 #ifdef HAVE_X_I18N
 /* Whether or not to use XIM if we have it.  */
 extern bool use_xim;
+#endif
+
+#ifdef HAVE_XINPUT2
+/* Defined in xmenu.c. */
+extern int popup_activated_flag;
 #endif
 
 /* This is a chain of structures for all the X displays currently in use.  */
@@ -890,7 +945,7 @@ struct scroll_bar
      editing large files, we establish a minimum height by always
      drawing handle bottoms VERTICAL_SCROLL_BAR_MIN_HANDLE pixels below
      where they would be normally; the bottom and top are in a
-     different co-ordinate system.  */
+     different coordinate system.  */
   int start, end;
 
   /* If the scroll bar handle is currently being dragged by the user,
@@ -1079,7 +1134,7 @@ extern bool x_had_errors_p (Display *);
 extern void x_uncatch_errors (void);
 extern void x_uncatch_errors_after_check (void);
 extern void x_clear_errors (Display *);
-extern void x_set_window_size (struct frame *f, bool, int, int, bool);
+extern void x_set_window_size (struct frame *f, bool, int, int);
 extern void x_make_frame_visible (struct frame *f);
 extern void x_make_frame_invisible (struct frame *f);
 extern void x_iconify_frame (struct frame *f);
@@ -1108,6 +1163,7 @@ extern void x_mouse_leave (struct x_display_info *);
 extern int x_dispatch_event (XEvent *, Display *);
 #endif
 extern int x_x_to_emacs_modifiers (struct x_display_info *, int);
+extern int x_emacs_to_x_modifiers (struct x_display_info *, intmax_t);
 #ifdef USE_CAIRO
 extern void x_cr_destroy_frame_context (struct frame *);
 extern void x_cr_update_surface_desired_size (struct frame *, int, int);
@@ -1207,6 +1263,7 @@ extern int x_check_property_data (Lisp_Object);
 extern void x_fill_property_data (Display *,
                                   Lisp_Object,
                                   void *,
+				  int,
                                   int);
 extern Lisp_Object x_property_data_to_lisp (struct frame *,
                                             const unsigned char *,

@@ -117,10 +117,11 @@ create_root_interval (Lisp_Object parent)
 /* Make the interval TARGET have exactly the properties of SOURCE.  */
 
 void
-copy_properties (register INTERVAL source, register INTERVAL target)
+copy_properties (INTERVAL source, INTERVAL target)
 {
   if (DEFAULT_INTERVAL_P (source) && DEFAULT_INTERVAL_P (target))
     return;
+  eassume (source && target);
 
   COPY_INTERVAL_CACHE (source, target);
   set_interval_plist (target, Fcopy_sequence (source->plist));
@@ -165,10 +166,11 @@ merge_properties (register INTERVAL source, register INTERVAL target)
     }
 }
 
-/* Return true if the two intervals have the same properties.  */
+/* Return true if the two intervals have the same properties.
+   If use_equal is true, use Fequal for comparisons instead of EQ.  */
 
-bool
-intervals_equal (INTERVAL i0, INTERVAL i1)
+static bool
+intervals_equal_1 (INTERVAL i0, INTERVAL i1, bool use_equal)
 {
   Lisp_Object i0_cdr, i0_sym;
   Lisp_Object i1_cdr, i1_val;
@@ -203,7 +205,8 @@ intervals_equal (INTERVAL i0, INTERVAL i1)
       /* i0 and i1 both have sym, but it has different values in each.  */
       if (!CONSP (i1_val)
 	  || (i1_val = XCDR (i1_val), !CONSP (i1_val))
-	  || !EQ (XCAR (i1_val), XCAR (i0_cdr)))
+	  || use_equal ? NILP (Fequal (XCAR (i1_val), XCAR (i0_cdr)))
+		       : !EQ (XCAR (i1_val), XCAR (i0_cdr)))
 	return false;
 
       i0_cdr = XCDR (i0_cdr);
@@ -216,6 +219,14 @@ intervals_equal (INTERVAL i0, INTERVAL i1)
 
   /* Lengths of the two plists were equal.  */
   return (NILP (i0_cdr) && NILP (i1_cdr));
+}
+
+/* Return true if the two intervals have the same properties.  */
+
+bool
+intervals_equal (INTERVAL i0, INTERVAL i1)
+{
+  return intervals_equal_1 (i0, i1, false);
 }
 
 
@@ -298,7 +309,7 @@ rotate_right (INTERVAL A)
     set_interval_parent (c, A);
 
   /* A's total length is decreased by the length of B and its left child.  */
-  A->total_length -= B->total_length - TOTAL_LENGTH (c);
+  A->total_length -= TOTAL_LENGTH (B) - TOTAL_LENGTH0 (c);
   eassert (TOTAL_LENGTH (A) > 0);
   eassert (LENGTH (A) > 0);
 
@@ -349,7 +360,7 @@ rotate_left (INTERVAL A)
     set_interval_parent (c, A);
 
   /* A's total length is decreased by the length of B and its right child.  */
-  A->total_length -= B->total_length - TOTAL_LENGTH (c);
+  A->total_length -= TOTAL_LENGTH (B) - TOTAL_LENGTH0 (c);
   eassert (TOTAL_LENGTH (A) > 0);
   eassert (LENGTH (A) > 0);
 
@@ -723,13 +734,13 @@ previous_interval (register INTERVAL interval)
       i->position - LEFT_TOTAL_LENGTH (i)                       \
       - LENGTH (INTERVAL_PARENT (i))
 
-/* Find the interval containing POS, given some non-NULL INTERVAL in
+/* Find the interval containing POS, given some interval I in
    the same tree.  Note that we update interval->position in each
    interval we traverse, assuming it is already correctly set for the
    argument I.  We don't assume that any other interval already has a
    correctly set ->position.  */
 INTERVAL
-update_interval (register INTERVAL i, ptrdiff_t pos)
+update_interval (INTERVAL i, ptrdiff_t pos)
 {
   if (!i)
     return NULL;
@@ -739,7 +750,7 @@ update_interval (register INTERVAL i, ptrdiff_t pos)
       if (pos < i->position)
 	{
 	  /* Move left.  */
-	  if (pos >= i->position - TOTAL_LENGTH (i->left))
+	  if (pos >= i->position - LEFT_TOTAL_LENGTH (i))
 	    {
 	      i->left->position = i->position - TOTAL_LENGTH (i->left)
 		+ LEFT_TOTAL_LENGTH (i->left);
@@ -757,7 +768,7 @@ update_interval (register INTERVAL i, ptrdiff_t pos)
       else if (pos >= INTERVAL_LAST_POS (i))
 	{
 	  /* Move right.  */
-	  if (pos < INTERVAL_LAST_POS (i) + TOTAL_LENGTH (i->right))
+	  if (pos < INTERVAL_LAST_POS (i) + RIGHT_TOTAL_LENGTH (i))
 	    {
 	      i->right->position = INTERVAL_LAST_POS (i)
 	        + LEFT_TOTAL_LENGTH (i->right);
@@ -2290,7 +2301,7 @@ compare_string_intervals (Lisp_Object s1, Lisp_Object s2)
 
       /* If we ever find a mismatch between the strings,
 	 they differ.  */
-      if (! intervals_equal (i1, i2))
+      if (! intervals_equal_1 (i1, i2, true))
 	return 0;
 
       /* Advance POS till the end of the shorter interval,

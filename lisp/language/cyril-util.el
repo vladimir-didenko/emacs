@@ -1,4 +1,4 @@
-;;; cyril-util.el --- utilities for Cyrillic scripts
+;;; cyril-util.el --- utilities for Cyrillic scripts  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 1997-1998, 2001-2021 Free Software Foundation, Inc.
 
@@ -47,7 +47,7 @@
 
 ;;;###autoload
 (defun standard-display-cyrillic-translit (&optional cyrillic-language)
-  "Display a cyrillic buffer using a transliteration.
+  "Display a Cyrillic buffer using a transliteration.
 For readability, the table is slightly
 different from the one used for the input method `cyrillic-translit'.
 
@@ -60,7 +60,7 @@ If the argument is nil, we return the display table to its standard state."
    (list
     (let* ((completion-ignore-case t))
       (completing-read
-       "Cyrillic language (default nil): "
+       (format-prompt "Cyrillic language" "nil")
        cyrillic-language-alist nil t nil nil nil))))
 
   (or standard-display-table

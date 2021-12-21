@@ -109,7 +109,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
    -------------------
 
    In a nutshell, fetching the next character boils down to calling
-   STRING_CHAR_AND_LENGTH, passing it the address of a buffer or
+   string_char_and_length, passing it the address of a buffer or
    string position.  See bidi_fetch_char.  However, if the next
    character is "covered" by a display property of some kind,
    bidi_fetch_char returns the u+FFFC "object replacement character"
@@ -1269,7 +1269,6 @@ bidi_fetch_char (ptrdiff_t charpos, ptrdiff_t bytepos, ptrdiff_t *disp_pos,
   ptrdiff_t endpos
     = (string->s || STRINGP (string->lstring)) ? string->schars : ZV;
   struct text_pos pos;
-  int len;
 
   /* If we got past the last known position of display string, compute
      the position of the next one.  That position could be at CHARPOS.  */
@@ -1341,10 +1340,10 @@ bidi_fetch_char (ptrdiff_t charpos, ptrdiff_t bytepos, ptrdiff_t *disp_pos,
     normal_char:
       if (string->s)
 	{
-
 	  if (!string->unibyte)
 	    {
-	      ch = STRING_CHAR_AND_LENGTH (string->s + bytepos, len);
+	      int len;
+	      ch = string_char_and_length (string->s + bytepos, &len);
 	      *ch_len = len;
 	    }
 	  else
@@ -1357,8 +1356,9 @@ bidi_fetch_char (ptrdiff_t charpos, ptrdiff_t bytepos, ptrdiff_t *disp_pos,
 	{
 	  if (!string->unibyte)
 	    {
-	      ch = STRING_CHAR_AND_LENGTH (SDATA (string->lstring) + bytepos,
-					   len);
+	      int len;
+	      ch = string_char_and_length (SDATA (string->lstring) + bytepos,
+					   &len);
 	      *ch_len = len;
 	    }
 	  else
@@ -1369,9 +1369,11 @@ bidi_fetch_char (ptrdiff_t charpos, ptrdiff_t bytepos, ptrdiff_t *disp_pos,
 	}
       else
 	{
-	  ch = STRING_CHAR_AND_LENGTH (BYTE_POS_ADDR (bytepos), len);
+	  int len;
+	  ch = string_char_and_length (BYTE_POS_ADDR (bytepos), &len);
 	  *ch_len = len;
 	}
+
       *nchars = 1;
     }
 
@@ -1561,7 +1563,7 @@ bidi_find_paragraph_start (ptrdiff_t pos, ptrdiff_t pos_byte)
 	 display string?  And what if a display string covering some
 	 of the text over which we scan back includes
 	 paragraph_start_re?  */
-      DEC_BOTH (pos, pos_byte);
+      dec_both (&pos, &pos_byte);
       if (bpc && region_cache_backward (cache_buffer, bpc, pos, &next))
 	{
 	  pos = next, pos_byte = CHAR_TO_BYTE (pos);
@@ -1775,7 +1777,7 @@ bidi_paragraph_init (bidi_dir_t dir, struct bidi_it *bidi_it, bool no_default_p)
 		    /* FXIME: What if p is covered by a display
 		       string?  See also a FIXME inside
 		       bidi_find_paragraph_start.  */
-		    DEC_BOTH (p, pbyte);
+		    dec_both (&p, &pbyte);
 		    prevpbyte = bidi_find_paragraph_start (p, pbyte);
 		  }
 		pstartbyte = prevpbyte;
@@ -2348,7 +2350,7 @@ bidi_resolve_weak (struct bidi_it *bidi_it)
 		      and make it L right away, to avoid the
 		      potentially costly loop below.  This is
 		      important when the buffer has a long series of
-		      control characters, like binary NULs, and no
+		      control characters, like binary nulls, and no
 		      R2L characters at all.  */
 		   && new_level == 0
 		   && !bidi_explicit_dir_char (bidi_it->ch)
@@ -3006,7 +3008,7 @@ bidi_resolve_neutral (struct bidi_it *bidi_it)
 	}
       /* The next two "else if" clauses are shortcuts for the
 	 important special case when we have a long sequence of
-	 neutral or WEAK_BN characters, such as whitespace or NULs or
+	 neutral or WEAK_BN characters, such as whitespace or nulls or
 	 other control characters, on the base embedding level of the
 	 paragraph, and that sequence goes all the way to the end of
 	 the paragraph and follows a character whose resolved
@@ -3562,11 +3564,19 @@ bidi_move_to_visually_next (struct bidi_it *bidi_it)
 }
 
 /* Utility function for looking for strong directional characters
-   whose bidi type was overridden by a directional override.  */
+   whose bidi type was overridden by directional override or embedding
+   or isolate control characters.  */
 ptrdiff_t
 bidi_find_first_overridden (struct bidi_it *bidi_it)
 {
   ptrdiff_t found_pos = ZV;
+  /* Maximum bidi levels we allow for L2R and R2L characters.  Note
+     that these are levels after resolving explicit embeddings,
+     overrides, and isolates, i.e. before resolving implicit levels.  */
+  int max_l2r = bidi_it->paragraph_dir == L2R ? 0 : 2;
+  int max_r2l = 1;
+  /* Same for WEAK and NEUTRAL_ON types.  */
+  int max_weak = bidi_it->paragraph_dir == L2R ? 1 : 2;
 
   do
     {
@@ -3574,11 +3584,28 @@ bidi_find_first_overridden (struct bidi_it *bidi_it)
 	 because the directional overrides are applied by the
 	 former.  */
       bidi_type_t type = bidi_resolve_weak (bidi_it);
+      unsigned level = bidi_it->level_stack[bidi_it->stack_idx].level;
+      bidi_category_t category = bidi_get_category (bidi_it->orig_type);
 
+      /* Detect strong L or R types that have been overridden by
+	 explicit overrides.  */
       if ((type == STRONG_R && bidi_it->orig_type == STRONG_L)
 	  || (type == STRONG_L
 	      && (bidi_it->orig_type == STRONG_R
-		  || bidi_it->orig_type == STRONG_AL)))
+		  || bidi_it->orig_type == STRONG_AL))
+	  /* Detect strong L or R types or WEAK_EN types that were
+	     pushed into higher embedding levels (and will thus
+	     reorder) by explicit embeddings and isolates.  */
+	  || ((bidi_it->orig_type == STRONG_L
+	       || bidi_it->orig_type == WEAK_EN)
+	      && level > max_l2r)
+	  || ((bidi_it->orig_type == STRONG_R
+	       || bidi_it->orig_type == STRONG_AL)
+	      && level > max_r2l)
+	  /* Detect other weak or neutral types whose level was
+	     tweaked by explicit embeddings and isolates.  */
+	  || ((category == WEAK || bidi_it->orig_type == NEUTRAL_ON)
+	      && level > max_weak))
 	found_pos = bidi_it->charpos;
     } while (found_pos == ZV
 	     && bidi_it->charpos < ZV

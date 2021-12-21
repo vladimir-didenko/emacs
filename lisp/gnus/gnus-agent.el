@@ -1,4 +1,4 @@
-;;; gnus-agent.el --- unplugged support for Gnus
+;;; gnus-agent.el --- unplugged support for Gnus  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 1997-2021 Free Software Foundation, Inc.
 
@@ -161,7 +161,7 @@ enable expiration per categories, topics, and groups."
 
 (defcustom gnus-agent-expire-unagentized-dirs t
   "Whether expiration should expire in unagentized directories.
-Have gnus-agent-expire scan the directories under
+Have `gnus-agent-expire' scan the directories under
 \(gnus-agent-directory) for groups that are no longer agentized.
 When found, offer to remove them."
   :version "22.1"
@@ -248,9 +248,9 @@ Actually a hash table holding subjects mapped to t.")
   (gnus-agent-read-servers)
   (gnus-category-read)
   (gnus-agent-create-buffer)
-  (add-hook 'gnus-group-mode-hook 'gnus-agent-mode)
-  (add-hook 'gnus-summary-mode-hook 'gnus-agent-mode)
-  (add-hook 'gnus-server-mode-hook 'gnus-agent-mode))
+  (add-hook 'gnus-group-mode-hook #'gnus-agent-mode)
+  (add-hook 'gnus-summary-mode-hook #'gnus-agent-mode)
+  (add-hook 'gnus-server-mode-hook #'gnus-agent-mode))
 
 (defun gnus-agent-create-buffer ()
   (if (gnus-buffer-live-p gnus-agent-overview-buffer)
@@ -422,14 +422,12 @@ manipulated as follows:
 
 (defmacro gnus-agent-with-fetch (&rest forms)
   "Do FORMS safely."
+  (declare (indent 0) (debug t))
   `(unwind-protect
        (let ((gnus-agent-fetching t))
 	 (gnus-agent-start-fetch)
 	 ,@forms)
      (gnus-agent-stop-fetch)))
-
-(put 'gnus-agent-with-fetch 'lisp-indent-function 0)
-(put 'gnus-agent-with-fetch 'edebug-form-spec '(body))
 
 (defmacro gnus-agent-append-to-list (tail value)
   `(setq ,tail (setcdr ,tail (cons ,value nil))))
@@ -454,7 +452,7 @@ manipulated as follows:
 				      (symbol-name major-mode))
 			(match-string 1 (symbol-name major-mode))))
 	 (mode (intern (format "gnus-agent-%s-mode" buffer))))
-    (set (make-local-variable 'gnus-agent-mode) t)
+    (setq-local gnus-agent-mode t)
     (set mode nil)
     (set (make-local-variable mode) t)
     ;; Set up the menu.
@@ -477,17 +475,16 @@ manipulated as follows:
     (gnus-run-hooks 'gnus-agent-mode-hook
 		    (intern (format "gnus-agent-%s-mode-hook" buffer)))))
 
-(defvar gnus-agent-group-mode-map (make-sparse-keymap))
-(gnus-define-keys gnus-agent-group-mode-map
-  "Ju" gnus-agent-fetch-groups
-  "Jc" gnus-enter-category-buffer
-  "Jj" gnus-agent-toggle-plugged
-  "Js" gnus-agent-fetch-session
-  "JY" gnus-agent-synchronize-flags
-  "JS" gnus-group-send-queue
-  "Ja" gnus-agent-add-group
-  "Jr" gnus-agent-remove-group
-  "Jo" gnus-agent-toggle-group-plugged)
+(defvar-keymap gnus-agent-group-mode-map
+  "J u" #'gnus-agent-fetch-groups
+  "J c" #'gnus-enter-category-buffer
+  "J j" #'gnus-agent-toggle-plugged
+  "J s" #'gnus-agent-fetch-session
+  "J Y" #'gnus-agent-synchronize-flags
+  "J S" #'gnus-group-send-queue
+  "J a" #'gnus-agent-add-group
+  "J r" #'gnus-agent-remove-group
+  "J o" #'gnus-agent-toggle-group-plugged)
 
 (defun gnus-agent-group-make-menu-bar ()
   (unless (boundp 'gnus-agent-group-menu)
@@ -506,16 +503,15 @@ manipulated as follows:
        ["Synchronize flags" gnus-agent-synchronize-flags t]
        ))))
 
-(defvar gnus-agent-summary-mode-map (make-sparse-keymap))
-(gnus-define-keys gnus-agent-summary-mode-map
-  "Jj" gnus-agent-toggle-plugged
-  "Ju" gnus-agent-summary-fetch-group
-  "JS" gnus-agent-fetch-group
-  "Js" gnus-agent-summary-fetch-series
-  "J#" gnus-agent-mark-article
-  "J\M-#" gnus-agent-unmark-article
-  "@" gnus-agent-toggle-mark
-  "Jc" gnus-agent-catchup)
+(defvar-keymap gnus-agent-summary-mode-map
+  "J j" #'gnus-agent-toggle-plugged
+  "J u" #'gnus-agent-summary-fetch-group
+  "J S" #'gnus-agent-fetch-group
+  "J s" #'gnus-agent-summary-fetch-series
+  "J #" #'gnus-agent-mark-article
+  "J M-#" #'gnus-agent-unmark-article
+  "@" #'gnus-agent-toggle-mark
+  "J c" #'gnus-agent-catchup)
 
 (defun gnus-agent-summary-make-menu-bar ()
   (unless (boundp 'gnus-agent-summary-menu)
@@ -529,11 +525,10 @@ manipulated as follows:
        ["Fetch downloadable" gnus-agent-summary-fetch-group t]
        ["Catchup undownloaded" gnus-agent-catchup t]))))
 
-(defvar gnus-agent-server-mode-map (make-sparse-keymap))
-(gnus-define-keys gnus-agent-server-mode-map
-  "Jj" gnus-agent-toggle-plugged
-  "Ja" gnus-agent-add-server
-  "Jr" gnus-agent-remove-server)
+(defvar-keymap gnus-agent-server-mode-map
+  "J j" #'gnus-agent-toggle-plugged
+  "J a" #'gnus-agent-add-server
+  "J r" #'gnus-agent-remove-server)
 
 (defun gnus-agent-server-make-menu-bar ()
   (unless (boundp 'gnus-agent-server-menu)
@@ -573,14 +568,12 @@ manipulated as follows:
   (set-buffer-modified-p t))
 
 (defmacro gnus-agent-while-plugged (&rest body)
+  (declare (indent 0) (debug t))
   `(let ((original-gnus-plugged gnus-plugged))
-    (unwind-protect
-        (progn (gnus-agent-toggle-plugged t)
-               ,@body)
-      (gnus-agent-toggle-plugged original-gnus-plugged))))
-
-(put 'gnus-agent-while-plugged 'lisp-indent-function 0)
-(put 'gnus-agent-while-plugged 'edebug-form-spec '(body))
+     (unwind-protect
+         (progn (gnus-agent-toggle-plugged t)
+                ,@body)
+       (gnus-agent-toggle-plugged original-gnus-plugged))))
 
 (defun gnus-agent-close-connections ()
   "Close all methods covered by the Gnus agent."
@@ -603,11 +596,22 @@ manipulated as follows:
   (gnus))
 
 ;;;###autoload
-(defun gnus-slave-unplugged (&optional arg)
-  "Read news as a slave unplugged."
+(defun gnus-child-unplugged (&optional arg)
+  "Read news as a child unplugged."
   (interactive "P")
   (setq gnus-plugged nil)
-  (gnus arg nil 'slave))
+  (gnus arg nil 'child))
+
+;;;###autoload
+(defun gnus-slave-unplugged (&optional arg)
+  "Read news as a child unplugged."
+  (interactive "P")
+  (setq gnus-plugged nil)
+  (gnus arg nil 'child))
+(make-obsolete 'gnus-slave-unplugged 'gnus-child-unplugged "28.1")
+
+
+
 
 ;;;###autoload
 (defun gnus-agentize ()
@@ -615,7 +619,7 @@ manipulated as follows:
 
 The gnus-agentize function is now called internally by gnus when
 gnus-agent is set.  If you wish to avoid calling gnus-agentize,
-customize gnus-agent to nil.
+customize `gnus-agent' to nil.
 
 This will modify the `gnus-setup-news-hook', and
 `message-send-mail-real-function' variables, and install the Gnus agent
@@ -694,7 +698,7 @@ be a select method."
     (message-narrow-to-headers)
     (let* ((gcc (mail-fetch-field "gcc" nil t))
 	   (methods (and gcc
-			 (mapcar 'gnus-inews-group-method
+			 (mapcar #'gnus-inews-group-method
 				 (message-unquote-tokens
 				  (message-tokenize-header
 				   gcc " ,")))))
@@ -728,7 +732,7 @@ be a select method."
   (interactive "P")
   (unless gnus-plugged
     (error "Groups can't be fetched when Gnus is unplugged"))
-  (gnus-group-iterate n 'gnus-agent-fetch-group))
+  (gnus-group-iterate n #'gnus-agent-fetch-group))
 
 (defun gnus-agent-fetch-group (&optional group)
   "Put all new articles in GROUP into the Agent."
@@ -799,7 +803,7 @@ be a select method."
   (let ((gnus-command-method method)
 	(gnus-agent nil))
     (when (file-exists-p (gnus-agent-lib-file "flags"))
-      (set-buffer (get-buffer-create " *Gnus Agent flag synchronize*"))
+      (set-buffer (gnus-get-buffer-create " *Gnus Agent flag synchronize*"))
       (erase-buffer)
       (nnheader-insert-file-contents (gnus-agent-lib-file "flags"))
       (cond ((null gnus-plugged)
@@ -813,7 +817,7 @@ be a select method."
 	     (condition-case err
 		 (while t
 		   (let ((bgn (point)))
-		     (eval (read (current-buffer)))
+		     (eval (read (current-buffer)) t)
 		     (delete-region bgn (point))))
 	       (end-of-file
 		(delete-file (gnus-agent-lib-file "flags")))
@@ -1045,12 +1049,13 @@ article's mark is toggled."
 (defun gnus-agent-get-undownloaded-list ()
   "Construct list of articles that have not been downloaded."
   (let ((gnus-command-method (gnus-find-method-for-group gnus-newsgroup-name)))
-    (when (set (make-local-variable 'gnus-newsgroup-agentized)
-               (gnus-agent-method-p gnus-command-method))
+    (when (setq-local gnus-newsgroup-agentized
+                      (gnus-agent-method-p gnus-command-method))
       (let* ((alist (gnus-agent-load-alist gnus-newsgroup-name))
              (headers (sort (mapcar (lambda (h)
                                       (mail-header-number h))
-                                    gnus-newsgroup-headers) '<))
+                                    gnus-newsgroup-headers)
+                            #'<))
              (cached (and gnus-use-cache gnus-newsgroup-cached))
              (undownloaded (list nil))
              (tail-undownloaded undownloaded)
@@ -1121,7 +1126,7 @@ downloadable."
   (when gnus-newsgroup-processable
     (setq gnus-newsgroup-downloadable
           (let* ((dl gnus-newsgroup-downloadable)
-		 (processable (sort (copy-tree gnus-newsgroup-processable) '<))
+		 (processable (sort (copy-tree gnus-newsgroup-processable) #'<))
                  (gnus-newsgroup-downloadable processable))
 	    (gnus-agent-summary-fetch-group)
 
@@ -1293,7 +1298,7 @@ downloaded into the agent."
           ;; gnus doesn't waste resources trying to fetch them.
 
           ;; NOTE: I don't do this for smaller gaps (< 100) as I don't
-          ;; want to modify the local file everytime someone restarts
+          ;; want to modify the local file every time someone restarts
           ;; gnus.  The small gap will cause a tiny performance hit
           ;; when gnus tries, and fails, to retrieve the articles.
           ;; Still that should be smaller than opening a buffer,
@@ -1315,7 +1320,7 @@ downloaded into the agent."
           (gnus-agent-set-local group agent-min (1- active-min)))))))
 
 (defun gnus-agent-save-group-info (method group active)
-  "Update a single group's active range in the agent's copy of the server's active file."
+  "Update single group's active range in agent's copy of server's active file."
   (when (gnus-agent-method-p method)
     (let* ((gnus-command-method (or method gnus-command-method))
 	   (coding-system-for-write nnheader-file-coding-system)
@@ -1348,7 +1353,7 @@ downloaded into the agent."
 	    (delete-char 1)))))))
 
 (defun gnus-agent-get-group-info (method group)
-  "Get a single group's active range in the agent's copy of the server's active file."
+  "Get single group's active range in agent's copy of server's active file."
   (when (gnus-agent-method-p method)
     (let* ((gnus-command-method (or method gnus-command-method))
 	   (coding-system-for-write nnheader-file-coding-system)
@@ -1429,7 +1434,7 @@ downloaded into the agent."
     (let ((file (gnus-agent-lib-file "history")))
       (when (file-exists-p file)
 	(nnheader-insert-file-contents file))
-      (set (make-local-variable 'gnus-agent-file-name) file))))
+      (setq-local gnus-agent-file-name file))))
 
 (defun gnus-agent-close-history ()
   (when (gnus-buffer-live-p gnus-agent-current-history)
@@ -1695,8 +1700,8 @@ and that there are no duplicates."
 
 (defun gnus-agent-flush-server (&optional server-or-method)
   "Flush all agent index files for every subscribed group within
-  the given SERVER-OR-METHOD.  When called with nil, the current
-  value of gnus-command-method identifies the server."
+the given SERVER-OR-METHOD.  When called with nil, the current
+value of gnus-command-method identifies the server."
   (let* ((gnus-command-method (if server-or-method
 				  (gnus-server-to-method server-or-method)
 				gnus-command-method))
@@ -1813,7 +1818,7 @@ article numbers will be returned."
       (dolist (arts (gnus-info-marks (gnus-get-info group)))
         (unless (memq (car arts) '(seen recent killed cache))
           (setq articles (gnus-range-add articles (cdr arts)))))
-      (setq articles (sort (gnus-uncompress-sequence articles) '<)))
+      (setq articles (sort (gnus-uncompress-sequence articles) #'<)))
 
     ;; At this point, I have the list of articles to consider for
     ;; fetching.  This is the list that I'll return to my caller. Some
@@ -1890,7 +1895,8 @@ article numbers will be returned."
     articles))
 
 (defsubst gnus-agent-read-article-number ()
-  "Reads the article number at point.  Returns nil when a valid article number can not be read."
+  "Read the article number at point.
+Return nil when a valid article number can not be read."
 
   (when (looking-at "[0-9]+\t")
     (read (current-buffer))))
@@ -2058,7 +2064,7 @@ doesn't exist, to valid the overview buffer."
 			alist (cdr alist))
 		  (while sequence
 		    (push (cons (pop sequence) state) uncomp)))
-		(setq alist (sort uncomp 'car-less-than-car)))
+		(setq alist (sort uncomp #'car-less-than-car)))
 	      (setq changed-version (not (= 2 gnus-agent-article-alist-save-format)))))
 	    (when changed-version
 	      (let ((gnus-agent-article-alist alist))
@@ -2144,8 +2150,9 @@ doesn't exist, to valid the overview buffer."
 (defvar gnus-agent-file-loading-local nil)
 
 (defun gnus-agent-load-local (&optional method)
-  "Load the METHOD'S local file.  The local file contains min/max
-article counts for each of the method's subscribed groups."
+  "Load the METHOD'S local file.
+The local file contains min/max article counts for each of the
+method's subscribed groups."
   (let ((gnus-command-method (or method gnus-command-method)))
     (when (or (null gnus-agent-article-local-times)
 	      (zerop gnus-agent-article-local-times)
@@ -2162,9 +2169,9 @@ article counts for each of the method's subscribed groups."
     gnus-agent-article-local))
 
 (defun gnus-agent-read-and-cache-local (file)
-  "Load and read FILE then bind its contents to
-gnus-agent-article-local.  If that variable had `dirty' (also known as
-modified) original contents, they are first saved to their own file."
+  "Load and read FILE then bind its contents to `gnus-agent-article-local'.
+If that variable had `dirty' (also known as modified) original
+contents, they are first saved to their own file."
   (if (and gnus-agent-article-local
            (gethash "+dirty" gnus-agent-article-local))
       (gnus-agent-save-local))
@@ -2215,7 +2222,7 @@ modified) original contents, they are first saved to their own file."
     hashtb))
 
 (defun gnus-agent-save-local (&optional force)
-  "Save gnus-agent-article-local under it method's agent.lib directory."
+  "Save `gnus-agent-article-local' under it method's agent.lib directory."
   (let ((hashtb gnus-agent-article-local))
     (when (and hashtb
                (or force (gethash "+dirty" hashtb)))
@@ -2400,13 +2407,13 @@ modified) original contents, they are first saved to their own file."
                 (setq marked-articles (nconc (gnus-uncompress-range arts)
                                              marked-articles))
                 ))))
-        (setq marked-articles (sort marked-articles '<))
+        (setq marked-articles (sort marked-articles #'<))
 
         ;; Fetch any new articles from the server
         (setq articles (gnus-agent-fetch-headers group))
 
         ;; Merge new articles with marked
-        (setq articles (sort (append marked-articles articles) '<))
+        (setq articles (sort (append marked-articles articles) #'<))
 
         (when articles
           ;; Parse them and see which articles we want to fetch.
@@ -2587,25 +2594,20 @@ General format specifiers can also be used.  See Info node
 (defvar gnus-category-line-format-spec nil)
 (defvar gnus-category-mode-line-format-spec nil)
 
-(defvar gnus-category-mode-map nil)
+(defvar-keymap gnus-category-mode-map
+  :suppress t
+  "q" #'gnus-category-exit
+  "k" #'gnus-category-kill
+  "c" #'gnus-category-copy
+  "a" #'gnus-category-add
+  "e" #'gnus-agent-customize-category
+  "p" #'gnus-category-edit-predicate
+  "g" #'gnus-category-edit-groups
+  "s" #'gnus-category-edit-score
+  "l" #'gnus-category-list
 
-(unless gnus-category-mode-map
-  (setq gnus-category-mode-map (make-sparse-keymap))
-  (suppress-keymap gnus-category-mode-map)
-
-  (gnus-define-keys gnus-category-mode-map
-    "q" gnus-category-exit
-    "k" gnus-category-kill
-    "c" gnus-category-copy
-    "a" gnus-category-add
-    "e" gnus-agent-customize-category
-    "p" gnus-category-edit-predicate
-    "g" gnus-category-edit-groups
-    "s" gnus-category-edit-score
-    "l" gnus-category-list
-
-    "\C-c\C-i" gnus-info-find-node
-    "\C-c\C-b" gnus-bug))
+  "C-c C-i" #'gnus-info-find-node
+  "C-c C-b" #'gnus-bug)
 
 (defcustom gnus-category-menu-hook nil
   "Hook run after the creation of the menu."
@@ -2657,7 +2659,7 @@ The following commands are available:
      (point)
      (prog1 (1+ (point))
        ;; Insert the text.
-       (eval gnus-category-line-format-spec))
+       (eval gnus-category-line-format-spec t))
      (list 'gnus-category gnus-tmp-name))))
 
 (defun gnus-enter-category-buffer ()
@@ -2767,16 +2769,15 @@ The following commands are available:
     (gnus-edit-form
      (gnus-agent-cat-predicate info)
      (format "Editing the select predicate for category %s" category)
-     `(lambda (predicate)
-        ;; Avoid run-time execution of setf form
-        ;; (setf (gnus-agent-cat-predicate (assq ',category gnus-category-alist))
-        ;;       predicate)
-        ;; use its expansion instead:
-        (gnus-agent-cat-set-property (assq ',category gnus-category-alist)
-                                     'agent-predicate predicate)
-
-	(gnus-category-write)
-	(gnus-category-list)))))
+     (lambda (predicate)
+       ;; Avoid run-time execution of setf form
+       ;; (setf (gnus-agent-cat-predicate (assq ',category gnus-category-alist))
+       ;;       predicate)
+       ;; use its expansion instead:
+       (gnus-agent-cat-set-property (assq category gnus-category-alist)
+                                    'agent-predicate predicate)
+       (gnus-category-write)
+       (gnus-category-list)))))
 
 (defun gnus-category-edit-score (category)
   "Edit the score expression for CATEGORY."
@@ -2785,16 +2786,15 @@ The following commands are available:
     (gnus-edit-form
      (gnus-agent-cat-score-file info)
      (format "Editing the score expression for category %s" category)
-     `(lambda (score-file)
-        ;; Avoid run-time execution of setf form
-        ;; (setf (gnus-agent-cat-score-file (assq ',category gnus-category-alist))
-        ;;       score-file)
-        ;; use its expansion instead:
-        (gnus-agent-cat-set-property (assq ',category gnus-category-alist)
-                                     'agent-score-file score-file)
-
-	(gnus-category-write)
-	(gnus-category-list)))))
+     (lambda (score-file)
+       ;; Avoid run-time execution of setf form
+       ;; (setf (gnus-agent-cat-score-file (assq ',category gnus-category-alist))
+       ;;       score-file)
+       ;; use its expansion instead:
+       (gnus-agent-cat-set-property (assq category gnus-category-alist)
+                                    'agent-score-file score-file)
+       (gnus-category-write)
+       (gnus-category-list)))))
 
 (defun gnus-category-edit-groups (category)
   "Edit the group list for CATEGORY."
@@ -2803,16 +2803,15 @@ The following commands are available:
     (gnus-edit-form
      (gnus-agent-cat-groups info)
      (format "Editing the group list for category %s" category)
-     `(lambda (groups)
-        ;; Avoid run-time execution of setf form
-        ;; (setf (gnus-agent-cat-groups (assq ',category gnus-category-alist))
-        ;;       groups)
-        ;; use its expansion instead:
-        (gnus-agent-set-cat-groups (assq ',category gnus-category-alist)
-                                   groups)
-
-	(gnus-category-write)
-	(gnus-category-list)))))
+     (lambda (groups)
+       ;; Avoid run-time execution of setf form
+       ;; (setf (gnus-agent-cat-groups (assq category gnus-category-alist))
+       ;;       groups)
+       ;; use its expansion instead:
+       (gnus-agent-set-cat-groups (assq category gnus-category-alist)
+                                  groups)
+       (gnus-category-write)
+       (gnus-category-list)))))
 
 (defun gnus-category-kill (category)
   "Kill the current category."
@@ -3119,7 +3118,7 @@ FORCE is equivalent to setting the expiration predicates to true."
 		       (gnus-uncompress-range
 			(cons (caar alist)
 			      (caar (last alist))))
-		       (sort articles '<)))))
+		       (sort articles #'<)))))
 	      (marked ;; More articles that are excluded from the
 	       ;; expiration process
 	       (cond (gnus-agent-expire-all
@@ -3546,33 +3545,13 @@ articles in every agentized group? "))
       (when (and to-remove
                  (or gnus-expert-user
                      (gnus-y-or-n-p
-                      "gnus-agent-expire has identified local directories that are\
- not currently required by any agentized group.  Do you wish to consider\
- deleting them?")))
-        (while to-remove
-          (let ((dir (pop to-remove)))
-            (if (or gnus-expert-user
+                      "gnus-agent-expire has identified local directories that are
+not currently required by any agentized group.  Do you wish to consider
+deleting them?")))
+        (dolist (dir to-remove)
+          (when (or gnus-expert-user
 		    (gnus-y-or-n-p (format "Delete %s? " dir)))
-                (let* (delete-recursive
-		       files f
-                       (delete-recursive
-                        (function
-                         (lambda (f-or-d)
-                           (ignore-errors
-                             (if (file-directory-p f-or-d)
-                                 (condition-case nil
-                                     (delete-directory f-or-d)
-                                   (file-error
-				    (setq files (directory-files f-or-d))
-				    (while files
-				      (setq f (pop files))
-				      (or (member f '("." ".."))
-					  (funcall delete-recursive
-						   (nnheader-concat
-						    f-or-d f))))
-                                    (delete-directory f-or-d)))
-                               (delete-file f-or-d)))))))
-                  (funcall delete-recursive dir)))))))))
+            (delete-directory dir t)))))))
 
 ;;;###autoload
 (defun gnus-agent-batch ()
@@ -3852,7 +3831,7 @@ If REREAD is not nil, downloaded articles are marked as unread."
 							  (string-to-number name)))
 						   (directory-files
                                                     dir nil "\\`[0-9]+\\'" t)))
-				 '>)
+				 #'>)
 			 (progn (gnus-make-directory dir) nil)))
            nov-arts
 	   alist header
@@ -3923,7 +3902,7 @@ If REREAD is not nil, downloaded articles are marked as unread."
 		   (mm-with-unibyte-buffer
 		     (nnheader-insert-file-contents file)
 		     (nnheader-remove-body)
-		     (setq header (nnheader-parse-naked-head)))
+		     (setq header (nnheader-parse-head t)))
 		   (setf (mail-header-number header) (car downloaded))
 		   (if nov-arts
 		       (let ((key (concat "^" (int-to-string (car nov-arts))
@@ -4022,11 +4001,11 @@ If REREAD is not nil, downloaded articles are marked as unread."
 	 (list (list
 		(if (listp reread)
 		    reread
-		  (delq nil (mapcar (function (lambda (c)
-						(cond ((eq reread t)
-						       (car c))
-						      ((cdr c)
-						       (car c)))))
+                  (delq nil (mapcar (lambda (c)
+                                      (cond ((eq reread t)
+                                             (car c))
+                                            ((cdr c)
+                                             (car c))))
 				    gnus-agent-article-alist)))
 		'del '(read)))
 	 gnus-command-method)
@@ -4156,7 +4135,7 @@ modified."
 	   (path (gnus-agent-group-pathname group))
 	   (entry (gethash path gnus-agent-total-fetched-hashtb)))
       (if entry
-	  (apply '+ entry)
+	  (apply #'+ entry)
 	(let ((gnus-agent-inhibit-update-total-fetched-for (not no-inhibit)))
 	  (+
 	   (gnus-agent-update-view-total-fetched-for  group nil method path)
