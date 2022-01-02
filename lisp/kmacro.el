@@ -1,6 +1,6 @@
 ;;; kmacro.el --- enhanced keyboard macros -*- lexical-binding: t -*-
 
-;; Copyright (C) 2002-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2002-2022 Free Software Foundation, Inc.
 
 ;; Author: Kim F. Storm <storm@cua.dk>
 ;; Keywords: keyboard convenience
@@ -816,8 +816,8 @@ If kbd macro currently being defined end it before activating it."
 (defun kmacro (keys &optional counter format)
   "Create a `kmacro' for macro bound to symbol or key."
   (oclosure-lambda (kmacro (keys (if (stringp keys) (key-parse keys) keys))
-                      (counter (or counter 0))
-                      (format (or format "%d")))
+                           (counter (or counter 0))
+                           (format (or format "%d")))
       (&optional arg)
     (interactive "p")
     ;; Use counter and format specific to the macro on the ring!

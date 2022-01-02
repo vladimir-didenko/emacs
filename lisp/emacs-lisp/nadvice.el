@@ -1,6 +1,6 @@
 ;;; nadvice.el --- Light-weight advice primitives for Elisp functions  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2022 Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: extensions, lisp, tools
@@ -43,8 +43,8 @@
 (push (purecopy '(nadvice 1 0)) package--builtin-versions)
 
 (oclosure-define (advice
-                (:copier advice--cons (cdr))
-                (:copier advice--copy (car cdr where props)))
+                  (:copier advice--cons (cdr))
+                  (:copier advice--copy (car cdr where props)))
   car cdr where props)
 
 ;;;; Lightweight advice/hook
@@ -134,7 +134,7 @@ function of type `advice'.")
                         ;; "[Arg list not available until function
                         ;; definition is loaded]", bug#21299
                         (if (stringp arglist) t
-                          (docstring--make-usage-docstring function arglist)))
+                          (help--make-usage-docstring function arglist)))
                     (setq origdoc (cdr usage)) (car usage)))
       (help-add-fundoc-usage (concat origdoc
                                      (if (string-suffix-p "\n" origdoc)

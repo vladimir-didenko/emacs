@@ -1,6 +1,6 @@
 ;;; cl-generic.el --- CLOS-style generic functions for Elisp  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2015-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2015-2022 Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Version: 1.0
@@ -287,8 +287,8 @@ DEFAULT-BODY, if present, is used as the body of a default method.
            (defalias ',name
              (cl-generic-define ',name ',args ',(nreverse options))
              ,(if (consp doc)           ;An expression rather than a constant.
-                  `(docstring-add-fundoc-usage ,doc ',args)
-                (docstring-add-fundoc-usage doc args)))
+                  `(help-add-fundoc-usage ,doc ',args)
+                (help-add-fundoc-usage doc args)))
            :autoload-end
            ,@(mapcar (lambda (method) `(cl-defmethod ,name ,@method))
                      (nreverse methods)))

@@ -1,9 +1,8 @@
 ;;; oclosure.el --- Open Closures       -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2015, 2021  Stefan Monnier
+;; Copyright (C) 2021-2022  Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
-;; Version: 0
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -89,13 +88,16 @@
 ;;   have lexically-scoped closures and uses a form of closures based on
 ;;   capturing (and reinstating) dynamically scoped bindings instead.
 
-;; Naming: to replace "OClosure" we could go with
-;; - open closures
-;; - disclosures
-;; - opening
-;; - object functions/closures
-;; - structured functions/closures (strunctions, strufs)
-;; - slotfuns (slotted functions)
+;; Naming: OClosures were originally named FunCallableRecords (FCR), but
+;; that name suggested these were fundamentally records that happened
+;; to be called, whereas OClosures are really just closures that happen
+;; to enjoy some characteristics of records.
+;; The "O" comes from "Open" because OClosures aren't completely opaque
+;; (for that same reason, an alternative name suggested at the time was
+;; "disclosures").
+;; The "O" can also be understood to mean "Object" since you have notions
+;; of inheritance, and the ability to associate methods with particular
+;; OClosure types, just as is the case for OO classes.
 
 ;;; Code:
 
@@ -115,8 +117,10 @@
 
 ;; TODO:
 ;; - `oclosure-cl-defun', `oclosure-cl-defsubst', `oclosure-defsubst', `oclosure-define-inline'?
-;; - Use accessor in cl-defstruct
+;; - Use accessor in cl-defstruct.
 ;; - Add pcase patterns for OClosures.
+;; - mixins.
+;; - class allocated slots?  code allocated slots?
 
 (eval-when-compile (require 'cl-lib))
 (eval-when-compile (require 'subr-x))   ;For `named-let'.
@@ -324,7 +328,7 @@
 
 (defmacro oclosure--lambda (type bindings mutables args &rest body)
   "Low level construction of an OClosure object.
-TYPE is expected to be a symbol that is (or will be) defined as an OClosure type.
+TYPE should be be a symbol that is (or will be) defined as an OClosure type.
 BINDINGS should list all the slots expected by this type, in the proper order.
 MUTABLE is a list of symbols indicating which of the BINDINGS
 should be mutable.
@@ -497,8 +501,8 @@ ARGS and BODY are the same as for `lambda'."
           (accessor--slot f) (accessor--type f)))
 
 (oclosure-define (oclosure-accessor
-                (:parent accessor)
-                (:copier oclosure--accessor-copy (type slot index)))
+                  (:parent accessor)
+                  (:copier oclosure--accessor-copy (type slot index)))
   "OClosure function to access a specific slot of an OClosure function."
   index)
 

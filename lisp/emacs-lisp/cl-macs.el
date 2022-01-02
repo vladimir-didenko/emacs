@@ -1,6 +1,6 @@
 ;;; cl-macs.el --- Common Lisp macros  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1993, 2001-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1993, 2001-2022 Free Software Foundation, Inc.
 
 ;; Author: Dave Gillespie <daveg@synaptics.com>
 ;; Old-Version: 2.02
@@ -307,7 +307,7 @@ FORM is of the form (ARGS . BODY)."
                       ;; apparently harmless computation, so it should not
                       ;; touch the match-data.
                       (save-match-data
-                        (docstring--quote
+                        (help--docstring-quote
                          (let ((print-gensym nil) (print-quoted t)
                                (print-escape-newlines t))
                            (format "%S" (cons 'fn (cl--make-usage-args
@@ -317,10 +317,10 @@ FORM is of the form (ARGS . BODY)."
                 (setq header
                       (cons
                        (if (eq :documentation (car-safe (car header)))
-                           `(:documentation (docstring-add-fundoc-usage
+                           `(:documentation (help-add-fundoc-usage
                                              ,(cadr (pop header))
                                              ,usage-str))
-                         (docstring-add-fundoc-usage
+                         (help-add-fundoc-usage
                           (if (stringp (car header)) (pop header))
                           ;; Be careful with make-symbol and (back)quote,
                           ;; see bug#12884.
