@@ -101,26 +101,27 @@
 
 ;;; Code:
 
-;; Slots are currently immutable, tho they can be updated functionally
-;; via the "copiers": we could relax this restriction by either allowing
-;; the function itself to mutate the captured variable/slot or by providing
-;; `setf' accessors to the slots (or both), but this comes with some problems:
-;; - mutation from within the function currently would cause cconv
-;;   to perform store-conversion on the variable, so we'd either have
-;;   to prevent cconv from doing it (which might require a new bytecode op
-;;   to update the in-closure variable), or we'd have to keep track of which
-;;   slots have been store-converted so `oclosure--get' can access their value
-;;   correctly.
+;; Regarding mutable slots:
+;; - Mutation from within the function currently causes cconv
+;;   to perform store-conversion on the variable.  If we want to avoid that
+;;   we'd require a new bytecode op to update the in-closure variable,
+;;   or we'd have to keep track of which slots have been store-converted so
+;;   `oclosure--get' can access their value correctly.
 ;; - If the mutated variable/slot is captured by another (nested) closure
-;;   store-conversion is indispensable, so if we want to avoid store-conversion
-;;   we'd have to disallow such capture.
+;;   store-conversion might be indispensable, so if we want to avoid
+;;   store-conversion we'd have to disallow such capture.
 
 ;; TODO:
-;; - `oclosure-cl-defun', `oclosure-cl-defsubst', `oclosure-defsubst', `oclosure-define-inline'?
+;; - `oclosure-(cl-)defun', `oclosure-(cl-)defsubst', `oclosure-define-inline'?
 ;; - Use accessor in cl-defstruct.
 ;; - Add pcase patterns for OClosures.
-;; - mixins.
-;; - class allocated slots?  code allocated slots?
+;; - mixins and anonymous OClosure types.
+;; - class-allocated slots?
+;; - code-allocated slots?
+;;   The `where' slot of `advice' would like to be code-allocated, and the
+;;   interactive-spec of commands is currently code-allocated but would like
+;;   to be instance-allocated.  Their scoping rules are a bit odd, so maybe
+;;   it's best to avoid them.
 
 (eval-when-compile (require 'cl-lib))
 (eval-when-compile (require 'subr-x))   ;For `named-let'.
