@@ -121,4 +121,37 @@
     (should (equal (funcall f 5) 15))
     (should (equal (funcall f2 15) 68))))
 
+(oclosure-define (oclosure-test-mixin1 (:mixin t) (:parent oclosure-test))
+  a b (bm :mutable t))
+(oclosure-define (oclosure-test-mixin2 (:mixin t) (:parent oclosure-test))
+  a c (cm :mutable t))
+(oclosure-define (oclosure-test-mixin3
+                  (:parent oclosure-test-mixin1 oclosure-test-mixin2))
+  d)
+
+(ert-deftest oclosure-test-mixin ()
+  (let ((ocl1 (oclosure-lambda (oclosure-test-mixin1 (a 'a1) (b 'b1) (bm 'bm1))
+                  (x) (list a b x)))
+        (ocl2 (oclosure-lambda (oclosure-test-mixin2 (a 'a2) (c 'c2) (cm 'cm2))
+                  (x) (list a c x)))
+        (ocl3 (oclosure-lambda (oclosure-test-mixin3
+                                (a 'a3) (b 'b3) (bm 'bm3) (c 'c3) (cm 'cm3)
+                                (d 'd3))
+                  (x) (list a b c d x))))
+    (should (cl-typep ocl3 'oclosure-test-mixin1))
+    (should (cl-typep ocl3 'oclosure-test-mixin2))
+    (should (equal 'a1 (oclosure-test-mixin1--a ocl1)))
+    (should (equal 'a3 (oclosure-test-mixin1--a ocl3)))
+    (should (equal 'a2 (oclosure-test-mixin2--a ocl2)))
+    (should (equal 'a3 (oclosure-test-mixin2--a ocl3)))
+    (should (equal 'b1 (oclosure-test-mixin1--b ocl1)))
+    (should (equal 'b3 (oclosure-test-mixin1--b ocl3)))
+    (should (equal 'bm1 (oclosure-test-mixin1--bm ocl1)))
+    (should (equal 'bm3 (oclosure-test-mixin1--bm ocl3)))
+    (should (equal 'c2 (oclosure-test-mixin2--c ocl2)))
+    (should (equal 'c3 (oclosure-test-mixin2--c ocl3)))
+    (should (equal 'cm2 (oclosure-test-mixin2--cm ocl2)))
+    (should (equal 'cm3 (oclosure-test-mixin2--cm ocl3)))
+    (should (equal 'd3 (oclosure-test-mixin3--d ocl3)))))
+
 ;;; oclosure-tests.el ends here.

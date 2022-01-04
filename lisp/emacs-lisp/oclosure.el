@@ -115,7 +115,8 @@
 ;; - `oclosure-(cl-)defun', `oclosure-(cl-)defsubst', `oclosure-define-inline'?
 ;; - Use accessor in cl-defstruct.
 ;; - Add pcase patterns for OClosures.
-;; - mixins and anonymous OClosure types.
+;; - anonymous OClosure types.
+;; - copiers for mixins
 ;; - class-allocated slots?
 ;; - code-allocated slots?
 ;;   The `where' slot of `advice' would like to be code-allocated, and the
@@ -129,15 +130,17 @@
 (cl-defstruct (oclosure--class
                (:constructor nil)
                (:constructor oclosure--class-make ( name docstring slots parents
-                                               allparents))
+                                                    pinned allparents))
                (:include cl--class)
                (:copier nil))
   "Metaclass for OClosure classes."
+  (pinned nil :read-only t :type natnum) ;Number of pinned slots.
   (allparents nil :read-only t :type (list-of symbol)))
 
 (setf (cl--find-class 'oclosure-object)
-      (oclosure--class-make 'oclosure-object "The root parent of all OClosure classes"
-                       nil nil '(oclosure-object)))
+      (oclosure--class-make 'oclosure-object
+                            "The root parent of all OClosure classes"
+                            nil nil 0 '(oclosure-object)))
 (defun oclosure--object-p (oclosure)
   (let ((type (oclosure-type oclosure)))
     (when type
@@ -224,27 +227,57 @@
          (copiers (funcall get-opt :copier 'all))
 
          (parent-slots '())
+         (pinned 0)
          (parents
           (mapcar
            (lambda (name)
              (let* ((class (or (cl--find-class name)
-                               (error "Unknown parent: %S" name))))
+                               (error "Unknown parent: %S" name)))
+                    (ppinned (oclosure--class-pinned class))
+                    (i -1)
+                    (slots (cl--class-slots class)))
                (setq parent-slots
                      (named-let merge
-                         ((slots-a parent-slots)
-                          (slots-b (cl--class-slots class)))
-                       (cond
-                        ((null slots-a) slots-b)
-                        ((null slots-b) slots-a)
-                        (t
-                         (let ((sa (car slots-a))
-                               (sb (car slots-b)))
-                           (unless (equal sa sb)
-                             (error "Slot %s of %s conflicts with slot %s of previous parent"
-                                    (cl--slot-descriptor-name sb)
+                         ((m '()) ;; Already merged slots, in reverse order.
+                          (os parent-slots)
+                          (ns slots))
+                       (setq i (1+ i))
+                       (pcase (cons os ns)
+                         (`(,os . ())
+                          (nconc (nreverse m) os))
+                         ((and `((,o . ,os) . (,n . ,ns))
+                               (guard (equal o n)))
+                          (merge (cons o m) os ns))
+                         ((and `((,o . ,_) . (,n . ,_))
+                               (guard (< i pinned))
+                               (guard (< i ppinned)))
+                          (error "Slot %s of %s conflicts with slot %s of previous parent"
+                                    (cl--slot-descriptor-name n)
                                     name
-                                    (cl--slot-descriptor-name sa)))
-                           (cons sa (merge (cdr slots-a) (cdr slots-b))))))))
+                                    (cl--slot-descriptor-name o)))
+                         ((and `((,o . ,os) . ,ns)
+                               (guard (< i pinned)))
+                          (cl-assert (>= i ppinned))
+                          (merge (cons o m) os ns))
+                         ((and `(,os . (,n . ,ns))
+                               (guard (< i ppinned)))
+                          (cl-assert (>= i pinned))
+                          (merge (cons n m) os ns))
+                         (`((,o . ,os) . ,ns)
+                          (merge (cons o m) os ns))
+                         (`(,os . (,n . ,ns))
+                          (let ((sname (cl--slot-descriptor-name n))
+                                (found nil))
+                            (dolist (pslot m)
+                              (when (eq (cl--slot-descriptor-name pslot) sname)
+                                (setq found t)
+                                ;; FIXME: Allow changes/refinement?
+                                (unless (equal n pslot)
+                                  (error "Slot %s of %s conflicts with that of previous parent"
+                                      (cl--slot-descriptor-name n)
+                                      name))))
+                            (merge (if found m (cons n m)) os ns))))))
+               (setq pinned (max pinned ppinned))
                class))
            parent-names))
          (slotdescs
@@ -269,12 +302,17 @@
                                                    `((:read-only . ,read-only)
                                                      ,@props)))))
                    slots)))
+         (mixin (funcall get-opt :mixin))
+         (pinned
+          (if mixin pinned (length slotdescs)))
          (allparents (apply #'append (mapcar #'cl--class-allparents
                                              parents)))
-         (class (oclosure--class-make name docstring slotdescs parents
-                                 (delete-dups
-                                  (cons name allparents))))
+         (class (oclosure--class-make name docstring slotdescs parents pinned
+                                      (delete-dups
+                                       (cons name allparents))))
          (it (make-hash-table :test #'eq)))
+    (when (and copiers mixin)
+      (error "Copiers not yet support together with :mixin"))
     (setf (cl--class-index-table class) it)
     `(progn
        ,(when options (macroexp-warn-and-return
@@ -282,11 +320,11 @@
                        nil))
        (eval-and-compile
          (oclosure--define ',class
-                      (lambda (oclosure)
-                        (let ((type (oclosure-type oclosure)))
-                          (when type
-                            (memq ',name (oclosure--class-allparents
-                                          (cl--find-class type))))))))
+                           (lambda (oclosure)
+                             (let ((type (oclosure-type oclosure)))
+                               (when type
+                                 (memq ',name (oclosure--class-allparents
+                                               (cl--find-class type))))))))
        ,@(let ((i -1))
            (mapcar (lambda (desc)
                      (let* ((slot (cl--slot-descriptor-name desc))
@@ -295,26 +333,33 @@
                                              (cl--slot-descriptor-props desc))))
                             ;; Always use a double hyphen: if users wants to
                             ;; make it public, they can do so with an alias.
-                            (name (intern (format "%S--%S" name slot))))
+                            (aname (intern (format "%S--%S" name slot))))
                        (cl-incf i)
                        (when (gethash slot it)
                          (error "Duplicate slot name: %S" slot))
                        (setf (gethash slot it) i)
                        (if (not mutable)
-                           `(defalias ',name
+                           `(defalias ',aname
                               ;; We use `oclosure--copy' instead of
                               ;; `oclosure--accessor-copy' here to circumvent
                               ;; bootstrapping problems.
-                              (oclosure--copy oclosure--accessor-prototype nil
-                                         ',name ',slot ,i))
+                              (oclosure--copy
+                               ,(if (< i pinned)
+                                    'oclosure--accessor-prototype
+                                  'oclosure--mixin-accessor-prototype)
+                               nil ',name ',slot ,i))
                          `(progn
-                            (defalias ',name
+                            (defalias ',aname
                               (oclosure--accessor-copy
-                               oclosure--mut-getter-prototype
+                               ,(if (< i pinned)
+                                    'oclosure--mut-getter-prototype
+                                  'oclosure--mut-mixin-getter-prototype)
                                ',name ',slot ,i))
-                            (defalias ',(gv-setter name)
+                            (defalias ',(gv-setter aname)
                               (oclosure--accessor-copy
-                               oclosure--mut-setter-prototype
+                               ,(if (< i pinned)
+                                    'oclosure--mut-setter-prototype
+                                  'oclosure--mut-mixin-setter-prototype)
                                ',name ',slot ,i))))))
                    slotdescs))
        ,@(oclosure--defstruct-make-copiers
@@ -322,7 +367,7 @@
 
 (defun oclosure--define (class pred)
   (let* ((name (cl--class-name class))
-         (predname (intern (format "oclosure--%s-p" name))))
+         (predname (intern (format "%s--internal-p" name))))
     (setf (cl--find-class name) class)
     (defalias predname pred)
     (put name 'cl-deftype-satisfies predname)))
@@ -507,6 +552,17 @@ ARGS and BODY are the same as for `lambda'."
   "OClosure function to access a specific slot of an OClosure function."
   index)
 
+(defconst oclosure--mixin-accessor-prototype
+  ;; Use `oclosure--lambda' to circumvent a bootstrapping problem:
+  ;; `oclosure-accessor' is not yet defined at this point but
+  ;; `oclosure--accessor-prototype' is needed when defining `oclosure-accessor'.
+  (oclosure-lambda (oclosure-accessor (type) (slot)) (oclosure)
+    (oclosure--get oclosure
+                   (gethash slot
+                            (oclosure--class-index-table
+                             (cl--find-class (oclosure-type oclosure))))
+                   nil)))
+
 (defconst oclosure--mut-getter-prototype
   (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (oclosure)
     (oclosure--get oclosure index t)))
@@ -514,6 +570,19 @@ ARGS and BODY are the same as for `lambda'."
   ;; FIXME: The generated docstring is wrong.
   (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (val oclosure)
     (oclosure--set val oclosure index)))
-
+(defconst oclosure--mut-mixin-getter-prototype
+  (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (oclosure)
+    (oclosure--get oclosure
+                   (gethash slot
+                            (oclosure--class-index-table
+                             (cl--find-class (oclosure-type oclosure))))
+                   t)))
+(defconst oclosure--mut-mixin-setter-prototype
+  ;; FIXME: The generated docstring is wrong.
+  (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (val oclosure)
+    (oclosure--set val oclosure
+                   (gethash slot
+                            (oclosure--class-index-table
+                             (cl--find-class (oclosure-type oclosure)))))))
 (provide 'oclosure)
 ;;; oclosure.el ends here
