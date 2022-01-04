@@ -1291,7 +1291,7 @@ Used internally for the (major-mode MODE) context specializers."
   (and (symbolp tag)
        (let ((class (cl--find-class tag)))
          (when (cl-typep class 'oclosure--class)
-           (cl--class-allparents class)))))
+           (oclosure--class-allparents class)))))
 
 (cl-generic-define-generalizer cl-generic--oclosure-generalizer
   ;; Give slightly higher priority than the struct specializer, so that

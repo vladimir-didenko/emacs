@@ -24,8 +24,8 @@
 (require 'cl-lib)
 
 (oclosure-define (oclosure-test
-                (:copier oclosure-test-copy)
-                (:copier oclosure-test-copy1 (fst)))
+                  (:copier oclosure-test-copy)
+                  (:copier oclosure-test-copy1 (fst)))
   "Simple OClosure."
   fst snd name)
 
@@ -103,8 +103,8 @@
            (string-match "Duplicate slot: where$" (cadr err)))))))
 
 (oclosure-define (oclosure-test-mut
-                (:parent oclosure-test)
-                (:copier oclosure-test-mut-copy))
+                  (:parent oclosure-test)
+                  (:copier oclosure-test-mut-copy))
   "Simple OClosure with a mutable field."
   (mut :mutable t))
 

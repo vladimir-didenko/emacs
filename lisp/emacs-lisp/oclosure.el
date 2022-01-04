@@ -127,10 +127,22 @@
 (eval-when-compile (require 'cl-lib))
 (eval-when-compile (require 'subr-x))   ;For `named-let'.
 
+(defun oclosure--index-table (slotdescs)
+  (let ((i -1)
+        (it (make-hash-table :test #'eq)))
+    (dolist (desc slotdescs)
+      (let* ((slot (cl--slot-descriptor-name desc)))
+        (cl-incf i)
+        (when (gethash slot it)
+          (error "Duplicate slot name: %S" slot))
+        (setf (gethash slot it) i)))
+    it))
+
 (cl-defstruct (oclosure--class
                (:constructor nil)
-               (:constructor oclosure--class-make ( name docstring slots parents
-                                                    pinned allparents))
+               (:constructor oclosure--class-make
+                ( name docstring slots parents pinned allparents
+                  &aux (index-table (oclosure--index-table slots))))
                (:include cl--class)
                (:copier nil))
   "Metaclass for OClosure classes."
@@ -200,6 +212,73 @@
                        ,@argvals))))
      copiers)))
 
+(defun oclosure--merge-classes (names)
+  (if (null (cdr names))
+      (cl--find-class (or (car names) 'oclosure-object))
+    (let* ((total-slots '())
+           (name (vconcat names))
+           (pinned 0)
+           (classes
+            (mapcar
+             (lambda (name)
+               (let* ((class (or (cl--find-class name)
+                                 (error "Unknown class: %S" name)))
+                      (ppinned (oclosure--class-pinned class))
+                      (i -1)
+                      (slots (cl--class-slots class)))
+                 (unless (cl-typep class 'oclosure--class)
+                   (error "Not an OClosure class: %S" name))
+                 (setq total-slots
+                       (named-let merge
+                           ((m '()) ;; Already merged slots, in reverse order.
+                            (os total-slots)
+                            (ns slots))
+                         (setq i (1+ i))
+                         (pcase (cons os ns)
+                           (`(,os . ())
+                            (nconc (nreverse m) os))
+                           ((and `((,o . ,os) . (,n . ,ns))
+                                 (guard (equal o n)))
+                            (merge (cons o m) os ns))
+                           ((and `((,o . ,_) . (,n . ,_))
+                                 (guard (< i pinned))
+                                 (guard (< i ppinned)))
+                            (error "Slot %s of %s conflicts with slot %s of previous parent"
+                                   (cl--slot-descriptor-name n)
+                                   name
+                                   (cl--slot-descriptor-name o)))
+                           ((and `((,o . ,os) . ,ns)
+                                 (guard (< i pinned)))
+                            (cl-assert (>= i ppinned))
+                            (merge (cons o m) os ns))
+                           ((and `(,os . (,n . ,ns))
+                                 (guard (< i ppinned)))
+                            (cl-assert (>= i pinned))
+                            (merge (cons n m) os ns))
+                           (`((,o . ,os) . ,ns)
+                            (merge (cons o m) os ns))
+                           (`(,os . (,n . ,ns))
+                            (let ((sname (cl--slot-descriptor-name n))
+                                  (found nil))
+                              (dolist (pslot m)
+                                (when (eq (cl--slot-descriptor-name pslot) sname)
+                                  (setq found t)
+                                  ;; FIXME: Allow changes/refinement?
+                                  (unless (equal n pslot)
+                                    (error "Slot %s of %s conflicts with that of previous parent"
+                                           (cl--slot-descriptor-name n)
+                                           name))))
+                              (merge (if found m (cons n m)) os ns))))))
+                 (setq pinned (max pinned ppinned))
+                 class))
+             names))
+           (allparents (apply #'append (mapcar #'cl--class-allparents
+                                               classes)))
+           (class (oclosure--class-make name nil total-slots classes
+                                        pinned
+                                        (delete-dups allparents))))
+      class)))
+
 (defmacro oclosure-define (name &optional docstring &rest slots)
   (declare (doc-string 2) (indent 1))
   (unless (stringp docstring)
@@ -221,68 +300,14 @@
                             (setq options (delq tmp options)))
                           (nreverse val))))))
 
-         (parent-names (or (or (funcall get-opt :parent)
-                               (funcall get-opt :include))
-                           '(oclosure-object)))
+         (parent-names (or (funcall get-opt :parent)
+                           (funcall get-opt :include)))
+         (parent-class (oclosure--merge-classes parent-names))
          (copiers (funcall get-opt :copier 'all))
 
-         (parent-slots '())
-         (pinned 0)
-         (parents
-          (mapcar
-           (lambda (name)
-             (let* ((class (or (cl--find-class name)
-                               (error "Unknown parent: %S" name)))
-                    (ppinned (oclosure--class-pinned class))
-                    (i -1)
-                    (slots (cl--class-slots class)))
-               (setq parent-slots
-                     (named-let merge
-                         ((m '()) ;; Already merged slots, in reverse order.
-                          (os parent-slots)
-                          (ns slots))
-                       (setq i (1+ i))
-                       (pcase (cons os ns)
-                         (`(,os . ())
-                          (nconc (nreverse m) os))
-                         ((and `((,o . ,os) . (,n . ,ns))
-                               (guard (equal o n)))
-                          (merge (cons o m) os ns))
-                         ((and `((,o . ,_) . (,n . ,_))
-                               (guard (< i pinned))
-                               (guard (< i ppinned)))
-                          (error "Slot %s of %s conflicts with slot %s of previous parent"
-                                    (cl--slot-descriptor-name n)
-                                    name
-                                    (cl--slot-descriptor-name o)))
-                         ((and `((,o . ,os) . ,ns)
-                               (guard (< i pinned)))
-                          (cl-assert (>= i ppinned))
-                          (merge (cons o m) os ns))
-                         ((and `(,os . (,n . ,ns))
-                               (guard (< i ppinned)))
-                          (cl-assert (>= i pinned))
-                          (merge (cons n m) os ns))
-                         (`((,o . ,os) . ,ns)
-                          (merge (cons o m) os ns))
-                         (`(,os . (,n . ,ns))
-                          (let ((sname (cl--slot-descriptor-name n))
-                                (found nil))
-                            (dolist (pslot m)
-                              (when (eq (cl--slot-descriptor-name pslot) sname)
-                                (setq found t)
-                                ;; FIXME: Allow changes/refinement?
-                                (unless (equal n pslot)
-                                  (error "Slot %s of %s conflicts with that of previous parent"
-                                      (cl--slot-descriptor-name n)
-                                      name))))
-                            (merge (if found m (cons n m)) os ns))))))
-               (setq pinned (max pinned ppinned))
-               class))
-           parent-names))
          (slotdescs
           (append
-           parent-slots
+           (oclosure--class-slots parent-class)
            (mapcar (lambda (field)
                      (if (not (consp field))
                          (cl--make-slot-descriptor field nil nil
@@ -304,16 +329,16 @@
                    slots)))
          (mixin (funcall get-opt :mixin))
          (pinned
-          (if mixin pinned (length slotdescs)))
-         (allparents (apply #'append (mapcar #'cl--class-allparents
-                                             parents)))
-         (class (oclosure--class-make name docstring slotdescs parents pinned
-                                      (delete-dups
-                                       (cons name allparents))))
-         (it (make-hash-table :test #'eq)))
+          (if mixin (oclosure--class-pinned parent-class) (length slotdescs)))
+         (class (oclosure--class-make name docstring slotdescs
+                                      (if (cdr parent-names)
+                                          (oclosure--class-parents parent-class)
+                                        (list parent-class))
+                                      pinned
+                                      (cons name (oclosure--class-allparents
+                                                  parent-class)))))
     (when (and copiers mixin)
       (error "Copiers not yet support together with :mixin"))
-    (setf (cl--class-index-table class) it)
     `(progn
        ,(when options (macroexp-warn-and-return
                        (format "Ignored options: %S" options)
@@ -335,9 +360,6 @@
                             ;; make it public, they can do so with an alias.
                             (aname (intern (format "%S--%S" name slot))))
                        (cl-incf i)
-                       (when (gethash slot it)
-                         (error "Duplicate slot name: %S" slot))
-                       (setf (gethash slot it) i)
                        (if (not mutable)
                            `(defalias ',aname
                               ;; We use `oclosure--copy' instead of
