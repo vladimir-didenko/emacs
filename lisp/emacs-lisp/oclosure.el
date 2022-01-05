@@ -149,15 +149,18 @@
   (pinned nil :read-only t :type natnum) ;Number of pinned slots.
   (allparents nil :read-only t :type (list-of symbol)))
 
-(setf (cl--find-class 'oclosure-object)
-      (oclosure--class-make 'oclosure-object
+(setf (cl--find-class 'oclosure)
+      (oclosure--class-make 'oclosure
                             "The root parent of all OClosure classes"
-                            nil nil 0 '(oclosure-object)))
-(defun oclosure--object-p (oclosure)
+                            nil nil 0 '(oclosure)))
+(defun oclosure--p (oclosure)
   (let ((type (oclosure-type oclosure)))
     (when type
-      (memq 'oclosure-object (oclosure--class-allparents (cl--find-class type))))))
-(cl-deftype oclosure-object () '(satisfies oclosure--object-p))
+      (memq 'oclosure (oclosure--class-allparents (cl--find-class type))))))
+(cl-deftype oclosure () '(satisfies oclosure--p))
+
+(defun oclosure--slot-mutable-p (slotdesc)
+  (not (alist-get :read-only (cl--slot-descriptor-props slotdesc))))
 
 (defun oclosure--defstruct-make-copiers (copiers slotdescs name)
   (require 'cl-macs)            ;`cl--arglist-args' is not autoloaded.
@@ -165,8 +168,7 @@
          (slots (mapcar
                  (lambda (desc)
 	           (let ((name (cl--slot-descriptor-name desc)))
-	             (unless (alist-get :read-only
-	                                (cl--slot-descriptor-props desc))
+	             (when (oclosure--slot-mutable-p desc)
 	               (push name mutables))
 	             name))
 	         slotdescs)))
@@ -214,7 +216,7 @@
 
 (defun oclosure--merge-classes (names)
   (if (null (cdr names))
-      (cl--find-class (or (car names) 'oclosure-object))
+      (cl--find-class (or (car names) 'oclosure))
     (let* ((total-slots '())
            (name (vconcat names))
            (pinned 0)
@@ -353,9 +355,7 @@
        ,@(let ((i -1))
            (mapcar (lambda (desc)
                      (let* ((slot (cl--slot-descriptor-name desc))
-                            (mutable
-                             (not (alist-get :read-only
-                                             (cl--slot-descriptor-props desc))))
+                            (mutable (oclosure--slot-mutable-p desc))
                             ;; Always use a double hyphen: if users wants to
                             ;; make it public, they can do so with an alias.
                             (aname (intern (format "%S--%S" name slot))))
@@ -370,6 +370,7 @@
                                     'oclosure--accessor-prototype
                                   'oclosure--mixin-accessor-prototype)
                                nil ',name ',slot ,i))
+                         (require 'gv)  ;For `gv-setter'.
                          `(progn
                             (defalias ',aname
                               (oclosure--accessor-copy
@@ -391,6 +392,8 @@
   (let* ((name (cl--class-name class))
          (predname (intern (format "%s--internal-p" name))))
     (setf (cl--find-class name) class)
+    (dolist (slot (oclosure--class-slots class))
+      (put (cl--slot-descriptor-name slot) 'slot-name t))
     (defalias predname pred)
     (put name 'cl-deftype-satisfies predname)))
 
@@ -455,9 +458,8 @@ ARGS and BODY are the same as for `lambda'."
        (slots (oclosure--class-slots class))
        (mutables '())
        (slotbinds (mapcar (lambda (slot)
-                            (let ((name (cl--slot-descriptor-name slot))
-                                  (props (cl--slot-descriptor-props slot)))
-                              (unless (alist-get :read-only props)
+                            (let ((name (cl--slot-descriptor-name slot)))
+                              (when (oclosure--slot-mutable-p slot)
                                 (push name mutables))
                               (list name)))
                           slots))
@@ -574,15 +576,33 @@ ARGS and BODY are the same as for `lambda'."
   "OClosure function to access a specific slot of an OClosure function."
   index)
 
+(defun oclosure--mixin-slot-index (oclosure slotname)
+  (gethash slotname
+           (oclosure--class-index-table
+            (cl--find-class (oclosure-type oclosure)))))
+
+(defun oclosure--slot-value (oclosure slotname)
+  (let ((class (cl--find-class (oclosure-type oclosure)))
+        (index (oclosure--mixin-slot-index oclosure slotname)))
+    (oclosure--get oclosure index
+                   (oclosure--slot-mutable-p
+                    (nth index (cl--class-slots class))))))
+
+(defun oclosure--set-slot-value (oclosure slotname value)
+  (let ((class (cl--find-class (oclosure-type oclosure)))
+        (index (oclosure--mixin-slot-index oclosure slotname)))
+    (unless (oclosure--slot-mutable-p
+             (nth index (cl--class-slots class)))
+      (signal 'setting-constant (list oclosure slotname)))
+    (oclosure--set value oclosure index)))
+
 (defconst oclosure--mixin-accessor-prototype
   ;; Use `oclosure--lambda' to circumvent a bootstrapping problem:
   ;; `oclosure-accessor' is not yet defined at this point but
   ;; `oclosure--accessor-prototype' is needed when defining `oclosure-accessor'.
   (oclosure-lambda (oclosure-accessor (type) (slot)) (oclosure)
     (oclosure--get oclosure
-                   (gethash slot
-                            (oclosure--class-index-table
-                             (cl--find-class (oclosure-type oclosure))))
+                   (oclosure--mixin-slot-index oclosure slot)
                    nil)))
 
 (defconst oclosure--mut-getter-prototype
@@ -595,16 +615,12 @@ ARGS and BODY are the same as for `lambda'."
 (defconst oclosure--mut-mixin-getter-prototype
   (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (oclosure)
     (oclosure--get oclosure
-                   (gethash slot
-                            (oclosure--class-index-table
-                             (cl--find-class (oclosure-type oclosure))))
+                   (oclosure--mixin-slot-index oclosure slot)
                    t)))
 (defconst oclosure--mut-mixin-setter-prototype
   ;; FIXME: The generated docstring is wrong.
   (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (val oclosure)
     (oclosure--set val oclosure
-                   (gethash slot
-                            (oclosure--class-index-table
-                             (cl--find-class (oclosure-type oclosure)))))))
+                   (oclosure--mixin-slot-index oclosure slot))))
 (provide 'oclosure)
 ;;; oclosure.el ends here

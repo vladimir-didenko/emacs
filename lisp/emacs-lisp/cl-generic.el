@@ -1313,7 +1313,7 @@ Used internally for the (major-mode MODE) context specializers."
             (list cl-generic--oclosure-generalizer))))
    (cl-call-next-method)))
 
-(cl--generic-prefill-dispatchers 0 oclosure-object)
+(cl--generic-prefill-dispatchers 0 oclosure)
 
 ;;; Support for unloading.
 

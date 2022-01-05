@@ -1,7 +1,7 @@
 ;;; eieio.el --- Enhanced Implementation of Emacs Interpreted Objects  -*- lexical-binding:t -*-
 ;;;              or maybe Eric's Implementation of Emacs Interpreted Objects
 
-;; Copyright (C) 1995-1996, 1998-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1995-1996, 1998-2022 Free Software Foundation, Inc.
 
 ;; Author: Eric M. Ludlam <zappo@gnu.org>
 ;; Version: 1.4
@@ -144,9 +144,9 @@ and reference them using the function `class-option'."
 	     (alloc   (plist-get soptions :allocation))
 	     (label   (plist-get soptions :label)))
 
-        ;; Update eieio--known-slot-names already in case we compile code which
+        ;; Update `slot-name' prop already in case we compile code which
         ;; uses this before the class is loaded.
-        (cl-pushnew sname eieio--known-slot-names)
+        (put sname 'slot-name t)
         (when (eq alloc :class)
           (cl-pushnew sname eieio--known-class-slot-names))
 

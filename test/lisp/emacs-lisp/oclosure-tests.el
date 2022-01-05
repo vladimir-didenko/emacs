@@ -33,7 +33,7 @@
 
 (cl-defmethod oclosure-test-gen ((_x cons)) "#<cons>")
 
-(cl-defmethod oclosure-test-gen ((_x oclosure-object))
+(cl-defmethod oclosure-test-gen ((_x oclosure))
   (format "#<oclosure:%s>" (cl-call-next-method)))
 
 (cl-defmethod oclosure-test-gen ((_x oclosure-test))
@@ -60,7 +60,7 @@
     (should (equal (funcall (oclosure-test-copy ocl1 :fst 7)) '(7 2 44)))
     (should (equal (funcall (oclosure-test-copy1 ocl1 9)) '(9 2 44)))
     (should (cl-typep ocl1 'oclosure-test))
-    (should (cl-typep ocl1 'oclosure-object))
+    (should (cl-typep ocl1 'oclosure))
     (should (member (oclosure-test-gen ocl1)
                     '("#<oclosure-test:#<oclosure:#<cons>>>"
                       "#<oclosure-test:#<oclosure:#<bytecode>>>")))
@@ -153,5 +153,33 @@
     (should (equal 'cm2 (oclosure-test-mixin2--cm ocl2)))
     (should (equal 'cm3 (oclosure-test-mixin2--cm ocl3)))
     (should (equal 'd3 (oclosure-test-mixin3--d ocl3)))))
+
+(ert-deftest oclosure-tests-slot-value ()
+  (require 'eieio)
+  (let ((ocl1 (oclosure-lambda (oclosure-test-mixin1 (a 'a1) (b 'b1) (bm 'bm1))
+                  (x) (list a b x)))
+        (ocl2 (oclosure-lambda (oclosure-test-mixin2 (a 'a2) (c 'c2) (cm 'cm2))
+                  (x) (list a c x)))
+        (ocl3 (oclosure-lambda (oclosure-test-mixin3
+                                (a 'a3) (b 'b3) (bm 'bm3) (c 'c3) (cm 'cm3)
+                                (d 'd3))
+                  (x) (list a b c d x))))
+    (should (equal 'a1  (slot-value ocl1 'a)))
+    (should (equal 'a2  (slot-value ocl2 'a)))
+    (should (equal 'a3  (slot-value ocl3 'a)))
+    (should (equal 'b1  (slot-value ocl1 'b)))
+    (should (equal 'b3  (slot-value ocl3 'b)))
+    (should (equal 'bm1 (slot-value ocl1 'bm)))
+    (should (equal 'bm3 (slot-value ocl3 'bm)))
+    (should (equal 'c2  (slot-value ocl2 'c)))
+    (should (equal 'c3  (slot-value ocl3 'c)))
+    (should (equal 'cm2 (slot-value ocl2 'cm)))
+    (should (equal 'cm3 (slot-value ocl3 'cm)))
+    (should (equal 'd3  (slot-value ocl3 'd)))
+    (setf (slot-value ocl3 'cm) 'new-cm3)
+    (should (equal 'new-cm3 (slot-value ocl3 'cm)))
+    (should-error (setf (slot-value ocl3 'c) 'new-cm3) :type 'setting-constant)
+    (should (equal 'c3 (slot-value ocl3 'c)))
+    ))
 
 ;;; oclosure-tests.el ends here.
