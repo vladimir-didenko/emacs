@@ -1,6 +1,6 @@
 /* Updating of data structures for redisplay.
 
-Copyright (C) 1985-1988, 1993-1995, 1997-2021 Free Software Foundation,
+Copyright (C) 1985-1988, 1993-1995, 1997-2022 Free Software Foundation,
 Inc.
 
 This file is part of GNU Emacs.
@@ -6449,6 +6449,15 @@ init_display_interactive (void)
     {
       Vinitial_window_system = Qns;
       Vwindow_system_version = make_fixnum (10);
+      return;
+    }
+#endif
+
+#ifdef HAVE_PGTK
+  if (!inhibit_window_system && !will_dump_p ())
+    {
+      Vinitial_window_system = Qpgtk;
+      Vwindow_system_version = make_fixnum (3);
       return;
     }
 #endif

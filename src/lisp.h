@@ -1,6 +1,6 @@
 /* Fundamental definitions for GNU Emacs Lisp interpreter. -*- coding: utf-8 -*-
 
-Copyright (C) 1985-1987, 1993-1995, 1997-2021 Free Software Foundation,
+Copyright (C) 1985-1987, 1993-1995, 1997-2022 Free Software Foundation,
 Inc.
 
 This file is part of GNU Emacs.
@@ -954,7 +954,7 @@ typedef EMACS_UINT Lisp_Word_tag;
                        ? ((y) - 1 + (x)) & ~ ((y) - 1)			\
                        : ((y) - 1 + (x)) - ((y) - 1 + (x)) % (y))
 
-#include "globals.h"
+#include <globals.h>
 
 /* Header of vector-like objects.  This documents the layout constraints on
    vectors and pseudovectors (objects of PVEC_xxx subtype).  It also prevents

@@ -1,6 +1,6 @@
 ;;; bytecomp.el --- compilation of Lisp code into byte code -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1987, 1992, 1994, 1998, 2000-2021 Free Software
+;; Copyright (C) 1985-1987, 1992, 1994, 1998, 2000-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Author: Jamie Zawinski <jwz@lucid.com>
@@ -510,7 +510,7 @@ Return the compile-time value of FORM."
                               ;; whether to compile as byte-compile-form
                               ;; or byte-compile-file-form.
                               (let ((expanded
-                                     (macroexpand-all
+                                     (macroexpand--all-toplevel
                                       form
                                       macroexpand-all-environment)))
                                 (eval expanded lexical-binding)
@@ -2676,15 +2676,6 @@ list that represents a doc string reference.
 (defun byte-compile-file-form-make-obsolete (form)
   (prog1 (byte-compile-keep-pending form)
     (apply 'make-obsolete (mapcar 'eval (cdr form)))))
-
-;; This handler is not necessary, but it makes the output from dont-compile
-;; and similar macros cleaner.
-(put 'eval 'byte-hunk-handler 'byte-compile-file-form-eval)
-(defun byte-compile-file-form-eval (form)
-  (if (and (eq (car-safe (nth 1 form)) 'quote)
-           (equal (nth 2 form) lexical-binding))
-      (nth 1 (nth 1 form))
-    (byte-compile-keep-pending form)))
 
 (defun byte-compile-file-form-defmumble (name macro arglist body rest)
   "Process a `defalias' for NAME.
@@ -4935,13 +4926,13 @@ binding slots have been popped."
   ;; if it weren't for the fact that we need to figure out when a defalias
   ;; defines a macro, so as to add it to byte-compile-macro-environment.
   ;;
-  ;; FIXME: we also use this hunk-handler to implement the function's dynamic
-  ;; docstring feature.  We could actually implement it more elegantly in
-  ;; byte-compile-lambda so it applies to all lambdas, but the problem is that
-  ;; the resulting .elc format will not be recognized by make-docfile, so
-  ;; either we stop using DOC for the docstrings of preloaded elc files (at the
-  ;; cost of around 24KB on 32bit hosts, double on 64bit hosts) or we need to
-  ;; build DOC in a more clever way (e.g. handle anonymous elements).
+  ;; FIXME: we also use this hunk-handler to implement the function's
+  ;; dynamic docstring feature (via byte-compile-file-form-defmumble).
+  ;; We should actually implement it (more elegantly) in
+  ;; byte-compile-lambda so it applies to all lambdas.  We did it here
+  ;; so the resulting .elc format was recognizable by make-docfile,
+  ;; but since then we stopped using DOC for the docstrings of
+  ;; preloaded elc files so that obstacle is gone.
   (let ((byte-compile-free-references nil)
         (byte-compile-free-assignments nil))
     (pcase form

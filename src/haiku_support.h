@@ -1,5 +1,5 @@
 /* Haiku window system support.  Hey Emacs, this is -*- C++ -*-
-   Copyright (C) 2021 Free Software Foundation, Inc.
+   Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -31,6 +31,8 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #ifdef USE_BE_CAIRO
 #include <cairo.h>
 #endif
+
+#include <math.h>
 
 enum haiku_cursor
   {
@@ -309,6 +311,28 @@ struct haiku_menu_bar_state_event
 #define HAIKU_ULTRA_HEAVY 900
 #define HAIKU_BLACK 1000
 #define HAIKU_MEDIUM 2000
+
+#ifdef __cplusplus
+/* Haiku's built in Height and Width functions for calculating
+   rectangle sizes are broken, probably for compatibility with BeOS:
+   they do not round up in a reasonable fashion, and they return the
+   numerical difference between the end and start sides in both
+   directions, instead of the actual size.
+
+   For example:
+
+     BRect (1, 1, 5, 5).IntegerWidth ()
+
+   Will return 4, when in reality the rectangle is 5 pixels wide,
+   since the left corner is also a pixel!
+
+   All code in Emacs should use the macros below to calculate the
+   dimensions of a BRect, instead of relying on the broken Width and
+   Height functions.  */
+
+#define BE_RECT_HEIGHT(rect) (ceil (((rect).bottom - (rect).top) + 1))
+#define BE_RECT_WIDTH(rect) (ceil (((rect).right - (rect).left) + 1))
+#endif /* __cplusplus */
 
 #ifdef __cplusplus
 extern "C"
@@ -740,7 +764,8 @@ extern "C"
 			int dir_only_p,	void *window, const char *save_text,
 			const char *prompt,
 			void (*block_input_function) (void),
-			void (*unblock_input_function) (void));
+			void (*unblock_input_function) (void),
+			void (*maybe_quit_function) (void));
 
   extern void
   record_c_unwind_protect_from_cxx (void (*) (void *), void *);
@@ -818,6 +843,18 @@ extern "C"
 
   extern void
   BWindow_set_size_alignment (void *window, int align_width, int align_height);
+
+  extern void
+  BWindow_sync (void *window);
+
+  extern void
+  BWindow_send_behind (void *window, void *other_window);
+
+  extern bool
+  BWindow_is_active (void *window);
+
+  extern bool
+  be_use_subpixel_antialiasing (void);
 
 #ifdef __cplusplus
   extern void *

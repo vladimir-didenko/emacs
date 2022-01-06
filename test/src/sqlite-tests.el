@@ -1,6 +1,6 @@
 ;;; sqlite-tests.el --- Tests for sqlite.el  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2021 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -35,6 +35,7 @@
 (declare-function sqlite-more-p "sqlite.c")
 (declare-function sqlite-select "sqlite.c")
 (declare-function sqlite-open "sqlite.c")
+(declare-function sqlite-load-extension "sqlite.c")
 
 (ert-deftest sqlite-select ()
   (skip-unless (sqlite-available-p))
@@ -181,5 +182,38 @@
     (should (sqlite-select db "select * from test6"))
     (sqlite-close db)
     (should-error (sqlite-select db "select * from test6"))))
+
+(ert-deftest sqlite-load-extension ()
+  (skip-unless (sqlite-available-p))
+  (skip-unless (fboundp 'sqlite-load-extension))
+  (let (db)
+    (setq db (sqlite-open))
+    (should-error
+     (sqlite-load-extension db "/usr/lib/sqlite3/notpcre.so"))
+    (should-error
+     (sqlite-load-extension db "/usr/lib/sqlite3/n"))
+    (should-error
+     (sqlite-load-extension db "/usr/lib/sqlite3/"))
+    (should-error
+     (sqlite-load-extension db "/usr/lib/sqlite3"))
+    (should
+     (memq
+      (sqlite-load-extension db "/usr/lib/sqlite3/pcre.so")
+      '(nil t)))
+
+    (should-error
+     (sqlite-load-extension
+      db "/usr/lib/x86_64-linux-gnu/libsqlite3_mod_notcsvtable.so"))
+    (should-error
+     (sqlite-load-extension
+      db "/usr/lib/x86_64-linux-gnu/libsqlite3_mod_csvtablen.so"))
+    (should-error
+     (sqlite-load-extension
+      db "/usr/lib/x86_64-linux-gnu/libsqlite3_mod_csvtable"))
+    (should
+     (memq
+      (sqlite-load-extension
+       db "/usr/lib/x86_64-linux-gnu/libsqlite3_mod_csvtable.so")
+      '(nil t)))))
 
 ;;; sqlite-tests.el ends here

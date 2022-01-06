@@ -1,6 +1,6 @@
 ;;; cl-macs-tests.el --- tests for emacs-lisp/cl-macs.el  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2017-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2017-2022 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -666,7 +666,24 @@ collection clause."
   (should (pcase (macroexpand
                   '(cl-labels ((len (xs n) (if xs (len (cdr xs) (1+ n)) n)))
                      #'len))
-            (`(function (lambda (,_ ,_) . ,_)) t))))
+            (`(function (lambda (,_ ,_) . ,_)) t)))
+
+  ;; Verify that there is no tail position inside dynamic variable bindings.
+  (defvar dyn-var)
+  (let ((dyn-var 'a))
+    (cl-labels ((f (x) (if x
+                           dyn-var
+                         (let ((dyn-var 'b))
+                           (f dyn-var)))))
+      (should (equal (f nil) 'b))))
+
+  ;; Control: same as above but with lexical binding.
+  (let ((lex-var 'a))
+    (cl-labels ((f (x) (if x
+                           lex-var
+                         (let ((lex-var 'b))
+                           (f lex-var)))))
+      (should (equal (f nil) 'a)))))
 
 (ert-deftest cl-macs--progv ()
   (defvar cl-macs--test)

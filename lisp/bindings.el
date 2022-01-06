@@ -1,6 +1,6 @@
 ;;; bindings.el --- define standard key bindings and some variables  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1985-1987, 1992-1996, 1999-2021 Free Software
+;; Copyright (C) 1985-1987, 1992-1996, 1999-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -501,7 +501,7 @@ mouse-1: Display Line and Column Mode Menu"))
 
 (defvar mode-line-position
   `((:propertize
-     (" " mode-line-percent-position)
+     ("" mode-line-percent-position)
      local-map ,mode-line-column-line-number-mode-map
      display (min-width (5.0))
      mouse-face mode-line-highlight

@@ -1,6 +1,6 @@
 ;;; rmailsum.el --- make summary buffers for the mail reader  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985, 1993-1996, 2000-2021 Free Software Foundation,
+;; Copyright (C) 1985, 1993-1996, 2000-2022 Free Software Foundation,
 ;; Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -1876,9 +1876,5 @@ the summary is only showing a subset of messages."
       (select-window selwin))))
 
 (provide 'rmailsum)
-
-;; Local Variables:
-;; generated-autoload-file: "rmail-loaddefs.el"
-;; End:
 
 ;;; rmailsum.el ends here
