@@ -227,7 +227,7 @@
                                  (error "Unknown class: %S" name)))
                       (ppinned (oclosure--class-pinned class))
                       (i -1)
-                      (slots (cl--class-slots class)))
+                      (slots (oclosure--class-slots class)))
                  (unless (cl-typep class 'oclosure--class)
                    (error "Not an OClosure class: %S" name))
                  (setq total-slots
@@ -304,9 +304,19 @@
 
          (parent-names (or (funcall get-opt :parent)
                            (funcall get-opt :include)))
-         (parent-class (oclosure--merge-classes parent-names))
          (copiers (funcall get-opt :copier 'all))
+         (mixin (funcall get-opt :mixin)))
+    `(progn
+       ,(when options (macroexp-warn-and-return
+                       (format "Ignored options: %S" options)
+                       nil))
+       (eval-and-compile
+         (oclosure--define ',name ,docstring ',parent-names ',slots
+                           :mixin ',mixin))
+       (oclosure--define-functions ,name ,copiers))))
 
+(defun oclosure--build-class (name docstring parent-names slots mixin)
+  (let* ((parent-class (oclosure--merge-classes parent-names))
          (slotdescs
           (append
            (oclosure--class-slots parent-class)
@@ -329,30 +339,26 @@
                                                    `((:read-only . ,read-only)
                                                      ,@props)))))
                    slots)))
-         (mixin (funcall get-opt :mixin))
          (pinned
-          (if mixin (oclosure--class-pinned parent-class) (length slotdescs)))
-         (class (oclosure--class-make name docstring slotdescs
-                                      (if (cdr parent-names)
-                                          (oclosure--class-parents parent-class)
-                                        (list parent-class))
-                                      pinned
-                                      (cons name (oclosure--class-allparents
-                                                  parent-class)))))
-    (when (and copiers mixin)
+          (if (or mixin (null slots))
+              (oclosure--class-pinned parent-class)
+            (length slotdescs))))
+    (oclosure--class-make name docstring slotdescs
+                          (if (cdr parent-names)
+                              (oclosure--class-parents parent-class)
+                            (list parent-class))
+                          pinned
+                          (cons name (oclosure--class-allparents
+                                      parent-class)))))
+
+(defmacro oclosure--define-functions (name copiers)
+  (let* ((class (cl--find-class name))
+         (slotdescs (oclosure--class-slots class))
+         (pinned (oclosure--class-pinned class)))
+    (when (and copiers (< pinned (length slotdescs)))
       (error "Copiers not yet support together with :mixin"))
     `(progn
-       ,(when options (macroexp-warn-and-return
-                       (format "Ignored options: %S" options)
-                       nil))
-       (eval-and-compile
-         (oclosure--define ',class
-                           (lambda (oclosure)
-                             (let ((type (oclosure-type oclosure)))
-                               (when type
-                                 (memq ',name (oclosure--class-allparents
-                                               (cl--find-class type))))))))
-       ,@(let ((i -1))
+     ,@(let ((i -1))
            (mapcar (lambda (desc)
                      (let* ((slot (cl--slot-descriptor-name desc))
                             (mutable (oclosure--slot-mutable-p desc))
@@ -388,8 +394,15 @@
        ,@(oclosure--defstruct-make-copiers
           copiers slotdescs name))))
 
-(defun oclosure--define (class pred)
-  (let* ((name (cl--class-name class))
+(defun oclosure--define (name docstring parent-names slots
+                              &rest props)
+  (let* ((mixin (plist-get props :mixin))
+         (class (oclosure--build-class name docstring parent-names slots mixin))
+         (pred (lambda (oclosure)
+                 (let ((type (oclosure-type oclosure)))
+                   (when type
+                     (memq name (oclosure--class-allparents
+                                 (cl--find-class type)))))))
          (predname (intern (format "%s--internal-p" name))))
     (setf (cl--find-class name) class)
     (dolist (slot (oclosure--class-slots class))
@@ -586,13 +599,13 @@ ARGS and BODY are the same as for `lambda'."
         (index (oclosure--mixin-slot-index oclosure slotname)))
     (oclosure--get oclosure index
                    (oclosure--slot-mutable-p
-                    (nth index (cl--class-slots class))))))
+                    (nth index (oclosure--class-slots class))))))
 
 (defun oclosure--set-slot-value (oclosure slotname value)
   (let ((class (cl--find-class (oclosure-type oclosure)))
         (index (oclosure--mixin-slot-index oclosure slotname)))
     (unless (oclosure--slot-mutable-p
-             (nth index (cl--class-slots class)))
+             (nth index (oclosure--class-slots class)))
       (signal 'setting-constant (list oclosure slotname)))
     (oclosure--set value oclosure index)))
 

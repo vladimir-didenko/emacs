@@ -82,14 +82,15 @@
            (string-match "where.*mutated" (cadr err))))))
   (should
    (condition-case err
-       (progn (macroexpand '(oclosure-define oclosure--foo a a))
+       (progn (macroexpand-all '(oclosure-define oclosure--foo a a))
               nil)
      (error
       (and (eq 'error (car err))
            (string-match "Duplicate slot name: a$" (cadr err))))))
   (should
    (condition-case err
-       (progn (macroexpand '(oclosure-define (oclosure--foo (:parent advice)) where))
+       (progn (macroexpand-all
+               '(oclosure-define (oclosure--foo (:parent advice)) where))
               nil)
      (error
       (and (eq 'error (car err))
