@@ -5343,7 +5343,8 @@ on a DOS/Windows machine, it returns FILENAME in expanded form."
     (let ((fremote (file-remote-p filename))
 	  (dremote (file-remote-p directory))
 	  (fold-case (or (file-name-case-insensitive-p filename)
-			 read-file-name-completion-ignore-case)))
+			 (bound-and-true-p
+			  read-file-name-completion-ignore-case))))
       (if ;; Conditions for separate trees
 	  (or
 	   ;; Test for different filesystems on DOS/Windows

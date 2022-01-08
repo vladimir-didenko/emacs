@@ -115,7 +115,6 @@
 ;; - `oclosure-(cl-)defun', `oclosure-(cl-)defsubst', `oclosure-define-inline'?
 ;; - Use accessor in cl-defstruct.
 ;; - Add pcase patterns for OClosures.
-;; - anonymous OClosure types.
 ;; - copiers for mixins
 ;; - class-allocated slots?
 ;; - code-allocated slots?
@@ -412,7 +411,7 @@
 
 (defmacro oclosure--lambda (type bindings mutables args &rest body)
   "Low level construction of an OClosure object.
-TYPE should be be a symbol that is (or will be) defined as an OClosure type.
+TYPE should be be an form returning an OClosure type (a symbol)
 BINDINGS should list all the slots expected by this type, in the proper order.
 MUTABLE is a list of symbols indicating which of the BINDINGS
 should be mutable.
@@ -425,9 +424,6 @@ No checking is performed,"
   ;; likely mishandle such a new special form (e.g. `generator.el').
   ;; But don't be fooled: this macro is tightly bound to `cconv.el'.
   (pcase-let*
-      ;; FIXME: Since we use the docstring internally to store the
-      ;; type we can't handle actual docstrings.  We could fix this by adding
-      ;; a docstring slot to OClosures.
       ((`(,prebody . ,body) (macroexp-parse-body body))
        (rovars (mapcar #'car bindings)))
     (dolist (mutable mutables)
@@ -448,12 +444,21 @@ No checking is performed,"
         ;; store-conversion (i.e. if a variable/slot is mutated).
         (ignore ,@rovars)
         (lambda ,args
-          (:documentation ',type)
+          (:documentation ,type)
           ,@prebody
           ;; Add dummy code which accesses the field's vars to make sure
           ;; they're captured in the closure.
           (if t nil ,@rovars ,@(mapcar (lambda (m) `(setq ,m ,m)) mutables))
           ,@body)))))
+
+(defun oclosure--anonymous-name (names)
+  (intern (format "%S" (vconcat names))))
+
+(defun oclosure--anonymous-define (name names)
+  (unless (cl--find-class name)
+    (setf (cl--find-class name)
+          (oclosure--merge-classes names)))
+  name)
 
 (defmacro oclosure-lambda (type-and-slots args &rest body)
   "Define anonymous OClosure function.
@@ -467,6 +472,15 @@ ARGS and BODY are the same as for `lambda'."
   ;; from `fields'?
   (pcase-let*
       ((`(,type . ,fields) type-and-slots)
+       (types (named-let loop ((types (list type)))
+                (if (listp (car fields))
+                    (nreverse types)
+                  (loop (cons (pop fields) types)))))
+       (type-exp (if (null (cdr types))
+                     `',(car types)
+                   `(oclosure--anonymous-define
+                     ',(oclosure--anonymous-name types) ',types)))
+       (type (eval type-exp t))
        (class (cl--find-class type))
        (slots (oclosure--class-slots class))
        (mutables '())
@@ -481,6 +495,7 @@ ARGS and BODY are the same as for `lambda'."
                      (let* ((name (car field))
                             (bind (assq name slotbinds)))
                        (cond
+                        ;; FIXME: Should we also warn about missing slots?
                         ((not bind)
                          (error "Unknown slot: %S" name))
                         ((cdr bind)
@@ -492,7 +507,7 @@ ARGS and BODY are the same as for `lambda'."
                    fields)))
     ;; FIXME: Optimize temps away when they're provided in the right order?
     `(let ,tempbinds
-       (oclosure--lambda ,type ,slotbinds ,mutables ,args ,@body))))
+       (oclosure--lambda ,type-exp ,slotbinds ,mutables ,args ,@body))))
 
 (defun oclosure--fix-type (_ignore oclosure)
   (if (byte-code-function-p oclosure)
@@ -563,7 +578,7 @@ ARGS and BODY are the same as for `lambda'."
   ;; Use `oclosure--lambda' to circumvent a bootstrapping problem:
   ;; `oclosure-accessor' is not yet defined at this point but
   ;; `oclosure--accessor-prototype' is needed when defining `oclosure-accessor'.
-  (oclosure--lambda oclosure-accessor ((type) (slot) (index)) nil
+  (oclosure--lambda 'oclosure-accessor ((type) (slot) (index)) nil
     (oclosure) (oclosure--get oclosure index nil)))
 
 (oclosure-define accessor
@@ -635,5 +650,6 @@ ARGS and BODY are the same as for `lambda'."
   (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (val oclosure)
     (oclosure--set val oclosure
                    (oclosure--mixin-slot-index oclosure slot))))
+
 (provide 'oclosure)
 ;;; oclosure.el ends here

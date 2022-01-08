@@ -2233,10 +2233,10 @@ then strings and vectors are not accepted.  */)
 	    return Qt;
 	  else
 	    {
-	      body = CAR_SAFE (body);
+	      Lisp_Object first = CAR_SAFE (body);
 	      if (!NILP (CDR_SAFE (body))
-	          && (STRINGP (body) || FIXNUMP (body) ||
-	              FIXNUMP (CDR_SAFE (body))))
+	          && (STRINGP (first) || FIXNUMP (first) ||
+	              FIXNUMP (CDR_SAFE (first))))
 	        genfun = true;
 	    }
 	}
@@ -2255,7 +2255,7 @@ then strings and vectors are not accepted.  */)
       fun = Fsymbol_function (fun);
     }
 
-  /* If there's no immdiate interactive form but there's a docstring,
+  /* If there's no immediate interactive form but there's a docstring,
      then delegate to the generic-function in case it's an FCR with
      a type-specific interactive-form.  */
   if (genfun

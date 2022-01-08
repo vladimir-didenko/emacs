@@ -39,7 +39,7 @@
 (cl-defmethod oclosure-test-gen ((_x oclosure-test))
   (format "#<oclosure-test:%s>" (cl-call-next-method)))
 
-(ert-deftest oclosure-tests ()
+(ert-deftest oclosure-test ()
   (let* ((i 42)
          (ocl1 (oclosure-lambda (oclosure-test (fst 1) (snd 2) (name "hi"))
                    ()
@@ -66,7 +66,7 @@
                       "#<oclosure-test:#<oclosure:#<bytecode>>>")))
     ))
 
-(ert-deftest oclosure-tests--limits ()
+(ert-deftest oclosure-test-limits ()
   (should
    (condition-case err
        (let ((lexical-binding t)
@@ -109,7 +109,7 @@
   "Simple OClosure with a mutable field."
   (mut :mutable t))
 
-(ert-deftest oclosure-test--mutate ()
+(ert-deftest oclosure-test-mutate ()
   (let* ((f (oclosure-lambda (oclosure-test-mut (fst 0) (mut 3))
                 (x)
               (+ x fst mut)))
@@ -155,7 +155,7 @@
     (should (equal 'cm3 (oclosure-test-mixin2--cm ocl3)))
     (should (equal 'd3 (oclosure-test-mixin3--d ocl3)))))
 
-(ert-deftest oclosure-tests-slot-value ()
+(ert-deftest oclosure-test-slot-value ()
   (require 'eieio)
   (let ((ocl1 (oclosure-lambda (oclosure-test-mixin1 (a 'a1) (b 'b1) (bm 'bm1))
                   (x) (list a b x)))
@@ -182,5 +182,22 @@
     (should-error (setf (slot-value ocl3 'c) 'new-cm3) :type 'setting-constant)
     (should (equal 'c3 (slot-value ocl3 'c)))
     ))
+
+(ert-deftest oclosure-test-anonymous ()
+  (let ((ocl1 (oclosure-lambda (oclosure-test
+                                oclosure-test-mixin1
+                                (fst 'fst) (snd 'snd)
+                                (a 'a))
+                  (x)
+                (list x fst))))
+
+    (should (equal (oclosure-test-mixin1--a ocl1)
+                   'a))
+    (should (equal (oclosure-test--snd ocl1)
+                   'snd))
+    (should (equal (funcall ocl1 'x) '(x fst)))
+    (should (cl-typep ocl1 'oclosure-test))
+    (should (cl-typep ocl1 'oclosure-test-mixin1))
+    (should (cl-typep ocl1 '(and oclosure-test oclosure-test-mixin1)))))
 
 ;;; oclosure-tests.el ends here.
