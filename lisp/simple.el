@@ -2352,6 +2352,10 @@ FUNCTION is expected to be a function value rather than, say, a mere symbol."
   ;; FIXME: η-reduce!
   (oclosure--accessor-docstring function))
 
+(cl-defmethod function-docstring ((function oclosure-documented))
+  ;; FIXME: η-reduce!
+  (oclosure-documented--docstring function))
+
 (cl-defgeneric interactive-form (cmd &optional original-name)
   "Return the interactive form of CMD or nil if none.
 If CMD is not a command, the return value is nil.
@@ -2383,6 +2387,9 @@ ORIGINAL-NAME is used internally only."
            (list 'interactive (cadr spec))
          spec)))
     (_ (internal--interactive-form cmd))))
+
+(cl-defmethod interactive-form ((cmd oclosure-command) &optional _original-name)
+  (list 'interactive (oclosure-command--interactive-form cmd)))
 
 (defun command-execute (cmd &optional record-flag keys special)
   ;; BEWARE: Called directly from the C code.

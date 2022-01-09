@@ -189,7 +189,12 @@
                                 (fst 'fst) (snd 'snd)
                                 (a 'a))
                   (x)
-                (list x fst))))
+                (list x fst)))
+        (ocl2 (oclosure-lambda (oclosure-test (fst 'fst) (snd 'snd))
+                  (x)
+                "Doc"
+                (interactive "P")
+                (list x snd))))
 
     (should (equal (oclosure-test-mixin1--a ocl1)
                    'a))
@@ -198,6 +203,14 @@
     (should (equal (funcall ocl1 'x) '(x fst)))
     (should (cl-typep ocl1 'oclosure-test))
     (should (cl-typep ocl1 'oclosure-test-mixin1))
-    (should (cl-typep ocl1 '(and oclosure-test oclosure-test-mixin1)))))
+    (should (cl-typep ocl1 '(and oclosure-test oclosure-test-mixin1)))
+
+    (should (cl-typep ocl2 '(and oclosure-command oclosure-documented)))
+    (should (equal (interactive-form ocl2) '(interactive "P")))
+    (should (commandp ocl2))
+    (should (equal (let ((current-prefix-arg 'pfx))
+                     (call-interactively ocl2))
+                   '(pfx snd)))
+    (should (equal "Doc" (documentation ocl2)))))
 
 ;;; oclosure-tests.el ends here.

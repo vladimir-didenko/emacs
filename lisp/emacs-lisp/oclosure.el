@@ -32,14 +32,11 @@
 ;; - OClosure accessor functions, where the type-dispatch is used to
 ;;   dynamically compute the docstring, and also to pretty them.
 ;; Here are other cases of "callable objects" where OClosures could be used:
+;; - Use the type to distinguish macros from functions.
 ;; - iterators (generator.el), thunks (thunk.el), streams (stream.el).
 ;; - PEG rules: they're currently just functions, but they should carry
 ;;   their original (macro-expanded) definition (and should be printed
 ;;   differently from functions)!
-;; - documented functions: this could be a subtype of normal functions, which
-;;   simply has an additional `docstring' slot.
-;; - commands: this could be a subtype of documented functions, which simply
-;;   has an additional `interactive-form' slot.
 ;; - auto-generate docstrings for cl-defstruct slot accessors instead of
 ;;   storing them in the accessor itself?
 ;; - SRFI-17's `setter'.
@@ -115,6 +112,7 @@
 ;; - `oclosure-(cl-)defun', `oclosure-(cl-)defsubst', `oclosure-define-inline'?
 ;; - Use accessor in cl-defstruct.
 ;; - Add pcase patterns for OClosures.
+;; - anonymous OClosure types.
 ;; - copiers for mixins
 ;; - class-allocated slots?
 ;; - code-allocated slots?
@@ -476,6 +474,21 @@ ARGS and BODY are the same as for `lambda'."
                 (if (listp (car fields))
                     (nreverse types)
                   (loop (cons (pop fields) types)))))
+       (_ (when (or (and (stringp (car-safe body)) (cdr body))
+                    (eq :documentation (car-safe (car-safe body))))
+            (let ((doc (pop body)))
+              (if (eq :documentation (car-safe doc))
+                  (setq doc (cadr doc)))
+              (setq types (nconc types (list 'oclosure-documented)))
+              (setq fields (append fields `((docstring ,doc)))))))
+       (_ (when (assq 'interactive body)
+            (let ((spec (assq 'interactive body)))
+              (setq body (remq spec body))
+              (setq types (nconc types (list 'oclosure-command)))
+              (setq fields (append fields `((interactive-form
+                                             ,(if (cddr spec)
+                                                  (vconcat (cdr spec))
+                                                (cadr spec)))))))))
        (type-exp (if (null (cdr types))
                      `',(car types)
                    `(oclosure--anonymous-define
@@ -650,6 +663,15 @@ ARGS and BODY are the same as for `lambda'."
   (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (val oclosure)
     (oclosure--set val oclosure
                    (oclosure--mixin-slot-index oclosure slot))))
+
+;; These need to come after we define the mixin accessors.
+(oclosure-define (oclosure-documented (:mixin t)) docstring)
+(oclosure-define (oclosure-command
+                  (:mixin t)
+                  ;; Not indispensable, but since by convention all
+                  ;; commands should be documented, we might as well.
+                  (:parent oclosure-documented))
+  interactive-form)
 
 (provide 'oclosure)
 ;;; oclosure.el ends here
