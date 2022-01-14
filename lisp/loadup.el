@@ -184,6 +184,9 @@
 ;; should be updated by overwriting it with an up-to-date copy of
 ;; loaddefs.el that is not corrupted by local changes.
 ;; admin/update_autogen can be used to update ldefs-boot.el periodically.
+(load "emacs-lisp/cl-preloaded")
+(load "emacs-lisp/oclosure")          ;Used by cl-generic and nadvice
+
 (condition-case nil (load "loaddefs.el")
   ;; In case loaddefs hasn't been generated yet.
   (file-error (load "ldefs-boot.el")))
@@ -195,8 +198,6 @@
   (setq definition-prefixes new))
 
 (load "button")                  ;After loaddefs, because of define-minor-mode!
-(load "emacs-lisp/cl-preloaded")
-(load "emacs-lisp/oclosure")          ;Used by cl-generic and nadvice
 (load "obarray")        ;abbrev.el is implemented in terms of obarrays.
 (load "abbrev")         ;lisp-mode.el and simple.el use define-abbrev-table.
 (load "help")

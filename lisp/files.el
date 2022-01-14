@@ -5793,7 +5793,7 @@ This allows you to stop `save-some-buffers' from asking
 about certain files that you'd usually rather not save.
 
 This function is called (with no parameters) from the buffer to
-be saved.  When the function's symbol has the property
+be saved.  When the function is of type
 `save-some-buffers-function', the higher-order function is supposed
 to return a predicate used to check buffers."
   :group 'auto-save
@@ -5836,8 +5836,8 @@ all with no questions.
 Optional second argument PRED determines which buffers are considered:
 If PRED is nil, all the file-visiting buffers are considered.
 If PRED is t, then certain non-file buffers will also be considered.
-If PRED is a zero-argument function, it indicates for each buffer whether
-to consider it or not when called with that buffer current.
+If PRED is a function, it is called with no argument in each buffer and
+should return non-nil if that buffer should be considered.
 PRED defaults to the value of `save-some-buffers-default-predicate'.
 
 See `save-some-buffers-action-alist' if you want to
@@ -5845,9 +5845,12 @@ change the additional actions you can take on files."
   (interactive "P")
   (unless pred
     (setq pred save-some-buffers-default-predicate))
+  ;; Can't be required at top-level for bootstrap reasons.
+  (eval-when-compile (require 'cl-lib))
   ;; Allow `pred' to be a function that returns a predicate
   ;; with lexical bindings in its original environment (bug#46374).
-  (when (and (symbolp pred) (get pred 'save-some-buffers-function))
+  (when (or (and (symbolp pred) (get pred 'save-some-buffers-function))
+            (cl-typep pred 'save-some-buffers-function))
     (let ((pred-fun (and (functionp pred) (funcall pred))))
       (when (functionp pred-fun)
         (setq pred pred-fun))))

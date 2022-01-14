@@ -31,6 +31,7 @@
 ;;   (by putting the no-next-methods into their own class).
 ;; - OClosure accessor functions, where the type-dispatch is used to
 ;;   dynamically compute the docstring, and also to pretty them.
+;; - `save-some-buffers-function'
 ;; Here are other cases of "callable objects" where OClosures could be used:
 ;; - Use the type to distinguish macros from functions.
 ;; - iterators (generator.el), thunks (thunk.el), streams (stream.el).
@@ -672,6 +673,11 @@ ARGS and BODY are the same as for `lambda'."
                   ;; commands should be documented, we might as well.
                   (:parent oclosure-documented))
   interactive-form)
+
+;; Ideally, this should be in `files.el', but that file is loaded
+;; before `oclosure.el'.
+(oclosure-define save-some-buffers-function)
+
 
 (provide 'oclosure)
 ;;; oclosure.el ends here

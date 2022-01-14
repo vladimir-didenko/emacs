@@ -45,8 +45,10 @@
 
 (require 'cl-lib)
 (require 'macroexp)
-;; `gv' is required here because cl-macs can be loaded before loaddefs.el.
+;; `gv' and `inline' are required here because cl-macs can be loaded
+;; before loaddefs.el.
 (require 'gv)
+(eval-when-compile (require 'inline))
 
 (defmacro cl--pop2 (place)
   (declare (debug edebug-sexps))
