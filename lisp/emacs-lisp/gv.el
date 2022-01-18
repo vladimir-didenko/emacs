@@ -67,6 +67,7 @@
 ;;; Code:
 
 (require 'macroexp)
+(eval-when-compile (require 'pcase))    ;Needed during bootstrap.
 
 ;; What we call a "gvar" is basically a function of type "(getter * setter ->
 ;; code) -> code", where "getter" is code and setter is "code -> code".

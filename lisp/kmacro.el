@@ -819,12 +819,13 @@ If kbd macro currently being defined end it before activating it."
                            (counter (or counter 0))
                            (format (or format "%d")))
       (&optional arg)
-    (interactive "p")
     ;; Use counter and format specific to the macro on the ring!
     (let ((kmacro-counter counter)
 	  (kmacro-counter-format-start format))
       (execute-kbd-macro keys arg #'kmacro-loop-setup-function)
       (setq counter kmacro-counter))))
+
+(cl-defmethod interactive-form ((_ kmacro)) '(interactive "p"))
 
 ;;;###autoload
 (defun kmacro-lambda-form (mac &optional counter format)
@@ -1083,21 +1084,27 @@ following additional answers: `insert', `insert-1', `replace', `replace-1',
 	     (concat
 	      (format "Macro: %s%s%s%s%s\n"
 		      (format-kbd-macro kmacro-step-edit-new-macro 1)
-		      (if (and kmacro-step-edit-new-macro (> (length kmacro-step-edit-new-macro) 0)) " " "")
+		      (if (and kmacro-step-edit-new-macro
+		               (> (length kmacro-step-edit-new-macro) 0))
+		          " " "")
 		      (propertize (if keys (format-kbd-macro keys)
-				    (if kmacro-step-edit-appending "<APPEND>" "<INSERT>")) 'face 'region)
+				    (if kmacro-step-edit-appending
+				        "<APPEND>" "<INSERT>"))
+				  'face 'region)
 		      (if future " " "")
 		      (if future (format-kbd-macro future) ""))
 	      (cond
 	       ((minibufferp)
 		(format "%s\n%s\n"
 			  (propertize "\
-                         minibuffer                             " 'face 'header-line)
+                         minibuffer                             "
+			              'face 'header-line)
 			  (buffer-substring (point-min) (point-max))))
 	       (curmsg
 		(format "%s\n%s\n"
 			(propertize "\
-                         echo area                              " 'face 'header-line)
+                         echo area                              "
+                                    'face 'header-line)
 			curmsg))
 	       (t ""))
 	      (if keys
