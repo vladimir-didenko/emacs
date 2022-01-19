@@ -3971,7 +3971,7 @@ minibuffer, the usual minibuffer history commands are available.
 @cindex keyboard macros
 
   A @dfn{keyboard macro} is a canned sequence of input events.  It can
-be converted into a command (with the #code{kmacro} function) and made
+be converted into a command (with the @code{kmacro} function) and made
 the definition of a key.  The Lisp
 representation of a keyboard macro is a string or vector containing the
 events.  Don't confuse keyboard macros with Lisp macros
