@@ -825,7 +825,7 @@ If kbd macro currently being defined end it before activating it."
       (execute-kbd-macro keys arg #'kmacro-loop-setup-function)
       (setq counter kmacro-counter))))
 
-(cl-defmethod interactive-form ((_ kmacro)) '(interactive "p"))
+(cl-defmethod interactive-form ((_ kmacro) &optional _) '(interactive "p"))
 
 ;;;###autoload
 (defun kmacro-lambda-form (mac &optional counter format)

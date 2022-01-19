@@ -594,7 +594,7 @@ while a list of strings is used as a word list."
                                 ;; We used to use `functionp' here, but this
                                 ;; rules out macros.  `fboundp' rules in
                                 ;; keymaps, but it seems harmless.
-				(if do-all 'fboundp 'commandp))))
+				(if do-all #'fboundp #'commandp))))
     (let ((tem apropos-accumulator))
       (while tem
 	(if (or (get (car tem) 'apropos-inhibit)

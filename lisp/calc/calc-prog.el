@@ -138,7 +138,7 @@
 						 (char-to-string key)
 						 " to command: ")
 					 obarray
-					 'commandp
+					 #'commandp
 					 t
 					 "calc-"))))
       (let* ((kmap (calc-user-key-map))

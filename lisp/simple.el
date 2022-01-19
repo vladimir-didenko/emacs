@@ -424,8 +424,8 @@ where `next-error-function' is bound to an appropriate function."
                        (lambda (b) (next-error-buffer-p (cdr b)))))))
   (setq next-error-last-buffer buffer))
 
-(defalias 'goto-next-locus 'next-error)
-(defalias 'next-match 'next-error)
+(defalias 'goto-next-locus #'next-error)
+(defalias 'next-match #'next-error)
 
 (defun previous-error (&optional n)
   "Visit previous `next-error' message and corresponding source code.
@@ -479,8 +479,10 @@ When turned on, cursor motion in the compilation, grep, occur or diff
 buffer causes automatic display of the corresponding source code location."
   :group 'next-error :init-value nil :lighter " Fol"
   (if (not next-error-follow-minor-mode)
-      (remove-hook 'post-command-hook 'next-error-follow-mode-post-command-hook t)
-    (add-hook 'post-command-hook 'next-error-follow-mode-post-command-hook nil t)
+      (remove-hook 'post-command-hook
+                   #'next-error-follow-mode-post-command-hook t)
+    (add-hook 'post-command-hook #'next-error-follow-mode-post-command-hook
+              nil t)
     (make-local-variable 'next-error-follow-last-line)))
 
 ;; Used as a `post-command-hook' by `next-error-follow-mode'
@@ -1503,7 +1505,7 @@ END, without printing any message."
 	     words (if (= words 1) "" "s")
 	     chars (if (= chars 1) "" "s"))))
 
-(define-obsolete-function-alias 'count-lines-region 'count-words-region "24.1")
+(define-obsolete-function-alias 'count-lines-region #'count-words-region "24.1")
 
 (defun what-line ()
   "Print the current buffer line number and narrowed line number of point."
@@ -1693,13 +1695,13 @@ in *Help* buffer.  See also the command `describe-char'."
 ;; Initialize read-expression-map.  It is defined at C level.
 (defvar read-expression-map
   (let ((m (make-sparse-keymap)))
-    (define-key m "\M-\t" 'completion-at-point)
+    (define-key m "\M-\t" #'completion-at-point)
     ;; Might as well bind TAB to completion, since inserting a TAB char is
     ;; much too rarely useful.
-    (define-key m "\t" 'completion-at-point)
-    (define-key m "\r" 'read--expression-try-read)
-    (define-key m "\n" 'read--expression-try-read)
-    (define-key m "\M-g\M-c" 'read-expression-switch-to-completions)
+    (define-key m "\t" #'completion-at-point)
+    (define-key m "\r" #'read--expression-try-read)
+    (define-key m "\n" #'read--expression-try-read)
+    (define-key m "\M-g\M-c" #'read-expression-switch-to-completions)
     (set-keymap-parent m minibuffer-local-map)
     m))
 
@@ -1720,7 +1722,7 @@ is a string to insert in the minibuffer before reading.
 \(INITIAL-CONTENTS can also be a cons of a string and an integer.
 Such arguments are used as in `read-from-minibuffer'.)"
   ;; Used for interactive spec `X'.
-  (eval (read--expression prompt initial-contents)))
+  (eval (read--expression prompt initial-contents) lexical-binding))
 
 (defvar minibuffer-completing-symbol nil
   "Non-nil means completing a Lisp symbol in the minibuffer.")
@@ -1933,7 +1935,7 @@ the minibuffer, then read and evaluate the result."
                (pop command-history))))))
 
     (add-to-history 'command-history command)
-    (eval command)))
+    (eval command t)))
 
 (defun repeat-complex-command (arg)
   "Edit and re-evaluate last complex command, or ARGth from last.
@@ -2200,7 +2202,7 @@ Also see `suggest-key-bindings'."
       (let ((candidate (pop candidates)))
         (when (equal name
                        (car-safe (completion-try-completion
-                                  candidate obarray 'commandp len)))
+                                  candidate obarray #'commandp len)))
           (setq binding candidate))))
     binding))
 
@@ -2408,42 +2410,32 @@ The argument SPECIAL, if non-nil, means that this command is
 executing a special event, so ignore the prefix argument and
 don't clear it."
   (setq debug-on-next-call nil)
-  (let ((prefixarg (unless special
-                     ;; FIXME: This should probably be done around
-                     ;; pre-command-hook rather than here!
-                     (prog1 prefix-arg
-                       (setq current-prefix-arg prefix-arg)
-                       (setq prefix-arg nil)
-                       (when current-prefix-arg
-                         (prefix-command-update))))))
-    (if (and (symbolp cmd)
-             (get cmd 'disabled)
-             disabled-command-function)
-        ;; FIXME: Weird calling convention!
-        (run-hooks 'disabled-command-function)
-      (let ((final cmd))
-        (while
-            (progn
-              (setq final (indirect-function final))
-              (if (autoloadp final)
-                  (setq final (autoload-do-load final cmd)))))
-        (cond
-         ((arrayp final)
-          ;; If requested, place the macro in the command history.  For
-          ;; other sorts of commands, call-interactively takes care of this.
-          (when record-flag
-            (add-to-history
-             'command-history `(execute-kbd-macro ,final ,prefixarg) nil t))
-          (execute-kbd-macro final prefixarg))
-         (t
-          ;; Pass `cmd' rather than `final', for the backtrace's sake.
-          (prog1 (call-interactively cmd record-flag keys)
-            (when (and (symbolp cmd)
-                       (get cmd 'byte-obsolete-info)
-                       (not (get cmd 'command-execute-obsolete-warned)))
-              (put cmd 'command-execute-obsolete-warned t)
-              (message "%s" (macroexp--obsolete-warning
-                             cmd (get cmd 'byte-obsolete-info) "command"))))))))))
+  (unless special
+    ;; FIXME: This should probably be done around
+    ;; pre-command-hook rather than here!
+    (setq current-prefix-arg prefix-arg)
+    (setq prefix-arg nil)
+    (when current-prefix-arg
+      (prefix-command-update)))
+  (if (and (symbolp cmd)
+           (get cmd 'disabled)
+           disabled-command-function)
+      ;; FIXME: Weird calling convention!
+      (run-hooks 'disabled-command-function)
+    (let ((final cmd))
+      (while
+          (progn
+            (setq final (indirect-function final))
+            (if (autoloadp final)
+                (setq final (autoload-do-load final cmd)))))
+      ;; Pass `cmd' rather than `final', for the backtrace's sake.
+      (prog1 (call-interactively cmd record-flag keys)
+        (when (and (symbolp cmd)
+                   (get cmd 'byte-obsolete-info)
+                   (not (get cmd 'command-execute-obsolete-warned)))
+          (put cmd 'command-execute-obsolete-warned t)
+          (message "%s" (macroexp--obsolete-warning
+                         cmd (get cmd 'byte-obsolete-info) "command")))))))
 
 (defvar minibuffer-history nil
   "Default minibuffer history list.
@@ -2467,7 +2459,7 @@ recursive uses of the minibuffer.)")
 This is nil if there have not yet been any history commands
 in this use of the minibuffer.")
 
-(add-hook 'minibuffer-setup-hook 'minibuffer-history-initialize)
+(add-hook 'minibuffer-setup-hook #'minibuffer-history-initialize)
 
 (defun minibuffer-history-initialize ()
   (setq minibuffer-text-before-history nil))
@@ -2838,7 +2830,7 @@ Return 0 if current buffer is not a minibuffer."
   (1- (minibuffer-prompt-end)))
 
 ;; isearch minibuffer history
-(add-hook 'minibuffer-setup-hook 'minibuffer-history-isearch-setup)
+(add-hook 'minibuffer-setup-hook #'minibuffer-history-isearch-setup)
 
 (defvar minibuffer-history-isearch-message-overlay)
 (make-variable-buffer-local 'minibuffer-history-isearch-message-overlay)
@@ -2854,7 +2846,7 @@ Intended to be added to `minibuffer-setup-hook'."
               #'minibuffer-history-isearch-wrap)
   (setq-local isearch-push-state-function
               #'minibuffer-history-isearch-push-state)
-  (add-hook 'isearch-mode-end-hook 'minibuffer-history-isearch-end nil t))
+  (add-hook 'isearch-mode-end-hook #'minibuffer-history-isearch-end nil t))
 
 (defun minibuffer-history-isearch-end ()
   "Clean up the minibuffer after terminating isearch in the minibuffer."
@@ -2959,11 +2951,11 @@ Go to the history element by the absolute history position HIST-POS."
   (goto-history-element hist-pos))
 
 
-(add-hook 'minibuffer-setup-hook 'minibuffer-error-initialize)
+(add-hook 'minibuffer-setup-hook #'minibuffer-error-initialize)
 
 (defun minibuffer-error-initialize ()
   "Set up minibuffer error processing."
-  (setq-local command-error-function 'minibuffer-error-function))
+  (setq-local command-error-function #'minibuffer-error-function))
 
 (defun minibuffer-error-function (data context caller)
   "Display error messages in the active minibuffer.
@@ -2985,9 +2977,9 @@ the minibuffer contents."
 
 
 ;Put this on C-x u, so we can force that rather than C-_ into startup msg
-(define-obsolete-function-alias 'advertised-undo 'undo "23.2")
+(define-obsolete-function-alias 'advertised-undo #'undo "23.2")
 
-(defconst undo-equiv-table (make-hash-table :test 'eq :weakness t)
+(defconst undo-equiv-table (make-hash-table :test #'eq :weakness t)
   "Table mapping redo records to the corresponding undo one.
 A redo record for an undo in region maps to 'undo-in-region.
 A redo record for ordinary undo maps to the following (earlier) undo.
@@ -3342,7 +3334,7 @@ Return what remains of the list."
 ;; Deep copy of a list
 (defun undo-copy-list (list)
   "Make a copy of undo list LIST."
-  (mapcar 'undo-copy-list-1 list))
+  (mapcar #'undo-copy-list-1 list))
 
 (defun undo-copy-list-1 (elt)
   (if (consp elt)
@@ -3811,7 +3803,7 @@ This variable matters only if `undo-ask-before-discard' is non-nil.")
 ;; the undo info for the current command was discarded.  Garbage
 ;; collection is inhibited around the call, so it had better not do a
 ;; lot of consing.
-(setq undo-outer-limit-function 'undo-outer-limit-truncate)
+(setq undo-outer-limit-function #'undo-outer-limit-truncate)
 (defun undo-outer-limit-truncate (size)
   (if undo-ask-before-discard
       (when (or (null undo-extra-outer-limit)
@@ -3903,7 +3895,7 @@ to the end of the list of defaults just after the default value."
 (defvar minibuffer-local-shell-command-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map minibuffer-local-map)
-    (define-key map "\t" 'completion-at-point)
+    (define-key map "\t" #'completion-at-point)
     map)
   "Keymap used for completing shell commands in minibuffer.")
 
@@ -4673,7 +4665,7 @@ value passed."
           (setq stderr-file (when (and (consp buffer) (stringp (cadr buffer)))
                               (make-temp-file "emacs")))
           (prog1
-              (apply 'call-process program
+              (apply #'call-process program
                      (or lc infile)
                      (if stderr-file (list (car buffer) stderr-file) buffer)
                      display args)
@@ -4725,7 +4717,7 @@ by calling `file-local-name', in case they are remote file names.
 File name handlers might not support pty association, if PROGRAM is nil."
   (let ((fh (find-file-name-handler default-directory 'start-file-process)))
     (if fh (apply fh 'start-file-process name buffer program program-args)
-      (apply 'start-process name buffer program program-args))))
+      (apply #'start-process name buffer program program-args))))
 
 ;;;; Process menu
 
@@ -4740,7 +4732,7 @@ File name handlers might not support pty association, if PROGRAM is nil."
 
 (defvar process-menu-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [?d] 'process-menu-delete-process)
+    (define-key map [?d] #'process-menu-delete-process)
     map))
 
 (define-derived-mode process-menu-mode tabulated-list-mode "Process Menu"
@@ -4756,7 +4748,7 @@ File name handlers might not support pty association, if PROGRAM is nil."
 			       ("Command"  0 t)])
   (make-local-variable 'process-menu-query-only)
   (setq tabulated-list-sort-key (cons "Process" nil))
-  (add-hook 'tabulated-list-revert-hook 'list-processes--refresh nil t))
+  (add-hook 'tabulated-list-revert-hook #'list-processes--refresh nil t))
 
 (defun process-menu-delete-process ()
   "Kill process at point in a `list-processes' buffer."
@@ -4830,7 +4822,7 @@ Also, delete any process that is exited or signaled."
 				     (if speed
 					 (format " at %s b/s" speed)
 				       "")))))
-		     (mapconcat 'identity (process-command p) " "))))
+		     (mapconcat #'identity (process-command p) " "))))
 	     (push (list p (vector name pid status buf-label tty thread cmd))
 		   tabulated-list-entries)))))
   (tabulated-list-init-header))
@@ -4943,28 +4935,28 @@ Runs `prefix-command-preserve-state-hook'."
     (define-key map [switch-frame]
       (lambda (e) (interactive "e")
         (handle-switch-frame e) (universal-argument--mode)))
-    (define-key map [?\C-u] 'universal-argument-more)
+    (define-key map [?\C-u] #'universal-argument-more)
     (define-key map [?-] universal-argument-minus)
-    (define-key map [?0] 'digit-argument)
-    (define-key map [?1] 'digit-argument)
-    (define-key map [?2] 'digit-argument)
-    (define-key map [?3] 'digit-argument)
-    (define-key map [?4] 'digit-argument)
-    (define-key map [?5] 'digit-argument)
-    (define-key map [?6] 'digit-argument)
-    (define-key map [?7] 'digit-argument)
-    (define-key map [?8] 'digit-argument)
-    (define-key map [?9] 'digit-argument)
-    (define-key map [kp-0] 'digit-argument)
-    (define-key map [kp-1] 'digit-argument)
-    (define-key map [kp-2] 'digit-argument)
-    (define-key map [kp-3] 'digit-argument)
-    (define-key map [kp-4] 'digit-argument)
-    (define-key map [kp-5] 'digit-argument)
-    (define-key map [kp-6] 'digit-argument)
-    (define-key map [kp-7] 'digit-argument)
-    (define-key map [kp-8] 'digit-argument)
-    (define-key map [kp-9] 'digit-argument)
+    (define-key map [?0] #'digit-argument)
+    (define-key map [?1] #'digit-argument)
+    (define-key map [?2] #'digit-argument)
+    (define-key map [?3] #'digit-argument)
+    (define-key map [?4] #'digit-argument)
+    (define-key map [?5] #'digit-argument)
+    (define-key map [?6] #'digit-argument)
+    (define-key map [?7] #'digit-argument)
+    (define-key map [?8] #'digit-argument)
+    (define-key map [?9] #'digit-argument)
+    (define-key map [kp-0] #'digit-argument)
+    (define-key map [kp-1] #'digit-argument)
+    (define-key map [kp-2] #'digit-argument)
+    (define-key map [kp-3] #'digit-argument)
+    (define-key map [kp-4] #'digit-argument)
+    (define-key map [kp-5] #'digit-argument)
+    (define-key map [kp-6] #'digit-argument)
+    (define-key map [kp-7] #'digit-argument)
+    (define-key map [kp-8] #'digit-argument)
+    (define-key map [kp-9] #'digit-argument)
     (define-key map [kp-subtract] universal-argument-minus)
     map)
   "Keymap used while processing \\[universal-argument].")
@@ -7822,13 +7814,13 @@ the variable `line-move-visual'."
 
 (defvar visual-line-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [remap kill-line] 'kill-visual-line)
-    (define-key map [remap move-beginning-of-line] 'beginning-of-visual-line)
-    (define-key map [remap move-end-of-line]  'end-of-visual-line)
+    (define-key map [remap kill-line] #'kill-visual-line)
+    (define-key map [remap move-beginning-of-line] #'beginning-of-visual-line)
+    (define-key map [remap move-end-of-line]  #'end-of-visual-line)
     ;; These keybindings interfere with xterm function keys.  Are
     ;; there any other suitable bindings?
-    ;; (define-key map "\M-[" 'previous-logical-line)
-    ;; (define-key map "\M-]" 'next-logical-line)
+    ;; (define-key map "\M-[" #'previous-logical-line)
+    ;; (define-key map "\M-]" #'next-logical-line)
     map))
 
 (defcustom visual-line-fringe-indicators '(nil nil)
@@ -8154,7 +8146,7 @@ constitute a word."
 		 string)
   :group 'fill)
 (make-variable-buffer-local 'fill-prefix)
-(put 'fill-prefix 'safe-local-variable 'string-or-null-p)
+(put 'fill-prefix 'safe-local-variable #'string-or-null-p)
 
 (defcustom auto-fill-inhibit-regexp nil
   "Regexp to match lines that should not be auto-filled."
@@ -8248,7 +8240,7 @@ Returns t if it really did any work."
       (justify-current-line justify t t)
       t)))
 
-(defvar comment-line-break-function 'comment-indent-new-line
+(defvar comment-line-break-function #'comment-indent-new-line
   "Mode-specific function that line breaks and continues a comment.
 This function is called during auto-filling when a comment syntax
 is defined.
@@ -8296,15 +8288,15 @@ unless optional argument SOFT is non-nil."
             (nth 4 (syntax-ppss)))
     (funcall auto-fill-function)))
 
-(defvar normal-auto-fill-function 'do-auto-fill
+(defvar normal-auto-fill-function #'do-auto-fill
   "The function to use for `auto-fill-function' if Auto Fill mode is turned on.
 Some major modes set this.")
 
-(put 'auto-fill-function :minor-mode-function 'auto-fill-mode)
+(put 'auto-fill-function :minor-mode-function #'auto-fill-mode)
 ;; `functions' and `hooks' are usually unsafe to set, but setting
 ;; auto-fill-function to nil in a file-local setting is safe and
 ;; can be useful to prevent auto-filling.
-(put 'auto-fill-function 'safe-local-variable 'null)
+(put 'auto-fill-function 'safe-local-variable #'null)
 
 (define-minor-mode auto-fill-mode
   "Toggle automatic line breaking (Auto Fill mode).
@@ -8925,7 +8917,7 @@ You have the following Mail mode variable%s customized:
 \n  %s\n\nTo use Mail mode, set `mail-user-agent' to sendmail-user-agent.
 To disable this warning, set `compose-mail-user-agent-warnings' to nil."
 				    (if (> (length warn-vars) 1) "s" "")
-				    (mapconcat 'symbol-name
+				    (mapconcat #'symbol-name
 					       warn-vars " "))))))
 
   (let ((function (get mail-user-agent 'composefunc)))
@@ -9044,20 +9036,20 @@ makes it easier to edit it."
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
     (define-key map "g" nil) ;; There's nothing to revert from.
-    (define-key map [mouse-2] 'choose-completion)
+    (define-key map [mouse-2]  #'choose-completion)
     (define-key map [follow-link] 'mouse-face)
     (define-key map [down-mouse-2] nil)
-    (define-key map "\C-m" 'choose-completion)
-    (define-key map "\e\e\e" 'delete-completion-window)
+    (define-key map "\C-m"     #'choose-completion)
+    (define-key map "\e\e\e"   #'delete-completion-window)
     (define-key map [remap keyboard-quit] #'delete-completion-window)
-    (define-key map [left] 'previous-completion)
-    (define-key map [right] 'next-completion)
-    (define-key map [?\t] 'next-completion)
-    (define-key map [backtab] 'previous-completion)
-    (define-key map "z" 'kill-current-buffer)
-    (define-key map "n" 'next-completion)
-    (define-key map "p" 'previous-completion)
-    (define-key map "\M-g\M-c" 'switch-to-minibuffer)
+    (define-key map [left]     #'previous-completion)
+    (define-key map [right]    #'next-completion)
+    (define-key map [?\t]      #'next-completion)
+    (define-key map [backtab]  #'previous-completion)
+    (define-key map "z"        #'kill-current-buffer)
+    (define-key map "n"        #'next-completion)
+    (define-key map "p"        #'previous-completion)
+    (define-key map "\M-g\M-c" #'switch-to-minibuffer)
     map)
   "Local map for completion list buffers.")
 
@@ -9315,7 +9307,7 @@ Called from `temp-buffer-show-hook'."
   (when (eq major-mode 'completion-list-mode)
     (setq buffer-read-only t)))
 
-(add-hook 'temp-buffer-show-hook 'completion-list-mode-finish)
+(add-hook 'temp-buffer-show-hook #'completion-list-mode-finish)
 
 
 ;; Variables and faces used in `completion-setup-function'.
@@ -9463,12 +9455,12 @@ PREFIX is the string that represents this modifier in an event type symbol."
 	    event-type
 	  (cons event-type (cdr event)))))))
 
-(define-key function-key-map [?\C-x ?@ ?h] 'event-apply-hyper-modifier)
-(define-key function-key-map [?\C-x ?@ ?s] 'event-apply-super-modifier)
-(define-key function-key-map [?\C-x ?@ ?m] 'event-apply-meta-modifier)
-(define-key function-key-map [?\C-x ?@ ?a] 'event-apply-alt-modifier)
-(define-key function-key-map [?\C-x ?@ ?S] 'event-apply-shift-modifier)
-(define-key function-key-map [?\C-x ?@ ?c] 'event-apply-control-modifier)
+(define-key function-key-map [?\C-x ?@ ?h] #'event-apply-hyper-modifier)
+(define-key function-key-map [?\C-x ?@ ?s] #'event-apply-super-modifier)
+(define-key function-key-map [?\C-x ?@ ?m] #'event-apply-meta-modifier)
+(define-key function-key-map [?\C-x ?@ ?a] #'event-apply-alt-modifier)
+(define-key function-key-map [?\C-x ?@ ?S] #'event-apply-shift-modifier)
+(define-key function-key-map [?\C-x ?@ ?c] #'event-apply-control-modifier)
 
 ;;;; Keypad support.
 
@@ -9530,8 +9522,8 @@ Returns nil if PROCESS has already terminated."
 		  (setq args (plist-put args :buffer
 					(if (process-buffer process)
 					    (current-buffer))))
-		  (apply 'make-network-process args))
-	      (apply 'start-process newname
+		  (apply #'make-network-process args))
+	      (apply #'start-process newname
 		     (if (process-buffer process) (current-buffer))
 		     (process-command process)))))
       (set-process-query-on-exit-flag
@@ -9923,7 +9915,7 @@ warning using STRING as the message.")
         (and list
              (boundp symbol)
              (or (eq symbol t)
-                 (and (stringp (setq symbol (eval symbol)))
+                 (and (stringp (setq symbol (symbol-value symbol)))
                       (string-match-p (nth 2 list) symbol)))
              (display-warning package (nth 3 list) :warning)))
     (error nil)))

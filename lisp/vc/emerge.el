@@ -2551,7 +2551,7 @@ Override any change that the mode might make to the mode line or
 local keymap.  Leave merge in fast mode."
   (interactive
    (list (intern (completing-read "New major mode for merge buffer: "
-				  obarray 'commandp t nil))))
+				  obarray #'commandp t nil))))
   (funcall mode)
   (emerge-refresh-mode-line)
   (if emerge-fast-mode

@@ -787,7 +787,7 @@ See Bug#21722."
   (let ((history-length 1)
         (command-history ()))
     (dotimes (_ (1+ history-length))
-      (command-execute "" t))
+      (command-execute (kmacro "") t))
     (should (= (length command-history) history-length))))
 
 

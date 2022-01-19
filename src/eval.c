@@ -2159,15 +2159,10 @@ This means it contains a description for how to read arguments to give it.
 The value is nil for an invalid function or a symbol with no function
 definition.
 
-Interactively callable functions include strings and vectors (treated
-as keyboard macros), lambda-expressions that contain a top-level call
-to `interactive', autoload definitions made by `autoload' with non-nil
-fourth argument, and some of the built-in functions of Lisp.
+Interactively callable functions include lambda-expressions that contain a top-level call to `interactive', autoload definitions made by `autoload' with
+non-nil fourth argument, and some of the built-in functions of Lisp.
 
-Also, a symbol satisfies `commandp' if its function definition does so.
-
-If the optional argument FOR-CALL-INTERACTIVELY is non-nil,
-then strings and vectors are not accepted.  */)
+Also, a symbol satisfies `commandp' if its function definition does so.  */)
   (Lisp_Object function, Lisp_Object for_call_interactively)
 {
   register Lisp_Object fun;
@@ -2206,10 +2201,6 @@ then strings and vectors are not accepted.  */)
         return Qt;
     }
 #endif
-
-  /* Strings and vectors are keyboard macros.  */
-  else if (STRINGP (fun) || VECTORP (fun))
-    return (NILP (for_call_interactively) ? Qt : Qnil);
 
   /* Lists may represent commands.  */
   else if (!CONSP (fun))

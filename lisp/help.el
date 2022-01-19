@@ -621,7 +621,7 @@ If INSERT (the prefix arg) is non-nil, insert the message in the buffer."
 	 (enable-recursive-minibuffers t)
 	 val)
      (setq val (completing-read (format-prompt "Where is command" fn)
-		                obarray 'commandp t nil nil
+		                obarray #'commandp t nil nil
 		                (and fn (symbol-name fn))))
      (list (unless (equal val "") (intern val))
 	   current-prefix-arg)))

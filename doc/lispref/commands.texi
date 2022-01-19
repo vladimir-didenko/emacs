@@ -46,7 +46,7 @@ input with @code{discard-input} (@pxref{Event Input Misc}).
 
   The key sequence is translated into a command through the currently
 active keymaps.  @xref{Key Lookup}, for information on how this is done.
-The result should be a keyboard macro or an interactively callable
+The result should be an interactively callable
 function.  If the key is @kbd{M-x}, then it reads the name of another
 command, which it then calls.  This is done by the command
 @code{execute-extended-command} (@pxref{Interactive Call}).
@@ -65,10 +65,6 @@ using the minibuffer.  The function body of @code{find-file} does not
 use the minibuffer, so if you call @code{find-file} as a function from
 Lisp code, you must supply the file name string as an ordinary Lisp
 function argument.
-
-  If the command is a keyboard macro (i.e., a string or vector),
-Emacs executes it using @code{execute-kbd-macro} (@pxref{Keyboard
-Macros}).
 
 @defvar pre-command-hook
 This normal hook is run by the editor command loop before it executes
@@ -721,16 +717,15 @@ the command is a function, @code{command-execute} calls
 command.  You can also call these functions yourself.
 
   Note that the term ``command'', in this context, refers to an
-interactively callable function (or function-like object), or a
-keyboard macro.  It does not refer to the key sequence used to invoke
+interactively callable function (or function-like object).
+It does not refer to the key sequence used to invoke
 a command (@pxref{Keymaps}).
 
 @defun commandp object &optional for-call-interactively
 This function returns @code{t} if @var{object} is a command.
 Otherwise, it returns @code{nil}.
 
-Commands include strings and vectors (which are treated as keyboard
-macros), lambda expressions that contain a top-level
+Commands include lambda expressions that contain a top-level
 @code{interactive} form (@pxref{Using Interactive}), byte-code
 function objects made from such lambda expressions, autoload objects
 that are declared as interactive (non-@code{nil} fourth argument to
@@ -739,9 +734,8 @@ considered a command if it has a non-@code{nil}
 @code{interactive-form} property, or if its function definition
 satisfies @code{commandp}.
 
-If @var{for-call-interactively} is non-@code{nil}, then
-@code{commandp} returns @code{t} only for objects that
-@code{call-interactively} could call---thus, not for keyboard macros.
+@var{for-call-interactively} is an obsolete argument which is not used
+any more.
 
 See @code{documentation} in @ref{Accessing Documentation}, for a
 realistic example of using @code{commandp}.
@@ -770,9 +764,7 @@ will call @code{foo} with the region (@code{point} and @code{mark}) as
 the arguments.
 
 An error is signaled if @var{command} is not a function or if it
-cannot be called interactively (i.e., is not a command).  Note that
-keyboard macros (strings and vectors) are not accepted, even though
-they are considered commands, because they are not functions.  If
+cannot be called interactively (i.e., is not a command).  If
 @var{command} is a symbol, then @code{call-interactively} uses its
 function definition.
 
@@ -801,7 +793,7 @@ signaling an error.
 @cindex keyboard macro execution
 This function executes @var{command}.  The argument @var{command} must
 satisfy the @code{commandp} predicate; i.e., it must be an interactively
-callable function or a keyboard macro.
+callable function.
 
 A string or vector as @var{command} is executed with
 @code{execute-kbd-macro}.  A function is passed to
@@ -2980,7 +2972,7 @@ displays its return value in the echo area.
 @group
 ;; @r{We assume here you use @kbd{M-:} to evaluate this.}
 (symbol-function 'foo)
-     @result{} "^[:(read-char)^M1"
+     @result{} #f(kmacro "M-: ( r e a d - c h a r ) RET 1")
 @end group
 @group
 (execute-kbd-macro 'foo)
@@ -3978,8 +3970,9 @@ minibuffer, the usual minibuffer history commands are available.
 @section Keyboard Macros
 @cindex keyboard macros
 
-  A @dfn{keyboard macro} is a canned sequence of input events that can
-be considered a command and made the definition of a key.  The Lisp
+  A @dfn{keyboard macro} is a canned sequence of input events.  It can
+be converted into a command (with the #code{kmacro} function) and made
+the definition of a key.  The Lisp
 representation of a keyboard macro is a string or vector containing the
 events.  Don't confuse keyboard macros with Lisp macros
 (@pxref{Macros}).
@@ -4006,6 +3999,14 @@ without arguments, prior to each iteration of the macro.  If
 @var{loopfunc} returns @code{nil}, then this stops execution of the macro.
 
 @xref{Reading One Event}, for an example of using @code{execute-kbd-macro}.
+@end defun
+
+@defun kmacro keys &optional counter format
+This function takes a vector @var{keys} of events (or a string
+satisfying @code{key-valid-p}) and returns a command that will execute
+them in sequence when called.  The optional variables @var{counter}
+and @var{format} default respectively to @code{0} and @code{"%d"} and
+are used by @code{kmacro-insert-counter} to insert numbers in sequence.
 @end defun
 
 @defvar executing-kbd-macro

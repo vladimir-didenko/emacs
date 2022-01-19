@@ -82,7 +82,10 @@ use this command, and then save the file."
 	  (setq macroname 'last-kbd-macro definition last-kbd-macro)
 	  (insert "(setq "))
       (setq definition (symbol-function macroname))
-      (insert "(fset '"))
+      ;; Prefer `defalias' over `fset' since it additionally keeps
+      ;; track of the file where the users added it, and it interacts
+      ;; better with `advice-add' (and hence things like ELP).
+      (insert "(defalias '"))
     (prin1 macroname (current-buffer))
     (insert "\n   ")
     (when (stringp definition)

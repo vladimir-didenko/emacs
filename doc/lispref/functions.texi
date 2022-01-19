@@ -116,8 +116,8 @@ into a command by an @code{interactive} form in the function
 definition (@pxref{Defining Commands}).  Commands that are functions
 can also be called from Lisp expressions, just like other functions.
 
-Keyboard macros (strings and vectors) are commands also, even though
-they are not functions.  @xref{Keyboard Macros}.  We say that a symbol
+Keyboard macros are commands also.  @xref{Keyboard Macros}.
+We say that a symbol
 is a command if its function cell contains a command (@pxref{Symbol
 Components}); such a @dfn{named command} can be invoked with
 @kbd{M-x}.
@@ -1442,11 +1442,11 @@ argument.
 The primary use of this function is as a subroutine by constructs that define
 or alter functions, like @code{defun} or @code{advice-add} (@pxref{Advising
 Functions}).  You can also use it to give a symbol a function definition that
-is not a function, e.g., a keyboard macro (@pxref{Keyboard Macros}):
+is a keyboard macro (@pxref{Keyboard Macros}):
 
 @example
 ;; @r{Define a named keyboard macro.}
-(fset 'kill-two-lines "\^u2\^k")
+(fset 'kill-two-lines (kmacro "C-u 2 C-k"))
      @result{} "\^u2\^k"
 @end example
 

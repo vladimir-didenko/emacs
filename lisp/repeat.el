@@ -242,7 +242,7 @@ recently executed command not bound to an input event\"."
     (if (eq last-repeatable-command (caar command-history))
         (let ((repeat-command (car command-history)))
           (repeat-message "Repeating %S" repeat-command)
-          (eval repeat-command))
+          (eval repeat-command t))
       (if (null repeat-arg)
           (repeat-message "Repeating command %S" last-repeatable-command)
         (setq current-prefix-arg repeat-arg)
@@ -265,14 +265,7 @@ recently executed command not bound to an input event\"."
         ;;                     "inserted before auto-fill"
         ;;                     "clobbered it, sorry")))))
         (setq last-command-event (char-before)))
-      (let ((indirect (indirect-function last-repeatable-command)))
-        (if (or (stringp indirect)
-                (vectorp indirect))
-            ;; Bind last-repeatable-command so that executing the macro does
-            ;; not alter it.
-            (let ((last-repeatable-command last-repeatable-command))
-              (execute-kbd-macro last-repeatable-command))
-          (call-interactively last-repeatable-command))))
+      (call-interactively last-repeatable-command))
     (when repeat-repeat-char
       (set-transient-map
        (let ((map (make-sparse-keymap)))
@@ -294,7 +287,7 @@ recently executed command not bound to an input event\"."
 
 (defun repeat-message (format &rest args)
   "Like `message' but displays with `repeat-message-function' if non-nil."
-  (let ((message (apply 'format format args)))
+  (let ((message (apply #'format format args)))
     (if repeat-message-function
         (funcall repeat-message-function message)
       (message "%s" message))))
@@ -410,8 +403,8 @@ When Repeat mode is enabled, and the command symbol has the property named
 See `describe-repeat-maps' for a list of all repeatable commands."
   :global t :group 'convenience
   (if (not repeat-mode)
-      (remove-hook 'post-command-hook 'repeat-post-hook)
-    (add-hook 'post-command-hook 'repeat-post-hook)
+      (remove-hook 'post-command-hook #'repeat-post-hook)
+    (add-hook 'post-command-hook #'repeat-post-hook)
     (let* ((keymaps nil)
            (commands (all-completions
                       "" obarray (lambda (s)
@@ -466,7 +459,7 @@ See `describe-repeat-maps' for a list of all repeatable commands."
 
               ;; Adding an exit key
               (when repeat-exit-key
-                (define-key map repeat-exit-key 'ignore))
+                (define-key map repeat-exit-key #'ignore))
 
               (when (and repeat-keep-prefix (not prefix-arg))
                 (setq prefix-arg current-prefix-arg))
@@ -562,7 +555,7 @@ Used in `repeat-mode'."
           (dolist (keymap (sort keymaps (lambda (a b) (string-lessp (car a) (car b)))))
             (princ (format-message "`%s' keymap is repeatable by these commands:\n"
                                    (car keymap)))
-            (dolist (command (sort (cdr keymap) 'string-lessp))
+            (dolist (command (sort (cdr keymap) #'string-lessp))
               (let* ((info (help-fns--analyze-function command))
                      (map (list (symbol-value (car keymap))))
                      (desc (mapconcat (lambda (key)
