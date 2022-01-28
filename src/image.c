@@ -82,7 +82,9 @@ typedef struct x_bitmap_record Bitmap_Record;
 
 #if defined(USE_CAIRO) || defined(HAVE_NS)
 #define RGB_TO_ULONG(r, g, b) (((r) << 16) | ((g) << 8) | (b))
+#ifndef HAVE_NS
 #define ARGB_TO_ULONG(a, r, g, b) (((a) << 24) | ((r) << 16) | ((g) << 8) | (b))
+#endif
 #define RED_FROM_ULONG(color)	(((color) >> 16) & 0xff)
 #define GREEN_FROM_ULONG(color)	(((color) >> 8) & 0xff)
 #define BLUE_FROM_ULONG(color)	((color) & 0xff)
@@ -1175,7 +1177,7 @@ parse_image_spec (Lisp_Object spec, struct image_keyword *keywords,
 	return false;
 
     maybe_done:
-      if (EQ (XCDR (plist), Qnil))
+      if (NILP (XCDR (plist)))
 	{
 	  /* Check that all mandatory fields are present.  */
 	  for (i = 0; i < nkeywords; ++i)
@@ -2904,9 +2906,8 @@ x_create_xrender_picture (struct frame *f, Emacs_Pixmap pixmap, int depth)
 {
   Picture p;
   Display *display = FRAME_X_DISPLAY (f);
-  int event_basep, error_basep;
 
-  if (XRenderQueryExtension (display, &event_basep, &error_basep))
+  if (FRAME_DISPLAY_INFO (f)->xrender_supported_p)
     {
       if (depth <= 0)
 	depth = DefaultDepthOfScreen (FRAME_X_SCREEN (f));
@@ -10671,11 +10672,16 @@ svg_load_image (struct frame *f, struct image *img, char *contents,
   viewbox_height = dimension_data.height;
 #endif
 
+#ifdef HAVE_NATIVE_TRANSFORMS
   compute_image_size (viewbox_width, viewbox_height, img,
                       &width, &height);
 
   width = scale_image_size (width, 1, FRAME_SCALE_FACTOR (f));
   height = scale_image_size (height, 1, FRAME_SCALE_FACTOR (f));
+#else
+  width = viewbox_width;
+  height = viewbox_height;
+#endif
 
   if (! check_image_size (f, width, height))
     {
@@ -11194,10 +11200,7 @@ The list of capabilities can include one or more of the following:
   || defined (HAVE_HAIKU)
       return list2 (Qscale, Qrotate90);
 # elif defined (HAVE_X_WINDOWS) && defined (HAVE_XRENDER)
-      int event_basep, error_basep;
-
-      if (XRenderQueryExtension (FRAME_X_DISPLAY (f),
-				 &event_basep, &error_basep))
+      if (FRAME_DISPLAY_INFO (f)->xrender_supported_p)
 	return list2 (Qscale, Qrotate90);
 # elif defined (HAVE_NTGUI)
       return (w32_image_rotations_p ()
@@ -11455,7 +11458,8 @@ non-numeric, there is no explicit limit on the size of images.  */);
   add_image_type (Qpng);
 #endif
 
-#if defined (HAVE_WEBP)
+#if defined (HAVE_WEBP) || (defined (HAVE_NATIVE_IMAGE_API) \
+			    && defined (HAVE_HAIKU))
   DEFSYM (Qwebp, "webp");
   add_image_type (Qwebp);
 #endif

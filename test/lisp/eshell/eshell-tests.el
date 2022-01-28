@@ -29,45 +29,16 @@
 (require 'ert-x)
 (require 'esh-mode)
 (require 'eshell)
-
-(defmacro with-temp-eshell (&rest body)
-  "Evaluate BODY in a temporary Eshell buffer."
-  `(ert-with-temp-directory eshell-directory-name
-     (let* (;; We want no history file, so prevent Eshell from falling
-            ;; back on $HISTFILE.
-            (process-environment (cons "HISTFILE" process-environment))
-            (eshell-history-file-name nil)
-            (eshell-buffer (eshell t)))
-       (unwind-protect
-           (with-current-buffer eshell-buffer
-             ,@body)
-         (let (kill-buffer-query-functions)
-           (kill-buffer eshell-buffer))))))
-
-(defun eshell-insert-command (text &optional func)
-  "Insert a command at the end of the buffer."
-  (goto-char eshell-last-output-end)
-  (insert-and-inherit text)
-  (funcall (or func 'eshell-send-input)))
-
-(defun eshell-match-result (regexp)
-  "Check that text after `eshell-last-input-end' matches REGEXP."
-  (goto-char eshell-last-input-end)
-  (should (string-match-p regexp (buffer-substring-no-properties
-                                  (point) (point-max)))))
-
-(defun eshell-command-result-p (text regexp &optional func)
-  "Insert a command at the end of the buffer."
-  (eshell-insert-command text func)
-  (eshell-match-result regexp))
+(eval-and-compile
+  (load (expand-file-name "eshell-tests-helpers"
+                          (file-name-directory (or load-file-name
+                                                   default-directory)))))
 
 (defvar eshell-history-file-name)
-
-(defun eshell-test-command-result (command)
-  "Like `eshell-command-result', but not using HOME."
-  (ert-with-temp-directory eshell-directory-name
-    (let ((eshell-history-file-name nil))
-      (eshell-command-result command))))
+(defvar eshell-test--max-subprocess-time)
+(declare-function eshell-insert-command "eshell-tests-helpers")
+(declare-function eshell-match-result "eshell-tests-helpers")
+(declare-function eshell-command-result-p "eshell-tests-helpers")
 
 ;;; Tests:
 
@@ -143,6 +114,20 @@ e.g. \"{(+ 1 2)} 3\" => 3"
 (ert-deftest eshell-test/interp-concat-lisp2 ()
   "Interpolate and concat two Lisp forms"
   (should (equal (eshell-test-command-result "+ $(+ 1 2)$(+ 1 2) 3") 36)))
+
+(ert-deftest eshell-test/interp-cmd-external ()
+  "Interpolate command result from external command"
+  (skip-unless (executable-find "echo"))
+  (with-temp-eshell
+   (eshell-command-result-p "echo ${*echo hi}"
+                            "hi\n")))
+
+(ert-deftest eshell-test/interp-cmd-external-concat ()
+  "Interpolate command result from external command with concatenation"
+  (skip-unless (executable-find "echo"))
+  (with-temp-eshell
+   (eshell-command-result-p "echo ${echo hi}-${*echo there}"
+                            "hi-there\n")))
 
 (ert-deftest eshell-test/window-height ()
   "$LINES should equal (window-height)"
@@ -247,9 +232,8 @@ chars"
   (with-temp-eshell
    (eshell-insert-command "echo alpha")
    (eshell-kill-output)
-   (eshell-match-result (regexp-quote "*** output flushed ***\n"))
-   (should (forward-line))
-   (should (= (point) eshell-last-output-start))))
+   (eshell-match-result
+    (concat "^" (regexp-quote "*** output flushed ***\n") "$"))))
 
 (ert-deftest eshell-test/run-old-command ()
   "Re-run an old command"

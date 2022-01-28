@@ -39,7 +39,7 @@
 ;; first time you access a crypted remote directory.  It is kept in
 ;; your user directory "~/.emacs.d/" with the url-encoded directory
 ;; name as part of the basename, and ".encfs6.xml" as suffix.  Do not
-;; loose this file and the corresponding password; otherwise there is
+;; lose this file and the corresponding password; otherwise there is
 ;; no way to decrypt your crypted files.
 
 ;; If the user option `tramp-crypt-save-encfs-config-remote' is
@@ -208,7 +208,7 @@ If NAME doesn't belong to a crypted remote directory, retun nil."
     (find-backup-file-name . tramp-handle-find-backup-file-name)
     ;; `get-file-buffer' performed by default handler.
     (insert-directory . tramp-crypt-handle-insert-directory)
-    ;; `insert-file-contents' performed by default handler.
+    (insert-file-contents . tramp-handle-insert-file-contents)
     (load . tramp-handle-load)
     (lock-file . tramp-crypt-handle-lock-file)
     (make-auto-save-file-name . tramp-handle-make-auto-save-file-name)

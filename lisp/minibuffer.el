@@ -1004,7 +1004,9 @@ an association list that can specify properties such as:
 - `styles': the list of `completion-styles' to use for that category.
 - `cycle': the `completion-cycle-threshold' to use for that category.
 Categories are symbols such as `buffer' and `file', used when
-completing buffer and file names, respectively.")
+completing buffer and file names, respectively.
+
+Also see `completion-category-overrides'.")
 
 (defcustom completion-category-overrides nil
   "List of category-specific user overrides for completion styles.
@@ -1014,7 +1016,9 @@ an association list that can specify properties such as:
 - `cycle': the `completion-cycle-threshold' to use for that category.
 Categories are symbols such as `buffer' and `file', used when
 completing buffer and file names, respectively.
-This overrides the defaults specified in `completion-category-defaults'."
+
+If a property in a category is specified by this variable, it
+overrides the default specified in `completion-category-defaults'."
   :version "25.1"
   :type `(alist :key-type (choice :tag "Category"
 				  (const buffer)
@@ -1168,6 +1172,18 @@ If an integer, cycling is used so long as there are not more
 completion candidates than this number."
   :version "24.1"
   :type completion--cycling-threshold-type)
+
+(defcustom completions-sort 'alphabetical
+  "Sort candidates in the *Completions* buffer.
+
+The value can be nil to disable sorting, `alphabetical' for
+alphabetical sorting or a custom sorting function.  The sorting
+function takes and returns a list of completion candidate
+strings."
+  :type '(choice (const :tag "No sorting" nil)
+                 (const :tag "Alphabetical sorting" alphabetical)
+                 (function :tag "Custom function"))
+  :version "29.1")
 
 (defcustom completions-group nil
   "Enable grouping of completion candidates in the *Completions* buffer.
@@ -2264,7 +2280,10 @@ variables.")
                       ;; same, but not always.
                       (setq completions (if sort-fun
                                             (funcall sort-fun completions)
-                                          (sort completions 'string-lessp)))
+                                          (pcase completions-sort
+                                            ('nil completions)
+                                            ('alphabetical (sort completions #'string-lessp))
+                                            (_ (funcall completions-sort completions)))))
 
                       ;; After sorting, group the candidates using the
                       ;; `group-function'.
@@ -3047,7 +3066,10 @@ Fourth arg MUSTMATCH can take the following values:
 - anything else behaves like t except that typing RET does not exit if it
   does non-null completion.
 
-Fifth arg INITIAL specifies text to start with.
+Fifth arg INITIAL specifies text to start with.  It will be
+interpreted as the trailing part of DEFAULT-FILENAME, so using a
+full file name for INITIAL will usually lead to surprising
+results.
 
 Sixth arg PREDICATE, if non-nil, should be a function of one
 argument; then a file name is considered an acceptable completion

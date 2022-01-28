@@ -54,6 +54,10 @@ typedef Widget xt_or_gtk_widget;
 #define GTK_CHECK_VERSION(i, j, k) false
 #endif
 
+#ifdef HAVE_XRENDER
+#include <X11/extensions/Xrender.h>
+#endif
+
 #ifdef USE_GTK
 /* Some definitions to reduce conditionals.  */
 typedef GtkWidget *xt_or_gtk_widget;
@@ -77,6 +81,9 @@ typedef GtkWidget *xt_or_gtk_widget;
 #endif
 #ifdef CAIRO_HAS_SVG_SURFACE
 #include <cairo-svg.h>
+#endif
+#ifdef USE_CAIRO_XCB
+#include <cairo-xcb.h>
 #endif
 #endif
 
@@ -145,7 +152,7 @@ struct x_bitmap_record
   int height, width, depth;
 };
 
-#ifdef USE_CAIRO
+#if defined USE_CAIRO || defined HAVE_XRENDER
 struct x_gc_ext_data
 {
 #define MAX_CLIP_RECTS 2
@@ -155,7 +162,9 @@ struct x_gc_ext_data
   /* Clipping rectangles.  */
   XRectangle clip_rects[MAX_CLIP_RECTS];
 };
+#endif
 
+#ifdef USE_CAIRO
 extern cairo_pattern_t *x_bitmap_stipple (struct frame *, Pixmap);
 #endif
 
@@ -235,6 +244,11 @@ struct x_display_info
 
   /* The Visual being used for this display.  */
   Visual *visual;
+
+#ifdef HAVE_XRENDER
+  /* The picture format for this display.  */
+  XRenderPictFormat *pict_format;
+#endif
 
   /* The colormap being used.  */
   Colormap cmap;
@@ -434,6 +448,7 @@ struct x_display_info
   XIM xim;
   XIMStyles *xim_styles;
   struct xim_inst_t *xim_callback_data;
+  XIMStyle preferred_xim_style;
 #endif
 
   /* A cache mapping color names to RGB values.  */
@@ -495,17 +510,23 @@ struct x_display_info
   /* SM */
   Atom Xatom_SM_CLIENT_ID;
 
+#ifdef HAVE_XKB
+  /* Virtual modifiers */
+  Atom Xatom_Meta, Xatom_Super, Xatom_Hyper, Xatom_ShiftLock, Xatom_Alt;
+#endif
+
 #ifdef HAVE_XRANDR
   int xrandr_major_version;
   int xrandr_minor_version;
 #endif
 
-#ifdef USE_CAIRO
+#if defined USE_CAIRO || defined HAVE_XRENDER
   XExtCodes *ext_codes;
 #endif
 
 #ifdef USE_XCB
   xcb_connection_t *xcb_connection;
+  xcb_visualtype_t *xcb_visual;
 #endif
 
 #ifdef HAVE_XDBE
@@ -525,6 +546,22 @@ struct x_display_info
   bool supports_xkb;
   int xkb_event_type;
   XkbDescPtr xkb_desc;
+#endif
+
+#ifdef USE_GTK
+  bool prefer_native_input;
+#endif
+
+#ifdef HAVE_XRENDER
+  bool xrender_supported_p;
+  int xrender_major;
+  int xrender_minor;
+#endif
+
+#ifdef HAVE_XFIXES
+  bool xfixes_supported_p;
+  int xfixes_major;
+  int xfixes_minor;
 #endif
 };
 
@@ -590,6 +627,13 @@ struct x_output
      window's back buffer.  */
   Drawable draw_desc;
 
+#ifdef HAVE_XRENDER
+  /* The Xrender picture that corresponds to this drawable.  None
+     means no picture format was found, or the Xrender extension is
+     not present.  */
+  Picture picture;
+#endif
+
   /* Flag that indicates whether we've modified the back buffer and
      need to publish our modifications to the front buffer at a
      convenient time.  */
@@ -642,6 +686,8 @@ struct x_output
   GtkTooltip *ttip_widget;
   GtkWidget *ttip_lbl;
   GtkWindow *ttip_window;
+
+  GtkIMContext *im_context;
 #endif /* USE_GTK */
 
   /* If >=0, a bitmap index.  The indicated bitmap is used for the
@@ -788,6 +834,13 @@ struct x_output
      They are used when creating the cairo surface next time.  */
   int cr_surface_desired_width, cr_surface_desired_height;
 #endif
+
+#ifdef HAVE_X_I18N
+  ptrdiff_t preedit_size;
+  char *preedit_chars;
+  bool preedit_active;
+  int preedit_caret;
+#endif
 };
 
 enum
@@ -897,6 +950,17 @@ extern void x_mark_frame_dirty (struct frame *f);
 
 /* This is the Visual which frame F is on.  */
 #define FRAME_X_VISUAL(f) FRAME_DISPLAY_INFO (f)->visual
+
+#ifdef HAVE_XRENDER
+#define FRAME_X_PICTURE_FORMAT(f) FRAME_DISPLAY_INFO (f)->pict_format
+#define FRAME_X_PICTURE(f) ((f)->output_data.x->picture)
+#define FRAME_CHECK_XR_VERSION(f, major, minor)			\
+  (FRAME_DISPLAY_INFO (f)->xrender_supported_p			\
+   && ((FRAME_DISPLAY_INFO (f)->xrender_major == (major)	\
+	&& FRAME_DISPLAY_INFO (f)->xrender_minor >= (minor))	\
+       || (FRAME_DISPLAY_INFO (f)->xrender_major > (major))))
+#endif
+
 
 /* This is the Colormap which frame F uses.  */
 #define FRAME_X_COLORMAP(f) FRAME_DISPLAY_INFO (f)->cmap
@@ -1177,6 +1241,11 @@ extern void x_cr_draw_frame (cairo_t *, struct frame *);
 extern Lisp_Object x_cr_export_frames (Lisp_Object, cairo_surface_type_t);
 #endif
 
+#ifdef HAVE_XRENDER
+extern void x_xrender_color_from_gc_foreground (struct frame *, GC, XRenderColor *);
+extern void x_xrender_color_from_gc_background (struct frame *, GC, XRenderColor *);
+#endif
+
 INLINE int
 x_display_pixel_height (struct x_display_info *dpyinfo)
 {
@@ -1325,6 +1394,17 @@ extern bool x_session_have_connection (void);
 extern void x_session_close (void);
 #endif
 
+#ifdef HAVE_X_I18N
+#define STYLE_OFFTHESPOT (XIMPreeditArea | XIMStatusArea)
+#define STYLE_OVERTHESPOT (XIMPreeditPosition | XIMStatusNothing)
+#define STYLE_ROOT (XIMPreeditNothing | XIMStatusNothing)
+#define STYLE_CALLBACK (XIMPreeditCallbacks | XIMStatusNothing)
+#define STYLE_NONE (XIMPreeditNothing | XIMStatusNothing)
+#endif
+
+#ifdef USE_GTK
+extern struct input_event xg_pending_quit_event;
+#endif
 
 /* Is the frame embedded into another application? */
 

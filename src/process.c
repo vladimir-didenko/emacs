@@ -4644,7 +4644,7 @@ error displays the error message.  */)
   struct addrinfo hints;
 
   memset (&hints, 0, sizeof hints);
-  if (EQ (family, Qnil))
+  if (NILP (family))
     hints.ai_family = AF_UNSPEC;
   else if (EQ (family, Qipv4))
     hints.ai_family = AF_INET;
@@ -6934,7 +6934,8 @@ the order of the list, until one of them returns non-nil.  */)
 		process, current_group);
 }
 
-DEFUN ("kill-process", Fkill_process, Skill_process, 0, 2, 0,
+DEFUN ("kill-process", Fkill_process, Skill_process, 0, 2,
+       "(list (read-process-name \"Kill process\"))",
        doc: /* Kill process PROCESS.  May be process or name of one.
 See function `interrupt-process' for more details on usage.  */)
   (Lisp_Object process, Lisp_Object current_group)

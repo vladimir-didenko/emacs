@@ -36,6 +36,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include <interface/MenuBar.h>
 #include <interface/Alert.h>
 #include <interface/Button.h>
+#include <interface/ControlLook.h>
 
 #include <locale/UnicodeChar.h>
 
@@ -62,6 +63,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include <kernel/scheduler.h>
 
 #include <private/interface/ToolTip.h>
+#include <private/interface/WindowPrivate.h>
 
 #include <cmath>
 #include <cstring>
@@ -135,6 +137,87 @@ gui_abort (const char *msg)
   emacs_abort ();
 }
 
+/* Convert a raw character RAW produced by the keycode KEY into a key
+   symbol and place it in KEYSYM.
+
+   If RAW cannot be converted into a keysym, value is 0.  If RAW can
+   be converted into a keysym, but it should be ignored, value is -1.
+
+   Any other value means success, and that the keysym should be used
+   instead of mapping the keycode into a character.  */
+
+static int
+keysym_from_raw_char (int32 raw, int32 key, unsigned *code)
+{
+  switch (raw)
+    {
+    case B_BACKSPACE:
+      *code = XK_BackSpace;
+      break;
+    case B_RETURN:
+      *code = XK_Return;
+      break;
+    case B_TAB:
+      *code = XK_Tab;
+      break;
+    case B_ESCAPE:
+      *code = XK_Escape;
+      break;
+    case B_LEFT_ARROW:
+      *code = XK_Left;
+      break;
+    case B_RIGHT_ARROW:
+      *code = XK_Right;
+      break;
+    case B_UP_ARROW:
+      *code = XK_Up;
+      break;
+    case B_DOWN_ARROW:
+      *code = XK_Down;
+      break;
+    case B_INSERT:
+      *code = XK_Insert;
+      break;
+    case B_DELETE:
+      *code = XK_Delete;
+      break;
+    case B_HOME:
+      *code = XK_Home;
+      break;
+    case B_END:
+      *code = XK_End;
+      break;
+    case B_PAGE_UP:
+      *code = XK_Page_Up;
+      break;
+    case B_PAGE_DOWN:
+      *code = XK_Page_Down;
+      break;
+
+    case B_FUNCTION_KEY:
+      *code = XK_F1 + key - 2;
+
+      if (*code - XK_F1 == 12)
+	*code = XK_Print;
+      else if (*code - XK_F1 == 13)
+	/* Okay, Scroll Lock is a bit too much: keyboard.c doesn't
+	   know about it yet, and it shouldn't, since that's a
+	   modifier key.
+
+	   *code = XK_Scroll_Lock; */
+	return -1;
+      else if (*code - XK_F1 == 14)
+	*code = XK_Pause;
+
+      break;
+
+    default:
+      return 0;
+    }
+
+  return 1;
+}
+
 static void
 map_key (char *chars, int32 offset, uint32_t *c)
 {
@@ -178,6 +261,40 @@ map_shift (uint32_t kc, uint32_t *ch)
 }
 
 static void
+map_caps (uint32_t kc, uint32_t *ch)
+{
+  if (!key_map_lock.Lock ())
+    gui_abort ("Failed to lock keymap");
+  if (!key_map)
+    get_key_map (&key_map, &key_chars);
+  if (!key_map)
+    return;
+  if (kc >= 128)
+    return;
+
+  int32_t m = key_map->caps_map[kc];
+  map_key (key_chars, m, ch);
+  key_map_lock.Unlock ();
+}
+
+static void
+map_caps_shift (uint32_t kc, uint32_t *ch)
+{
+  if (!key_map_lock.Lock ())
+    gui_abort ("Failed to lock keymap");
+  if (!key_map)
+    get_key_map (&key_map, &key_chars);
+  if (!key_map)
+    return;
+  if (kc >= 128)
+    return;
+
+  int32_t m = key_map->caps_shift_map[kc];
+  map_key (key_chars, m, ch);
+  key_map_lock.Unlock ();
+}
+
+static void
 map_normal (uint32_t kc, uint32_t *ch)
 {
   if (!key_map_lock.Lock ())
@@ -197,8 +314,25 @@ map_normal (uint32_t kc, uint32_t *ch)
 class Emacs : public BApplication
 {
 public:
+  BMessage settings;
+  bool settings_valid_p = false;
+
   Emacs () : BApplication ("application/x-vnd.GNU-emacs")
   {
+    BPath settings_path;
+
+    if (find_directory (B_USER_SETTINGS_DIRECTORY, &settings_path) != B_OK)
+      return;
+
+    settings_path.Append (PACKAGE_NAME);
+
+    BEntry entry (settings_path.Path ());
+    BFile settings_file (&entry, B_READ_ONLY | B_CREATE_FILE);
+
+    if (settings.Unflatten (&settings_file) != B_OK)
+      return;
+
+    settings_valid_p = true;
   }
 
   void
@@ -271,6 +405,12 @@ public:
   int shown_flag = 0;
   volatile int was_shown_p = 0;
   bool menu_bar_active_p = false;
+  window_look pre_override_redirect_style;
+  window_feel pre_override_redirect_feel;
+  uint32 pre_override_redirect_workspaces;
+  pthread_mutex_t menu_update_mutex = PTHREAD_MUTEX_INITIALIZER;
+  pthread_cond_t menu_update_cv = PTHREAD_COND_INITIALIZER;
+  bool menu_updated_p = false;
 
   EmacsWindow () : BWindow (BRect (0, 0, 0, 0), "", B_TITLED_WINDOW_LOOK,
 			    B_NORMAL_WINDOW_FEEL, B_NO_SERVER_SIDE_WINDOW_MODIFIERS)
@@ -296,6 +436,9 @@ public:
     if (this->parent)
       UnparentAndUnlink ();
     child_frame_lock.Unlock ();
+
+    pthread_cond_destroy (&menu_update_cv);
+    pthread_mutex_destroy (&menu_update_mutex);
   }
 
   void
@@ -579,7 +722,11 @@ public:
 
 	rq.window = this;
 
-	int32_t code = msg->GetInt32 ("raw_char", 0);
+	int32 raw, key;
+	int ret;
+	msg->FindInt32 ("raw_char", &raw);
+	msg->FindInt32 ("key", &key);
+	msg->FindInt64 ("when", &rq.time);
 
 	rq.modifiers = 0;
 	uint32_t mods = modifiers ();
@@ -596,15 +743,33 @@ public:
 	if (mods & B_OPTION_KEY)
 	  rq.modifiers |= HAIKU_MODIFIER_SUPER;
 
-	rq.mb_char = code;
-	rq.kc = msg->GetInt32 ("key", -1);
-	rq.unraw_mb_char =
-	  BUnicodeChar::FromUTF8 (msg->GetString ("bytes"));
+	ret = keysym_from_raw_char (raw, key, &rq.keysym);
 
-	if ((mods & B_SHIFT_KEY) && rq.kc >= 0)
-	  map_shift (rq.kc, &rq.unraw_mb_char);
-	else if (rq.kc >= 0)
-	  map_normal (rq.kc, &rq.unraw_mb_char);
+	if (!ret)
+	  rq.keysym = 0;
+
+	if (ret < 0)
+	  return;
+
+	rq.multibyte_char = 0;
+
+	if (!rq.keysym)
+	  {
+	    if (mods & B_SHIFT_KEY)
+	      {
+		if (mods & B_CAPS_LOCK)
+		  map_caps_shift (key, &rq.multibyte_char);
+		else
+		  map_shift (key, &rq.multibyte_char);
+	      }
+	    else
+	      {
+		if (mods & B_CAPS_LOCK)
+		  map_caps (key, &rq.multibyte_char);
+		else
+		  map_normal (key, &rq.multibyte_char);
+	      }
+	  }
 
 	haiku_write (msg->what == B_KEY_DOWN ? KEY_DOWN : KEY_UP, &rq);
       }
@@ -646,9 +811,36 @@ public:
   MenusBeginning ()
   {
     struct haiku_menu_bar_state_event rq;
+    int lock_count = 0;
+    thread_id current_thread = find_thread (NULL);
+    thread_id window_thread = Thread ();
     rq.window = this;
+    rq.no_lock = false;
+
+    if (window_thread != current_thread)
+      rq.no_lock = true;
 
     haiku_write (MENU_BAR_OPEN, &rq);
+
+    if (!rq.no_lock)
+      {
+	while (IsLocked ())
+	  {
+	    ++lock_count;
+	    UnlockLooper ();
+	  }
+	pthread_mutex_lock (&menu_update_mutex);
+	while (!menu_updated_p)
+	  pthread_cond_wait (&menu_update_cv,
+			     &menu_update_mutex);
+	menu_updated_p = false;
+	pthread_mutex_unlock (&menu_update_mutex);
+	for (; lock_count; --lock_count)
+	  {
+	    if (!LockLooper ())
+	      gui_abort ("Failed to lock after cv signal denoting menu update");
+	  }
+      }
     menu_bar_active_p = true;
   }
 
@@ -1162,7 +1354,6 @@ public:
     if (!offscreen_draw_view)
       gui_abort ("Failed to lock offscreen view during buffer flip");
 
-    offscreen_draw_view->Flush ();
     offscreen_draw_view->Sync ();
 
     EmacsWindow *w = (EmacsWindow *) Window ();
@@ -1225,8 +1416,8 @@ public:
     rq.just_exited_p = transit == B_EXITED_VIEW;
     rq.x = point.x;
     rq.y = point.y;
-    rq.be_code = transit;
     rq.window = this->Window ();
+    rq.time = system_time ();
 
     if (ToolTip ())
       ToolTip ()->SetMouseRelativeLocation (BPoint (-(point.x - tt_absl_pos.x),
@@ -1281,6 +1472,7 @@ public:
 
     SetMouseEventMask (B_POINTER_EVENTS, B_LOCK_WINDOW_FOCUS);
 
+    rq.time = system_time ();
     haiku_write (BUTTON_DOWN, &rq);
   }
 
@@ -1327,6 +1519,7 @@ public:
     if (!buttons)
       SetMouseEventMask (0, 0);
 
+    rq.time = system_time ();
     haiku_write (BUTTON_UP, &rq);
   }
 };
@@ -1475,17 +1668,23 @@ public:
   Highlight (bool highlight_p)
   {
     struct haiku_menu_bar_help_event rq;
+    BMenu *menu = Menu ();
+    BRect r;
+    BPoint pt;
+    uint32 buttons;
 
-    if (menu_bar_id >= 0)
+    if (help)
+      menu->SetToolTip (highlight_p ? help : NULL);
+    else if (menu_bar_id >= 0)
       {
 	rq.window = wind_ptr;
 	rq.mb_idx = highlight_p ? menu_bar_id : -1;
 
-	haiku_write (MENU_BAR_HELP_EVENT, &rq);
-      }
-    else if (help)
-      {
-	Menu ()->SetToolTip (highlight_p ? help : NULL);
+	r = Frame ();
+	menu->GetMouse (&pt, &buttons);
+
+	if (!highlight_p || r.Contains (pt))
+	  haiku_write (MENU_BAR_HELP_EVENT, &rq);
       }
 
     BMenuItem::Highlight (highlight_p);
@@ -1799,71 +1998,6 @@ BWindow_Flush (void *window)
   ((BWindow *) window)->Flush ();
 }
 
-/* Map the keycode KC, storing the result in CODE and 1 in
-   NON_ASCII_P if it should be used.  */
-void
-BMapKey (uint32_t kc, int *non_ascii_p, unsigned *code)
-{
-  if (*code == 10 && kc != 0x42)
-    {
-      *code = XK_Return;
-      *non_ascii_p = 1;
-      return;
-    }
-
-  switch (kc)
-    {
-    default:
-      *non_ascii_p = 0;
-      if (kc < 0xe && kc > 0x1)
-	{
-	  *code = XK_F1 + kc - 2;
-	  *non_ascii_p = 1;
-	}
-      return;
-    case 0x1e:
-      *code = XK_BackSpace;
-      break;
-    case 0x61:
-      *code = XK_Left;
-      break;
-    case 0x63:
-      *code = XK_Right;
-      break;
-    case 0x57:
-      *code = XK_Up;
-      break;
-    case 0x62:
-      *code = XK_Down;
-      break;
-    case 0x64:
-      *code = XK_Insert;
-      break;
-    case 0x65:
-      *code = XK_Delete;
-      break;
-    case 0x37:
-      *code = XK_Home;
-      break;
-    case 0x58:
-      *code = XK_End;
-      break;
-    case 0x39:
-      *code = XK_Page_Up;
-      break;
-    case 0x5a:
-      *code = XK_Page_Down;
-      break;
-    case 0x1:
-      *code = XK_Escape;
-      break;
-    case 0x68:
-      *code = XK_Menu;
-      break;
-    }
-  *non_ascii_p = 1;
-}
-
 /* Make a scrollbar, attach it to VIEW's window, and return it.  */
 void *
 BScrollBar_make_for_view (void *view, int horizontal_p,
@@ -1906,8 +2040,6 @@ BView_move_frame (void *view, int x, int y, int x1, int y1)
     gui_abort ("Failed to lock view moving frame");
   vw->MoveTo (x, y);
   vw->ResizeTo (x1 - x, y1 - y);
-  vw->Flush ();
-  vw->Sync ();
   vw->UnlockLooper ();
 }
 
@@ -1927,7 +2059,9 @@ BView_scroll_bar_update (void *sb, int portion, int whole, int position)
 int
 BScrollBar_default_size (int horizontal_p)
 {
-  return horizontal_p ? B_H_SCROLL_BAR_HEIGHT : B_V_SCROLL_BAR_WIDTH;
+  return be_control_look->GetScrollBarWidth (horizontal_p
+					     ? B_HORIZONTAL
+					     : B_VERTICAL);
 }
 
 /* Invalidate VIEW, causing it to be drawn again.  */
@@ -2133,7 +2267,11 @@ BWindow_set_tooltip_decoration (void *window)
   if (!w->LockLooper ())
     gui_abort ("Failed to lock window while setting ttip decoration");
   w->SetLook (B_BORDERED_WINDOW_LOOK);
-  w->SetFeel (B_FLOATING_APP_WINDOW_FEEL);
+  w->SetFeel (kMenuWindowFeel);
+  w->SetFlags (B_NOT_ZOOMABLE
+	       | B_NOT_MINIMIZABLE
+	       | B_AVOID_FRONT
+	       | B_AVOID_FOCUS);
   w->UnlockLooper ();
 }
 
@@ -2150,7 +2288,6 @@ BWindow_set_avoid_focus (void *window, int avoid_focus_p)
     w->SetFlags (w->Flags () & ~B_AVOID_FOCUS);
   else
     w->SetFlags (w->Flags () | B_AVOID_FOCUS);
-  w->Sync ();
   w->UnlockLooper ();
 }
 
@@ -2727,7 +2864,7 @@ be_popup_file_dialog (int open_p, const char *default_dir, int must_match_p, int
       enum haiku_event_type type;
       char *ptr = NULL;
 
-      if (!haiku_read_with_timeout (&type, buf, 200, 100000))
+      if (!haiku_read_with_timeout (&type, buf, 200, 1000000))
 	{
 	  block_input_function ();
 	  if (type != FILE_PANEL_EVENT)
@@ -3057,4 +3194,65 @@ be_use_subpixel_antialiasing (void)
     return false;
 
   return current_subpixel_antialiasing;
+}
+
+/* This isn't implemented very properly (for example: what if
+   decorations are changed while the window is under override
+   redirect?) but it works well enough for most use cases.  */
+void
+BWindow_set_override_redirect (void *window, bool override_redirect_p)
+{
+  EmacsWindow *w = (EmacsWindow *) window;
+
+  if (w->LockLooper ())
+    {
+      if (override_redirect_p)
+	{
+	  w->pre_override_redirect_feel = w->Feel ();
+	  w->pre_override_redirect_style = w->Look ();
+	  w->SetFeel (kMenuWindowFeel);
+	  w->SetLook (B_NO_BORDER_WINDOW_LOOK);
+	  w->pre_override_redirect_workspaces = w->Workspaces ();
+	  w->SetWorkspaces (B_ALL_WORKSPACES);
+	}
+      else
+	{
+	  w->SetFeel (w->pre_override_redirect_feel);
+	  w->SetLook (w->pre_override_redirect_style);
+	  w->SetWorkspaces (w->pre_override_redirect_workspaces);
+	}
+
+      w->UnlockLooper ();
+    }
+}
+
+/* Find a resource by the name NAME inside the settings file.  The
+   string returned is in UTF-8 encoding, and will stay allocated as
+   long as the BApplication (a.k.a display) is alive.  */
+const char *
+be_find_setting (const char *name)
+{
+  Emacs *app = (Emacs *) be_app;
+  const char *value;
+
+  /* Note that this is thread-safe since the constructor of `Emacs'
+     runs in the main thread.  */
+  if (!app->settings_valid_p)
+    return NULL;
+
+  if (app->settings.FindString (name, 0, &value) != B_OK)
+    return NULL;
+
+  return value;
+}
+
+void
+EmacsWindow_signal_menu_update_complete (void *window)
+{
+  EmacsWindow *w = (EmacsWindow *) window;
+
+  pthread_mutex_lock (&w->menu_update_mutex);
+  w->menu_updated_p = true;
+  pthread_cond_signal (&w->menu_update_cv);
+  pthread_mutex_unlock (&w->menu_update_mutex);
 }

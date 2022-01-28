@@ -1972,7 +1972,7 @@ one will be removed."
                                 (format "%s hook to remove: "
                                         (if local "Buffer-local" "Global"))
                                 fn-alist
-                                nil t)
+                                nil t nil 'set-variable-value-history)
                                fn-alist nil nil #'string=)))
      (list hook function local)))
   (or (boundp hook) (set hook nil))
@@ -3250,6 +3250,13 @@ switch back again to the minibuffer before entering the
 character.  This is not possible when using `read-key', but using
 `read-key' may be less confusing to some users.")
 
+(defun use-dialog-box-p ()
+  "Say whether the user should be prompted with a dialog popup box."
+  (and (display-popup-menus-p)
+       last-input-event                 ; not during startup
+       (listp last-nonmenu-event)
+       use-dialog-box))
+
 (defun y-or-n-p (prompt)
   "Ask user a \"y or n\" question.
 Return t if answer is \"y\" and nil if it is \"n\".
@@ -3309,10 +3316,7 @@ like) while `y-or-n-p' is running)."
 		  ((and (member str '("h" "H")) help-form) (print help-form))
 		  (t (setq temp-prompt (concat "Please answer y or n.  "
 					       prompt))))))))
-     ((and (display-popup-menus-p)
-           last-input-event             ; not during startup
-	   (listp last-nonmenu-event)
-	   use-dialog-box)
+     ((use-dialog-box-p)
       (setq prompt (funcall padded prompt t)
 	    answer (x-popup-dialog t `(,prompt ("Yes" . act) ("No" . skip)))))
      (y-or-n-p-use-read-key
@@ -4295,11 +4299,13 @@ in which case `save-window-excursion' cannot help."
 (defmacro with-output-to-temp-buffer (bufname &rest body)
   "Bind `standard-output' to buffer BUFNAME, eval BODY, then show that buffer.
 
-This construct makes buffer BUFNAME empty before running BODY.
-It does not make the buffer current for BODY.
-Instead it binds `standard-output' to that buffer, so that output
-generated with `prin1' and similar functions in BODY goes into
-the buffer.
+This is a convenience macro meant for displaying help buffers and
+the like.  It empties the BUFNAME buffer before evaluating BODY
+and disables undo in that buffer.
+
+It does not make the buffer current for BODY.  Instead it binds
+`standard-output' to that buffer, so that output generated with
+`prin1' and similar functions in BODY goes into the buffer.
 
 At the end of BODY, this marks buffer BUFNAME unmodified and displays
 it in a window, but does not select it.  The normal way to do this is
@@ -6537,5 +6543,40 @@ string will be displayed only if BODY takes longer than TIMEOUT seconds.
   `(funcall-with-delayed-message ,(car args) ,(cadr args)
                                  (lambda ()
                                    ,@body)))
+
+(defun function-alias-p (func &optional noerror)
+  "Return nil if FUNC is not a function alias.
+If FUNC is a function alias, return the function alias chain.
+
+If the function alias chain contains loops, an error will be
+signalled.  If NOERROR, the non-loop parts of the chain is returned."
+  (declare (side-effect-free t))
+  (let ((chain nil)
+        (orig-func func))
+    (nreverse
+     (catch 'loop
+       (while (and (symbolp func)
+                   (setq func (symbol-function func))
+                   (symbolp func))
+         (when (or (memq func chain)
+                   (eq func orig-func))
+           (if noerror
+               (throw 'loop chain)
+             (signal 'cyclic-function-indirection (list orig-func))))
+         (push func chain))
+       chain))))
+
+(defun readablep (object)
+  "Say whether OBJECT has a readable syntax.
+This means that OBJECT can be printed out and then read back
+again by the Lisp reader.  This function returns nil if OBJECT is
+unreadable, and the printed representation (from `prin1') of
+OBJECT if it is readable."
+  (declare (side-effect-free t))
+  (catch 'unreadable
+    (let ((print-unreadable-function
+           (lambda (_object _escape)
+             (throw 'unreadable nil))))
+      (prin1-to-string object))))
 
 ;;; subr.el ends here

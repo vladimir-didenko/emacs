@@ -34,6 +34,8 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include <math.h>
 
+#include <kernel/OS.h>
+
 enum haiku_cursor
   {
     CURSOR_ID_NO_CURSOR = 12,
@@ -130,9 +132,11 @@ struct haiku_key_event
 {
   void *window;
   int modifiers;
-  uint32_t mb_char;
-  uint32_t unraw_mb_char;
-  short kc;
+  unsigned keysym;
+  uint32_t multibyte_char;
+
+  /* Time the keypress occurred, in microseconds.  */
+  bigtime_t time;
 };
 
 struct haiku_activation_event
@@ -147,7 +151,7 @@ struct haiku_mouse_motion_event
   bool just_exited_p;
   int x;
   int y;
-  uint32_t be_code;
+  bigtime_t time;
 };
 
 struct haiku_button_event
@@ -157,6 +161,7 @@ struct haiku_button_event
   int modifiers;
   int x;
   int y;
+  bigtime_t time;
 };
 
 struct haiku_iconification_event
@@ -294,6 +299,7 @@ struct haiku_menu_bar_resize_event
 struct haiku_menu_bar_state_event
 {
   void *window;
+  bool no_lock;
 };
 
 #define HAIKU_THIN 0
@@ -559,9 +565,6 @@ extern "C"
 
   extern void
   BWindow_Flush (void *window);
-
-  extern void
-  BMapKey (uint32_t kc, int *non_ascii_p, unsigned *code);
 
   extern void *
   BScrollBar_make_for_view (void *view, int horizontal_p,
@@ -855,6 +858,15 @@ extern "C"
 
   extern bool
   be_use_subpixel_antialiasing (void);
+
+  extern void
+  BWindow_set_override_redirect (void *window, bool override_redirect_p);
+
+  extern const char *
+  be_find_setting (const char *name);
+
+  extern void
+  EmacsWindow_signal_menu_update_complete (void *window);
 
 #ifdef __cplusplus
   extern void *

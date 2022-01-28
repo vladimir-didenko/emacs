@@ -875,9 +875,14 @@ load_pdump (int argc, char **argv)
     }
 
   /* Where's our executable?  */
-  ptrdiff_t bufsize, exec_bufsize;
+  ptrdiff_t bufsize;
+#ifndef NS_SELF_CONTAINED
+  ptrdiff_t exec_bufsize;
+#endif
   emacs_executable = load_pdump_find_executable (argv[0], &bufsize);
+#ifndef NS_SELF_CONTAINED
   exec_bufsize = bufsize;
+#endif
 
   /* If we couldn't find our executable, go straight to looking for
      the dump in the hardcoded location.  */
@@ -2467,6 +2472,7 @@ static const struct standard_args standard_args[] =
   { "-quick", 0, 55, 0 },
   { "-q", "--no-init-file", 50, 0 },
   { "-no-init-file", 0, 50, 0 },
+  { "-init-directory", "--init-directory", 30, 1 },
   { "-no-x-resources", "--no-x-resources", 40, 0 },
   { "-no-site-file", "--no-site-file", 40, 0 },
   { "-u", "--user", 30, 1 },

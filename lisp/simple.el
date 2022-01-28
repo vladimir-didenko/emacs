@@ -2309,8 +2309,8 @@ maps."
    (let* ((execute-extended-command--last-typed nil)
           (keymaps
            ;; The major mode's keymap and any active minor modes.
-           (cons
-            (current-local-map)
+           (nconc
+            (and (current-local-map) (list (current-local-map)))
             (mapcar
              #'cdr
              (seq-filter
@@ -3016,7 +3016,8 @@ undo record: if we undo from 4, `pending-undo-list' will be at 3,
 
 (defcustom undo-no-redo nil
   "If t, `undo' doesn't go through redo entries."
-  :type 'boolean)
+  :type 'boolean
+  :group 'undo)
 
 (defvar pending-undo-list nil
   "Within a run of consecutive undo commands, list remaining to be undone.
@@ -4149,6 +4150,10 @@ erased.  If OUTPUT-BUFFER is not a buffer and not nil (which happens
 interactively when the prefix argument is given), insert the
 output in current buffer after point leaving mark after it.  This
 cannot be done asynchronously.
+
+If OUTPUT-BUFFER is a buffer or buffer name different from the
+current buffer, instead of outputting at point in that buffer,
+the output will be appended at the end of that buffer.
 
 The user option `shell-command-dont-erase-buffer', which see, controls
 whether the output buffer is erased and where to put point after
@@ -6723,11 +6728,10 @@ mode temporarily."
         (user-error "No mark set in this buffer"))
     (set-mark (point))
     (goto-char omark)
-    (cond (temp-highlight
-	   (setq-local transient-mark-mode (cons 'only transient-mark-mode)))
-	  ((xor arg (not (region-active-p)))
-	   (deactivate-mark))
-	  (t (activate-mark)))
+    (or temp-highlight
+        (cond ((xor arg (not (region-active-p)))
+	       (deactivate-mark))
+	      (t (activate-mark))))
     nil))
 
 (defcustom shift-select-mode t
@@ -9500,9 +9504,6 @@ PREFIX is the string that represents this modifier in an event type symbol."
 (defvar clone-buffer-hook nil
   "Normal hook to run in the new buffer at the end of `clone-buffer'.")
 
-(defvar clone-indirect-buffer-hook nil
-  "Normal hook to run in the new buffer at the end of `clone-indirect-buffer'.")
-
 (defun clone-process (process &optional newname)
   "Create a twin copy of PROCESS.
 If NEWNAME is nil, it defaults to PROCESS' name;
@@ -9655,8 +9656,6 @@ Returns the newly created indirect buffer."
       (setq newname (substring newname 0 (match-beginning 0))))
   (let* ((name (generate-new-buffer-name newname))
 	 (buffer (make-indirect-buffer (current-buffer) name t)))
-    (with-current-buffer buffer
-      (run-hooks 'clone-indirect-buffer-hook))
     (when display-flag
       (pop-to-buffer buffer nil norecord))
     buffer))

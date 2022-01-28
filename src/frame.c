@@ -277,6 +277,8 @@ The value is a symbol:
  `w32' for an Emacs frame that is a window on MS-Windows display,
  `ns' for an Emacs frame on a GNUstep or Macintosh Cocoa display,
  `pc' for a direct-write MS-DOS frame.
+ `pgtk' for an Emacs frame using pure GTK facilities.
+ `haiku' for an Emacs frame running in Haiku.
 
 FRAME defaults to the currently selected frame.
 
@@ -2380,8 +2382,11 @@ delete_frame (Lisp_Object frame, Lisp_Object force)
 }
 
 DEFUN ("delete-frame", Fdelete_frame, Sdelete_frame, 0, 2, "",
-       doc: /* Delete FRAME, permanently eliminating it from use.
+       doc: /* Delete FRAME, eliminating it from use.
 FRAME must be a live frame and defaults to the selected one.
+
+When `undelete-frame-mode' is enabled, the 16 most recently deleted
+frames can be undeleted with `undelete-frame', which see.
 
 A frame may not be deleted if its minibuffer serves as surrogate
 minibuffer for another frame.  Normally, you may not delete a frame if
@@ -6466,6 +6471,14 @@ are not applied when showing a tooltip in a reused frame.
 This variable is effective only with the X toolkit (and there only when
 Gtk+ tooltips are not used) and on Windows.  */);
   tooltip_reuse_hidden_frame = false;
+
+  DEFVAR_BOOL ("use-system-tooltips", use_system_tooltips,
+	       doc: /* Use the toolkit to display tooltips.
+This option is only meaningful when Emacs is built with GTK+ or Haiku
+windowing support, and results in tooltips that look like those
+displayed by other GTK+ or Haiku programs, but will not be able to
+display text properties inside tooltip text.  */);
+  use_system_tooltips = true;
 
   DEFVAR_LISP ("iconify-child-frame", iconify_child_frame,
 	       doc: /* How to handle iconification of child frames.

@@ -592,7 +592,7 @@ pointer_align (void *ptr, int alignment)
 static ATTRIBUTE_NO_SANITIZE_UNDEFINED void *
 XPNTR (Lisp_Object a)
 {
-  return (SYMBOLP (a)
+  return (BARE_SYMBOL_P (a)
 	  ? (char *) lispsym + (XLI (a) - LISP_WORD_TAG (Lisp_Symbol))
 	  : (char *) XLP (a) - (XLI (a) & ~VALMASK));
 }
@@ -1853,7 +1853,8 @@ allocate_string (void)
 
 static void
 allocate_string_data (struct Lisp_String *s,
-		      EMACS_INT nchars, EMACS_INT nbytes, bool clearit)
+		      EMACS_INT nchars, EMACS_INT nbytes, bool clearit,
+		      bool immovable)
 {
   sdata *data;
   struct sblock *b;
@@ -1867,7 +1868,7 @@ allocate_string_data (struct Lisp_String *s,
 
   MALLOC_BLOCK_INPUT;
 
-  if (nbytes > LARGE_STRING_BYTES)
+  if (nbytes > LARGE_STRING_BYTES || immovable)
     {
       size_t size = FLEXSIZEOF (struct sblock, data, needed);
 
@@ -1967,7 +1968,7 @@ resize_string_data (Lisp_Object string, ptrdiff_t cidx_byte,
     }
   else
     {
-      allocate_string_data (XSTRING (string), nchars, new_nbytes, false);
+      allocate_string_data (XSTRING (string), nchars, new_nbytes, false, false);
       unsigned char *new_data = SDATA (string);
       new_charaddr = new_data + cidx_byte;
       memcpy (new_charaddr + new_clen, data + cidx_byte + clen,
@@ -2483,7 +2484,7 @@ make_clear_multibyte_string (EMACS_INT nchars, EMACS_INT nbytes, bool clearit)
 
   s = allocate_string ();
   s->u.s.intervals = NULL;
-  allocate_string_data (s, nchars, nbytes, clearit);
+  allocate_string_data (s, nchars, nbytes, clearit, false);
   XSETSTRING (string, s);
   string_chars_consed += nbytes;
   return string;
@@ -2511,6 +2512,29 @@ make_formatted_string (char *buf, const char *format, ...)
   length = vsprintf (buf, format, ap);
   va_end (ap);
   return make_string (buf, length);
+}
+
+/* Pin a unibyte string in place so that it won't move during GC.  */
+void
+pin_string (Lisp_Object string)
+{
+  eassert (STRINGP (string) && !STRING_MULTIBYTE (string));
+  struct Lisp_String *s = XSTRING (string);
+  ptrdiff_t size = STRING_BYTES (s);
+  unsigned char *data = s->u.s.data;
+
+  if (!(size > LARGE_STRING_BYTES
+	|| PURE_P (data) || pdumper_object_p (data)
+	|| s->u.s.size_byte == -3))
+    {
+      eassert (s->u.s.size_byte == -1);
+      sdata *old_sdata = SDATA_OF_STRING (s);
+      allocate_string_data (s, size, size, false, true);
+      memcpy (s->u.s.data, data, size);
+      old_sdata->string = NULL;
+      SDATA_NBYTES (old_sdata) = size;
+    }
+  s->u.s.size_byte = -3;
 }
 
 
@@ -3515,6 +3539,8 @@ usage: (make-byte-code ARGLIST BYTE-CODE CONSTANTS DEPTH &optional DOCSTRING INT
 	 && FIXNATP (args[COMPILED_STACK_DEPTH])))
     error ("Invalid byte-code object");
 
+  pin_string (args[COMPILED_BYTECODE]);  // Bytecode must be immovable.
+
   /* We used to purecopy everything here, if purify-flag was set.  This worked
      OK for Emacs-23, but with Emacs-24's lexical binding code, it can be
      dangerous, since make-byte-code is used during execution to build
@@ -3599,13 +3625,13 @@ static struct Lisp_Symbol *symbol_free_list;
 static void
 set_symbol_name (Lisp_Object sym, Lisp_Object name)
 {
-  XSYMBOL (sym)->u.s.name = name;
+  XBARE_SYMBOL (sym)->u.s.name = name;
 }
 
 void
 init_symbol (Lisp_Object val, Lisp_Object name)
 {
-  struct Lisp_Symbol *p = XSYMBOL (val);
+  struct Lisp_Symbol *p = XBARE_SYMBOL (val);
   set_symbol_name (val, name);
   set_symbol_plist (val, Qnil);
   p->u.s.redirect = SYMBOL_PLAINVAL;
@@ -3666,6 +3692,21 @@ make_misc_ptr (void *a)
 							 PVEC_MISC_PTR);
   p->pointer = a;
   return make_lisp_ptr (p, Lisp_Vectorlike);
+}
+
+/* Return a new symbol with position with the specified SYMBOL and POSITION. */
+Lisp_Object
+build_symbol_with_pos (Lisp_Object symbol, Lisp_Object position)
+{
+  Lisp_Object val;
+  struct Lisp_Symbol_With_Pos *p
+    = (struct Lisp_Symbol_With_Pos *) allocate_vector (2);
+  XSETVECTOR (val, p);
+  XSETPVECTYPESIZE (XVECTOR (val), PVEC_SYMBOL_WITH_POS, 2, 0);
+  p->sym = symbol;
+  p->pos = position;
+
+  return val;
 }
 
 /* Return a new overlay with specified START, END and PLIST.  */
@@ -5212,7 +5253,7 @@ valid_lisp_object_p (Lisp_Object obj)
   if (PURE_P (p))
     return 1;
 
-  if (SYMBOLP (obj) && c_symbol_p (p))
+  if (BARE_SYMBOL_P (obj) && c_symbol_p (p))
     return ((char *) p - (char *) lispsym) % sizeof lispsym[0] == 0;
 
   if (p == &buffer_defaults || p == &buffer_local_symbols)
@@ -5638,14 +5679,18 @@ purecopy (Lisp_Object obj)
       memcpy (vec, objp, nbytes);
       for (i = 0; i < size; i++)
 	vec->contents[i] = purecopy (vec->contents[i]);
+      // Byte code strings must be pinned.
+      if (COMPILEDP (obj) && size >= 2 && STRINGP (vec->contents[1])
+	  && !STRING_MULTIBYTE (vec->contents[1]))
+	pin_string (vec->contents[1]);
       XSETVECTOR (obj, vec);
     }
-  else if (SYMBOLP (obj))
+  else if (BARE_SYMBOL_P (obj))
     {
-      if (!XSYMBOL (obj)->u.s.pinned && !c_symbol_p (XSYMBOL (obj)))
+      if (!XBARE_SYMBOL (obj)->u.s.pinned && !c_symbol_p (XBARE_SYMBOL (obj)))
 	{ /* We can't purify them, but they appear in many pure objects.
 	     Mark them as `pinned' so we know to mark them at every GC cycle.  */
-	  XSYMBOL (obj)->u.s.pinned = true;
+	  XBARE_SYMBOL (obj)->u.s.pinned = true;
 	  symbol_block_pinned = symbol_block;
 	}
       /* Don't hash-cons it.  */
@@ -6273,7 +6318,10 @@ For further details, see Info node `(elisp)Garbage Collection'.  */)
   if (garbage_collection_inhibited)
     return Qnil;
 
+  ptrdiff_t count = SPECPDL_INDEX ();
+  specbind (Qsymbols_with_pos_enabled, Qnil);
   garbage_collect ();
+  unbind_to (count, Qnil);
   struct gcstat gcst = gcstat;
 
   Lisp_Object total[] = {
@@ -6412,7 +6460,7 @@ mark_char_table (struct Lisp_Vector *ptr, enum pvec_type pvectype)
       Lisp_Object val = ptr->contents[i];
 
       if (FIXNUMP (val) ||
-          (SYMBOLP (val) && symbol_marked_p (XSYMBOL (val))))
+          (BARE_SYMBOL_P (val) && symbol_marked_p (XBARE_SYMBOL (val))))
 	continue;
       if (SUB_CHAR_TABLE_P (val))
 	{
@@ -6816,7 +6864,7 @@ mark_object (Lisp_Object arg)
 
     case Lisp_Symbol:
       {
-	struct Lisp_Symbol *ptr = XSYMBOL (obj);
+	struct Lisp_Symbol *ptr = XBARE_SYMBOL (obj);
       nextsym:
         if (symbol_marked_p (ptr))
           break;
@@ -6937,7 +6985,7 @@ survives_gc_p (Lisp_Object obj)
       break;
 
     case Lisp_Symbol:
-      survives_p = symbol_marked_p (XSYMBOL (obj));
+      survives_p = symbol_marked_p (XBARE_SYMBOL (obj));
       break;
 
     case Lisp_String:
@@ -7354,7 +7402,7 @@ arenas.  */)
 static bool
 symbol_uses_obj (Lisp_Object symbol, Lisp_Object obj)
 {
-  struct Lisp_Symbol *sym = XSYMBOL (symbol);
+  struct Lisp_Symbol *sym = XBARE_SYMBOL (symbol);
   Lisp_Object val = find_symbol_value (symbol);
   return (EQ (val, obj)
 	  || EQ (sym->u.s.function, obj)

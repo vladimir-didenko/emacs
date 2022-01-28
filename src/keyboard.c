@@ -689,6 +689,8 @@ recursive_edit_1 (void)
     {
       specbind (Qstandard_output, Qt);
       specbind (Qstandard_input, Qt);
+      specbind (Qsymbols_with_pos_enabled, Qnil);
+      specbind (Qprint_symbols_bare, Qnil);
     }
 
 #ifdef HAVE_WINDOW_SYSTEM
@@ -1895,6 +1897,9 @@ int poll_suppress_count;
 
 static struct atimer *poll_timer;
 
+/* The poll period that constructed this timer.  */
+static Lisp_Object poll_timer_time;
+
 #if defined CYGWIN || defined DOS_NT
 /* Poll for input, so that we catch a C-g if it comes in.  */
 void
@@ -1936,17 +1941,18 @@ start_polling (void)
 
       /* If poll timer doesn't exist, or we need one with
 	 a different interval, start a new one.  */
-      if (poll_timer == NULL
-	  || poll_timer->interval.tv_sec != polling_period)
+      if (NUMBERP (Vpolling_period)
+	  && (poll_timer == NULL
+	      || NILP (Fequal (Vpolling_period, poll_timer_time))))
 	{
-	  time_t period = max (1, min (polling_period, TYPE_MAXIMUM (time_t)));
-	  struct timespec interval = make_timespec (period, 0);
+	  struct timespec interval = dtotimespec (XFLOATINT (Vpolling_period));
 
 	  if (poll_timer)
 	    cancel_atimer (poll_timer);
 
 	  poll_timer = start_atimer (ATIMER_CONTINUOUS, interval,
 				     poll_for_input, NULL);
+	  poll_timer_time = Vpolling_period;
 	}
 
       /* Let the timer's callback function poll for input
@@ -2014,14 +2020,28 @@ void
 bind_polling_period (int n)
 {
 #ifdef POLL_FOR_INPUT
-  intmax_t new = polling_period;
+  if (FIXNUMP (Vpolling_period))
+    {
+      intmax_t new = XFIXNUM (Vpolling_period);
 
-  if (n > new)
-    new = n;
+      if (n > new)
+	new = n;
 
-  stop_other_atimers (poll_timer);
-  stop_polling ();
-  specbind (Qpolling_period, make_int (new));
+      stop_other_atimers (poll_timer);
+      stop_polling ();
+      specbind (Qpolling_period, make_int (new));
+    }
+  else if (FLOATP (Vpolling_period))
+    {
+      double new = XFLOAT_DATA (Vpolling_period);
+
+      stop_other_atimers (poll_timer);
+      stop_polling ();
+      specbind (Qpolling_period, (n > new
+				  ? make_int (n)
+				  : Vpolling_period));
+    }
+
   /* Start a new alarm with the new period.  */
   start_polling ();
 #endif
@@ -3973,9 +3993,7 @@ kbd_buffer_get_event (KBOARD **kbp,
 	  *used_mouse_menu = true;
 	FALLTHROUGH;
 #endif
-#ifdef HAVE_PGTK
-      case PGTK_PREEDIT_TEXT_EVENT:
-#endif
+      case PREEDIT_TEXT_EVENT:
 #ifdef HAVE_NTGUI
       case END_SESSION_EVENT:
       case LANGUAGE_CHANGE_EVENT:
@@ -6289,10 +6307,8 @@ make_lispy_event (struct input_event *event)
 	return list3 (Qconfig_changed_event,
 		      event->arg, event->frame_or_window);
 
-#ifdef HAVE_PGTK
-    case PGTK_PREEDIT_TEXT_EVENT:
-      return list2 (intern ("pgtk-preedit-text"), event->arg);
-#endif
+    case PREEDIT_TEXT_EVENT:
+      return list2 (Qpreedit_text, event->arg);
 
       /* The 'kind' field of the event is something we don't recognize.  */
     default:
@@ -12003,6 +12019,8 @@ syms_of_keyboard (void)
   DEFSYM (Qno_record, "no-record");
   DEFSYM (Qencoded, "encoded");
 
+  DEFSYM (Qpreedit_text, "preedit-text");
+
   button_down_location = make_nil_vector (5);
   staticpro (&button_down_location);
   staticpro (&frame_relative_event_pos);
@@ -12065,6 +12083,11 @@ syms_of_keyboard (void)
 
   help_form_saved_window_configs = Qnil;
   staticpro (&help_form_saved_window_configs);
+
+#ifdef POLL_FOR_INPUT
+  poll_timer_time = Qnil;
+  staticpro (&poll_timer_time);
+#endif
 
   defsubr (&Scurrent_idle_time);
   defsubr (&Sevent_symbol_parse_modifiers);
@@ -12223,12 +12246,12 @@ The value may be integer or floating point.
 If the value is zero, don't echo at all.  */);
   Vecho_keystrokes = make_fixnum (1);
 
-  DEFVAR_INT ("polling-period", polling_period,
+  DEFVAR_LISP ("polling-period", Vpolling_period,
 	      doc: /* Interval between polling for input during Lisp execution.
 The reason for polling is to make C-g work to stop a running program.
 Polling is needed only when using X windows and SIGIO does not work.
 Polling is automatically disabled in all other cases.  */);
-  polling_period = 2;
+  Vpolling_period = make_float (2.0);
 
   DEFVAR_LISP ("double-click-time", Vdouble_click_time,
 	       doc: /* Maximum time between mouse clicks to make a double-click.
@@ -12771,8 +12794,6 @@ keys_of_keyboard (void)
 			    "ns-put-working-text");
   initial_define_lispy_key (Vspecial_event_map, "ns-unput-working-text",
 			    "ns-unput-working-text");
-  initial_define_lispy_key (Vspecial_event_map, "pgtk-preedit-text",
-			    "pgtk-preedit-text");
   /* Here we used to use `ignore-event' which would simple set prefix-arg to
      current-prefix-arg, as is done in `handle-switch-frame'.
      But `handle-switch-frame is not run from the special-map.

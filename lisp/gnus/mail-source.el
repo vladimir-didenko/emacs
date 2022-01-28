@@ -31,6 +31,7 @@
 (autoload 'pop3-movemail "pop3")
 (autoload 'pop3-get-message-count "pop3")
 (require 'mm-util)
+(require 'gnus-range)
 (require 'message) ;; for `message-directory'
 
 (defvar display-time-mail-function)
@@ -454,7 +455,7 @@ the `mail-source-keyword-map' variable."
                                                   search))))
                     :user)))
              user-auth)
-            ((and
+            ((and               ; cf. 'auth-source-pick-first-password'
               (eq keyword :password)
               (setq pass-auth
                     (plist-get
@@ -1047,8 +1048,6 @@ This only works when `display-time' is enabled."
 (autoload 'imap-list-to-message-set "imap")
 (autoload 'imap-range-to-message-set "imap")
 (autoload 'nnheader-ms-strip-cr "nnheader")
-
-(autoload 'gnus-compress-sequence "gnus-range")
 
 (defvar mail-source-imap-file-coding-system 'binary
   "Coding system for the crashbox made by `mail-source-fetch-imap'.")

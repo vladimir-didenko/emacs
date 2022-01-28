@@ -744,10 +744,10 @@ The option \"--fullname\" must be included in this value."
 
     output))
 
-(easy-mmode-defmap gud-minibuffer-local-map
-  '(("\C-i" . comint-dynamic-complete-filename))
-  "Keymap for minibuffer prompting of gud startup command."
-  :inherit minibuffer-local-map)
+(defvar-keymap gud-minibuffer-local-map
+  :doc "Keymap for minibuffer prompting of gud startup command."
+  :parent minibuffer-local-map
+  "C-i" #'comint-dynamic-complete-filename)
 
 (defun gud-query-cmdline (minor-mode &optional init)
   (let* ((hist-sym (gud-symbol 'history nil minor-mode))
@@ -759,13 +759,18 @@ The option \"--fullname\" must be included in this value."
 	 (concat (or cmd-name (symbol-name minor-mode))
 		 " "
 		 (or init
-		     (let ((file nil))
-		       (dolist (f (directory-files default-directory) file)
-			 (if (and (file-executable-p f)
-				  (not (file-directory-p f))
-				  (or (not file)
-				      (file-newer-than-file-p f file)))
-			     (setq file f)))))))
+		     (let ((file nil)
+                           (files (directory-files default-directory)))
+                       ;; On remote systems, this may be slow, so avoid it.
+                       (when (or (not (file-remote-p default-directory))
+                                 (length< files 50))
+		         (dolist (f files)
+			   (if (and (file-executable-p f)
+				    (not (file-directory-p f))
+				    (or (not file)
+				        (file-newer-than-file-p f file)))
+			       (setq file f)))
+                            file)))))
      gud-minibuffer-local-map nil
      hist-sym)))
 
@@ -869,7 +874,8 @@ the buffer in which this command was invoked."
 COMMAND is the prefix for which we seek completion.
 CONTEXT is the text before COMMAND on the line."
   (let* ((complete-list
-	  (gud-gdb-run-command-fetch-lines (concat "complete " context command)
+	  (gud-gdb-run-command-fetch-lines (concat "server complete "
+                                                   context command)
 					   (current-buffer)
 					   ;; From string-match above.
 					   (length context))))

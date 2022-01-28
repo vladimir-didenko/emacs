@@ -596,8 +596,7 @@ Return the column number after insertion."
       (when not-last-col
         (when (> pad-right 0) (insert (make-string pad-right ?\s)))
         (insert (propertize
-                 ;; We need at least one space to align correctly.
-                 (make-string (- width (min 1 width label-width)) ?\s)
+                 (make-string (- width (min width label-width)) ?\s)
                  'display `(space :align-to ,next-x))))
       (put-text-property opoint (point) 'tabulated-list-column-name name)
       next-x)))
@@ -732,6 +731,7 @@ Interactively, N is the prefix numeric argument, and defaults to
 1."
   (interactive "p")
   (let ((start (current-column))
+        (entry (tabulated-list-get-entry))
         (nb-cols (length tabulated-list-format))
         (col-nb 0)
         (total-width 0)
@@ -739,14 +739,25 @@ Interactively, N is the prefix numeric argument, and defaults to
         col-width)
     (while (and (not found)
                 (< col-nb nb-cols))
-      (if (> start
-             (setq total-width
-                   (+ total-width
-                      (setq col-width
-                            (cadr (aref tabulated-list-format
-                                        col-nb))))))
+      (if (>= start
+              (setq total-width
+                    (+ total-width
+                       (max (setq col-width
+                                  (cadr (aref tabulated-list-format
+                                              col-nb)))
+                            (let ((desc (aref entry col-nb)))
+                              (string-width (if (stringp desc)
+                                                desc
+                                              (car desc)))))
+                       (or (plist-get (nthcdr 3 (aref tabulated-list-format
+                                                      col-nb))
+                                      :pad-right)
+                           1))))
           (setq col-nb (1+ col-nb))
         (setq found t)
+        ;; `tabulated-list-format' may be a constant (sharing list
+        ;; structures), so copy it before mutating.
+        (setq tabulated-list-format (copy-tree tabulated-list-format t))
         (setf (cadr (aref tabulated-list-format col-nb))
               (max 1 (+ col-width n)))
         (tabulated-list-print t)

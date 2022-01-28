@@ -10216,7 +10216,8 @@ move_it_to (struct it *it, ptrdiff_t to_charpos, int to_x, int to_y, int to_vpos
 			 could have both positions after TO_CHARPOS or
 			 both positions before it, due to bidi
 			 reordering.)  */
-		      if (IT_CHARPOS (*it) != to_charpos
+		      if (to_charpos > 0
+			  && IT_CHARPOS (*it) != to_charpos
 			  && ((IT_CHARPOS (it_backup) > to_charpos)
 			      == (IT_CHARPOS (*it) > to_charpos)))
 			{
@@ -13928,6 +13929,8 @@ redisplay_tab_bar (struct frame *f)
   struct it it;
   struct glyph_row *row;
 
+  f->tab_bar_redisplayed = true;
+
   /* If frame hasn't a tab-bar window or if it is zero-height, don't
      do anything.  This means you must start with tab-bar-lines
      non-zero to get the auto-sizing effect.  Or in other words, you
@@ -13935,9 +13938,16 @@ redisplay_tab_bar (struct frame *f)
   if (!WINDOWP (f->tab_bar_window)
       || (w = XWINDOW (f->tab_bar_window),
           WINDOW_TOTAL_LINES (w) == 0))
-    return false;
+    {
+      /* Even if we do not display a tab bar initially, still pretend
+	 that we have resized it.  This avoids that a later activation
+	 of the tab bar resizes the frame, despite of the fact that the
+	 setting of 'frame-inhibit-implied-resize' should inhibit it
+	 (Bug#52986).  */
+      f->tab_bar_resized = true;
 
-  f->tab_bar_redisplayed = true;
+      return false;
+    }
 
   /* Set up an iterator for the tab-bar window.  */
   init_iterator (&it, w, -1, -1, w->desired_matrix->rows, TAB_BAR_FACE_ID);
@@ -14847,6 +14857,8 @@ redisplay_tool_bar (struct frame *f)
   struct it it;
   struct glyph_row *row;
 
+  f->tool_bar_redisplayed = true;
+
   /* If frame hasn't a tool-bar window or if it is zero-height, don't
      do anything.  This means you must start with tool-bar-lines
      non-zero to get the auto-sizing effect.  Or in other words, you
@@ -14854,9 +14866,16 @@ redisplay_tool_bar (struct frame *f)
   if (!WINDOWP (f->tool_bar_window)
       || (w = XWINDOW (f->tool_bar_window),
           WINDOW_TOTAL_LINES (w) == 0))
-    return false;
+    {
+      /* Even if we do not display a tool bar initially, still pretend
+	 that we have resized it already.  This avoids that a later
+	 activation of the tool bar resizes the frame, despite of the
+	 fact that a setting of 'frame-inhibit-implied-resize' should
+	 inhibit it (Bug#52986).  */
+      f->tool_bar_resized = true;
 
-  f->tool_bar_redisplayed = true;
+      return false;
+    }
 
   /* Set up an iterator for the tool-bar window.  */
   init_iterator (&it, w, -1, -1, w->desired_matrix->rows, TOOL_BAR_FACE_ID);
@@ -18557,6 +18576,20 @@ try_cursor_movement (Lisp_Object window, struct text_pos startp,
 			    || (NILP (g->object)
 				&& (g->charpos == PT
 				    || (g->charpos == 0 && endpos - 1 == PT)));
+			  /* Perhaps the point position is inside
+			     invisible text?  In that case, we trust
+			     'set_cursor_from_row' to do its job and
+			     find the best position for the cursor.  */
+			  if (!exact_match_p)
+			    {
+			      Lisp_Object val =
+				get_char_property_and_overlay (make_fixnum (PT),
+							       Qinvisible,
+							       Qnil, NULL);
+
+			      if (TEXT_PROP_MEANS_INVISIBLE (val) != 0)
+				exact_match_p = true;
+			    }
 			}
 		      if (at_zv_p || exact_match_p)
 			{
@@ -19143,7 +19176,8 @@ redisplay_window (Lisp_Object window, bool just_this_one_p)
 	  struct glyph_row *row;
 
 	  row = MATRIX_FIRST_TEXT_ROW (w->desired_matrix);
-	  while (MATRIX_ROW_BOTTOM_Y (row) < new_vpos)
+	  while (MATRIX_ROW_BOTTOM_Y (row) < new_vpos
+		 && !row->ends_at_zv_p)
 	    ++row;
 
 	  TEMP_SET_PT_BOTH (MATRIX_ROW_START_CHARPOS (row),
@@ -24869,15 +24903,17 @@ DEFUN ("bidi-find-overridden-directionality",
        doc: /* Return position between FROM and TO where directionality was overridden.
 
 This function returns the first character position in the specified
-region of OBJECT where there is a character whose `bidi-class' property
-is `L', but which was forced to display as `R' by a directional
-override, and likewise with characters whose `bidi-class' is `R'
-or `AL' that were forced to display as `L'.
+region of OBJECT where characters have their bidirectional
+properties affected in a way that might make its text look confusingly
+on display.  For example, characters whose `bidi-class' property is `L',
+could be forced to display as `R' by a directional override, and
+likewise characters whose `bidi-class' is `R' or `AL' that are
+forced to display as `L'.
 
 If no such character is found, the function returns nil.
 
 OBJECT is a Lisp string or buffer to search for overridden
-directionality, and defaults to the current buffer if nil or omitted.
+directionality, and defaults to the current buffer if nil.
 OBJECT can also be a window, in which case the function will search
 the buffer displayed in that window.  Passing the window instead of
 a buffer is preferable when the buffer is displayed in some window,
@@ -24889,12 +24925,16 @@ of the text.  It should be a symbol, either `left-to-right'
 or `right-to-left', and defaults to `left-to-right'.
 
 Strong directional characters `L', `R', and `AL' can have their
-intrinsic directionality overridden by directional override
-control characters RLO (u+202E) and LRO (u+202D).  They can also
-have their directionality affected by other formatting control
-characters: LRE (u+202A), RLE (u+202B), LRI (u+2066), and RLI (u+2067).
-See the function `get-char-code-property' for a way to inquire about
-the `bidi-class' property of a character.  */)
+intrinsic directionality overridden by directional override control
+characters RLO (u+202E) and LRO (u+202D).  They can also have their
+directionality affected by other formatting control characters: LRE
+(u+202A), RLE (u+202B), LRI (u+2066), and RLI (u+2067).  See the
+function `get-char-code-property' for a way to inquire about the
+`bidi-class' property of a character.  Characters whose intrinsic
+directionality is weak or neutral, such as numbers or punctuation
+characters, can be forced to display in a very different place with
+respect of its surrounding characters, so as to make the surrounding
+text confuse the user regarding what the text says.  */)
   (Lisp_Object from, Lisp_Object to, Lisp_Object object, Lisp_Object base_dir)
 {
   struct buffer *buf = current_buffer;

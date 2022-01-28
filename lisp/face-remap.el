@@ -70,6 +70,13 @@
    :foreground :background :stipple :overline :strike-through :box
    :font :inherit :fontset :distant-foreground :extend :vector])
 
+(defun face-attrs--make-indirect-safe ()
+  "Deep-copy the buffer's `face-remapping-alist' upon cloning the buffer."
+  (setq-local face-remapping-alist
+              (mapcar #'copy-sequence face-remapping-alist)))
+
+(add-hook 'clone-indirect-buffer-hook #'face-attrs--make-indirect-safe)
+
 (defun face-attrs-more-relative-p (attrs1 attrs2)
   "Return true if ATTRS1 contains a greater number of relative
 face-attributes than ATTRS2.  A face attribute is considered
@@ -400,15 +407,6 @@ a top-level keymap, `text-scale-increase' or
   (interactive "e")
   (when (not (eq (event-basic-type event) 'pinch))
     (error "`text-scale-pinch' bound to bad event type"))
-  (let ((evt))
-    (catch 'done
-      (while t
-        (unless (and (setq evt (read-event nil nil 0.01))
-                     (eq (car evt) 'pinch))
-          (throw 'done nil))))
-    (when (and (consp evt)
-               (eq (car evt) 'pinch))
-      (setq event evt)))
   (let ((window (posn-window (nth 1 event)))
         (scale (nth 4 event))
         (dx (nth 2 event))

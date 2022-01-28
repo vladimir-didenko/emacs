@@ -382,7 +382,7 @@ the specializer used will be the one returned by BODY."
                                  macroexpand-all-environment)))
       (require 'cl-lib)        ;Needed to expand `cl-flet' and `cl-function'.
       (when (assq 'interactive body)
-        (message "Interactive forms unsupported in generic functions: %S"
+        (message "Interactive forms not supported in generic functions: %S"
                  (assq 'interactive body)))
       ;; First macroexpand away the cl-function stuff (e.g. &key and
       ;; destructuring args, `declare' and whatnot).
@@ -498,7 +498,8 @@ The set of acceptable TYPEs (also called \"specializers\") is defined
                     cl--generic-edebug-make-name nil]
              lambda-doc                 ; documentation string
              def-body)))                ; part to be debugged
-  (let ((qualifiers nil))
+  (let ((qualifiers nil)
+        (org-name name))
     (while (cl-generic--method-qualifier-p args)
       (push args qualifiers)
       (setq args (pop body)))
@@ -511,6 +512,7 @@ The set of acceptable TYPEs (also called \"specializers\") is defined
          ,(and (get name 'byte-obsolete-info)
                (let* ((obsolete (get name 'byte-obsolete-info)))
                  (macroexp-warn-and-return
+                  org-name
                   (macroexp--obsolete-warning name obsolete "generic function")
                   nil
                   (list 'obsolete name))))

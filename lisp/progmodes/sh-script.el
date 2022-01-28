@@ -1407,7 +1407,7 @@ If FORCE is non-nil and no process found, create one."
 (defun sh-show-shell ()
   "Pop the shell interaction buffer."
   (interactive)
-  (pop-to-buffer (process-buffer (sh-shell-process t))))
+  (pop-to-buffer (process-buffer (sh-shell-process t)) display-comint-buffer-action))
 
 (defun sh-send-text (text)
   "Send the text to the `sh-shell-process'."
@@ -1602,7 +1602,7 @@ This adds rules for comments and assignments."
 
 ;;; Completion
 
-(defvar sh--completion-keywords '("if" "while" "until" "for"))
+(defvar sh--completion-keywords '("if" "while" "until" "for" "then"))
 
 (defun sh--vars-before-point ()
   (save-excursion

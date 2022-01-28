@@ -142,10 +142,7 @@ digest_menu_items (void *first_menu, int start, int menu_items_used,
 	    }
 
 	  if (STRINGP (help) && STRING_MULTIBYTE (help))
-	    {
-	      help = ENCODE_UTF_8 (help);
-	      ASET (menu_items, i + MENU_ITEMS_ITEM_HELP, help);
-	    }
+	    help = ENCODE_UTF_8 (help);
 
 	  if (i + MENU_ITEMS_ITEM_LENGTH < menu_items_used &&
 	      NILP (AREF (menu_items, i + MENU_ITEMS_ITEM_LENGTH)))
@@ -158,6 +155,12 @@ digest_menu_items (void *first_menu, int start, int menu_items_used,
 			    !NILP (enable), !NILP (selected), 0, window,
 			    !NILP (descrip) ? SSDATA (descrip) : NULL,
 			    STRINGP (help) ? SSDATA (help) : NULL);
+	  else if (!use_system_tooltips || NILP (Fsymbol_value (Qtooltip_mode)))
+	    BMenu_add_item (menu, SSDATA (item_name),
+			    !NILP (def) ? (void *) (intptr_t) i : NULL,
+			    !NILP (enable), !NILP (selected), 1, window,
+			    !NILP (descrip) ? SSDATA (descrip) : NULL,
+			    NULL);
 	  else
 	    BMenu_add_item (menu, SSDATA (item_name),
 			    !NILP (def) ? (void *) (intptr_t) i : NULL,
@@ -613,7 +616,7 @@ run_menu_bar_help_event (struct frame *f, int mb_idx)
     }
 
   vec = f->menu_bar_vector;
-  if (mb_idx >= ASIZE (vec))
+  if ((mb_idx + MENU_ITEMS_ITEM_HELP) >= ASIZE (vec))
     emacs_abort ();
 
   help = AREF (vec, mb_idx + MENU_ITEMS_ITEM_HELP);
@@ -642,18 +645,16 @@ the position of the last non-menu event instead.  */)
 
   if (FRAME_EXTERNAL_MENU_BAR (f))
     {
-      if (!FRAME_OUTPUT_DATA (f)->menu_up_to_date_p)
-	set_frame_menubar (f, 1);
+      block_input ();
+      set_frame_menubar (f, 1);
+      BMenuBar_start_tracking (FRAME_HAIKU_MENU_BAR (f));
+      unblock_input ();
     }
   else
     {
       return call2 (Qpopup_menu, call0 (Qmouse_menu_bar_map),
 		    last_nonmenu_event);
     }
-
-  block_input ();
-  BMenuBar_start_tracking (FRAME_HAIKU_MENU_BAR (f));
-  unblock_input ();
 
   return Qnil;
 }
@@ -664,6 +665,7 @@ syms_of_haikumenu (void)
   DEFSYM (Qdebug_on_next_call, "debug-on-next-call");
   DEFSYM (Qpopup_menu, "popup-menu");
   DEFSYM (Qmouse_menu_bar_map, "mouse-menu-bar-map");
+  DEFSYM (Qtooltip_mode, "tooltip-mode");
 
   defsubr (&Smenu_or_popup_active_p);
   defsubr (&Shaiku_menu_bar_open);
