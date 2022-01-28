@@ -214,7 +214,9 @@
 
 (defun oclosure--merge-classes (names)
   (if (null (cdr names))
-      (cl--find-class (or (car names) 'oclosure))
+      (let ((name (or (car names) 'oclosure)))
+        (or (cl--find-class name)
+            (error "Unknown class: %S" name)))
     (let* ((total-slots '())
            (name (vconcat names))
            (pinned 0)
@@ -299,18 +301,19 @@
                             (push (cdr tmp) val)
                             (setq options (delq tmp options)))
                           (nreverse val))))))
-
+         (predicate (car (funcall get-opt :predicate)))
          (parent-names (or (funcall get-opt :parent)
                            (funcall get-opt :include)))
          (copiers (funcall get-opt :copier 'all))
-         (mixin (funcall get-opt :mixin)))
+         (mixin (car (funcall get-opt :mixin))))
     `(progn
        ,(when options (macroexp-warn-and-return
                        (format "Ignored options: %S" options)
                        nil))
        (eval-and-compile
          (oclosure--define ',name ,docstring ',parent-names ',slots
-                           :mixin ',mixin))
+                           ,@(when mixin `(:mixin ',mixin))
+                           ,@(when predicate `(:predicate ',predicate))))
        (oclosure--define-functions ,name ,copiers))))
 
 (defun oclosure--build-class (name docstring parent-names slots mixin)
@@ -401,7 +404,8 @@
                    (when type
                      (memq name (oclosure--class-allparents
                                  (cl--find-class type)))))))
-         (predname (intern (format "%s--internal-p" name))))
+         (predname (or (plist-get props :predicate)
+                       (intern (format "%s--internal-p" name)))))
     (setf (cl--find-class name) class)
     (dolist (slot (oclosure--class-slots class))
       (put (cl--slot-descriptor-name slot) 'slot-name t))
@@ -495,7 +499,8 @@ ARGS and BODY are the same as for `lambda'."
                    `(oclosure--anonymous-define
                      ',(oclosure--anonymous-name types) ',types)))
        (type (eval type-exp t))
-       (class (cl--find-class type))
+       (class (or (cl--find-class type)
+                  (error "Unknown class: %S" type)))
        (slots (oclosure--class-slots class))
        (mutables '())
        (slotbinds (mapcar (lambda (slot)
@@ -676,7 +681,8 @@ ARGS and BODY are the same as for `lambda'."
 
 ;; Ideally, this should be in `files.el', but that file is loaded
 ;; before `oclosure.el'.
-(oclosure-define save-some-buffers-function)
+(oclosure-define (save-some-buffers-function
+                  (:predicate save-some-buffers-function--p)))
 
 
 (provide 'oclosure)

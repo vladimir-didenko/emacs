@@ -5845,12 +5845,10 @@ change the additional actions you can take on files."
   (interactive "P")
   (unless pred
     (setq pred save-some-buffers-default-predicate))
-  ;; Can't be required at top-level for bootstrap reasons.
-  (eval-when-compile (require 'cl-lib))
   ;; Allow `pred' to be a function that returns a predicate
   ;; with lexical bindings in its original environment (bug#46374).
-  (when (or (and (symbolp pred) (get pred 'save-some-buffers-function))
-            (cl-typep pred 'save-some-buffers-function))
+  (when (or (and (symbolp pred) (get pred 'save-some-buffers-function)
+                 (save-some-buffers-function--p pred)))
     (let ((pred-fun (and (functionp pred) (funcall pred))))
       (when (functionp pred-fun)
         (setq pred pred-fun))))
