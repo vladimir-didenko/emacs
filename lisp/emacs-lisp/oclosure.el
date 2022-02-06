@@ -307,7 +307,7 @@
          (copiers (funcall get-opt :copier 'all))
          (mixin (car (funcall get-opt :mixin))))
     `(progn
-       ,(when options (macroexp-warn-and-return
+       ,(when options (macroexp-warn-and-return name
                        (format "Ignored options: %S" options)
                        nil))
        (eval-and-compile
