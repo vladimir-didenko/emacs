@@ -122,6 +122,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include <X11/extensions/Xrandr.h>
 #endif
 
+#ifdef HAVE_XSYNC
+#include <X11/extensions/sync.h>
+#endif
+
 /* Load sys/types.h if not already loaded.
    In some systems loading it twice is suicidal.  */
 #ifndef makedev
@@ -341,6 +345,7 @@ static void x_wm_set_icon_pixmap (struct frame *, ptrdiff_t);
 static void x_initialize (void);
 
 static bool x_get_current_wm_state (struct frame *, Window, int *, bool *);
+static void x_update_opaque_region (struct frame *);
 
 /* Flush display of frame F.  */
 
@@ -361,6 +366,7 @@ x_flush (struct frame *f)
 static void
 x_drop_xrender_surfaces (struct frame *f)
 {
+  x_update_opaque_region (f);
   font_drop_xrender_surfaces (f);
 
 #ifdef HAVE_XRENDER
@@ -375,18 +381,18 @@ x_drop_xrender_surfaces (struct frame *f)
 }
 
 #ifdef HAVE_XRENDER
-MAYBE_UNUSED static void
+void
 x_xr_ensure_picture (struct frame *f)
 {
   if (FRAME_X_PICTURE (f) == None && FRAME_X_PICTURE_FORMAT (f))
     {
       XRenderPictureAttributes attrs;
       attrs.clip_mask = None;
+      XRenderPictFormat *fmt = FRAME_X_PICTURE_FORMAT (f);
 
       FRAME_X_PICTURE (f) = XRenderCreatePicture (FRAME_X_DISPLAY (f),
 						  FRAME_X_RAW_DRAWABLE (f),
-						  FRAME_X_PICTURE_FORMAT (f),
-						  CPClipMask, &attrs);
+						  fmt, CPClipMask, &attrs);
     }
 }
 #endif
@@ -432,6 +438,18 @@ record_event (char *locus, int type)
 }
 
 #endif
+
+static void
+x_update_opaque_region (struct frame *f)
+{
+  if (f->alpha_background < 1.0)
+    XChangeProperty (FRAME_X_DISPLAY (f),
+		     FRAME_X_WINDOW (f),
+		     FRAME_DISPLAY_INFO (f)->Xatom_net_wm_opaque_region,
+		     XA_CARDINAL, 32, PropModeReplace,
+		     NULL, 0);
+}
+
 
 #if defined USE_CAIRO || defined HAVE_XRENDER
 static struct x_gc_ext_data *
@@ -874,12 +892,27 @@ x_set_cr_source_with_gc_background (struct frame *f, GC gc)
 {
   XGCValues xgcv;
   XColor color;
+  unsigned int depth;
 
   XGetGCValues (FRAME_X_DISPLAY (f), gc, GCBackground, &xgcv);
   color.pixel = xgcv.background;
+
   x_query_colors (f, &color, 1);
-  cairo_set_source_rgb (FRAME_CR_CONTEXT (f), color.red / 65535.0,
-			color.green / 65535.0, color.blue / 65535.0);
+
+  depth = FRAME_DISPLAY_INFO (f)->n_planes;
+
+  if (f->alpha_background < 1.0 && depth == 32)
+    {
+      cairo_set_source_rgba (FRAME_CR_CONTEXT (f), color.red / 65535.0,
+			     color.green / 65535.0, color.blue / 65535.0,
+			     f->alpha_background);
+
+      cairo_set_operator (FRAME_CR_CONTEXT (f), CAIRO_OPERATOR_SOURCE);
+    }
+  else
+    cairo_set_source_rgb (FRAME_CR_CONTEXT (f), color.red / 65535.0,
+                          color.green / 65535.0, color.blue / 65535.0);
+
 }
 
 static const cairo_user_data_key_t xlib_surface_key, saved_drawable_key;
@@ -1218,8 +1251,8 @@ x_cr_export_frames (Lisp_Object frames, cairo_surface_type_t surface_type)
 
 #endif	/* USE_CAIRO */
 
-#if defined HAVE_XRENDER && !defined USE_CAIRO
-MAYBE_UNUSED static void
+#if defined HAVE_XRENDER
+void
 x_xr_apply_ext_clip (struct frame *f, GC gc)
 {
   eassert (FRAME_X_PICTURE (f) != None);
@@ -1233,7 +1266,7 @@ x_xr_apply_ext_clip (struct frame *f, GC gc)
 				     data->n_clip_rects);
 }
 
-MAYBE_UNUSED static void
+void
 x_xr_reset_ext_clip (struct frame *f)
 {
   XRenderPictureAttributes attrs = { .clip_mask = None };
@@ -1275,7 +1308,8 @@ x_reset_clip_rectangles (struct frame *f, GC gc)
 }
 
 static void
-x_fill_rectangle (struct frame *f, GC gc, int x, int y, int width, int height)
+x_fill_rectangle (struct frame *f, GC gc, int x, int y, int width, int height,
+		  bool respect_alpha_background)
 {
 #ifdef USE_CAIRO
   Display *dpy = FRAME_X_DISPLAY (f);
@@ -1313,8 +1347,79 @@ x_fill_rectangle (struct frame *f, GC gc, int x, int y, int width, int height)
     }
   x_end_cr_clip (f);
 #else
+#if defined HAVE_XRENDER && (RENDER_MAJOR > 0 || (RENDER_MINOR >= 2))
+  if (respect_alpha_background
+      && FRAME_DISPLAY_INFO (f)->alpha_bits
+      && FRAME_CHECK_XR_VERSION (f, 0, 2))
+    {
+      x_xr_ensure_picture (f);
+
+      if (FRAME_X_PICTURE (f) != None)
+	{
+	  XRenderColor xc;
+
+	  x_xr_apply_ext_clip (f, gc);
+	  x_xrender_color_from_gc_foreground (f, gc, &xc, true);
+	  XRenderFillRectangle (FRAME_X_DISPLAY (f),
+				PictOpSrc, FRAME_X_PICTURE (f),
+				&xc, x, y, width, height);
+	  x_xr_reset_ext_clip (f);
+	  x_mark_frame_dirty (f);
+
+	  return;
+	}
+    }
+#endif
   XFillRectangle (FRAME_X_DISPLAY (f), FRAME_X_DRAWABLE (f),
 		  gc, x, y, width, height);
+#endif
+}
+
+
+static void
+x_clear_rectangle (struct frame *f, GC gc, int x, int y, int width, int height,
+		   bool respect_alpha_background)
+{
+#ifdef USE_CAIRO
+  cairo_t *cr;
+
+  cr = x_begin_cr_clip (f, gc);
+  x_set_cr_source_with_gc_background (f, gc);
+  cairo_rectangle (cr, x, y, width, height);
+  cairo_fill (cr);
+  x_end_cr_clip (f);
+#else
+#if defined HAVE_XRENDER && (RENDER_MAJOR > 0 || (RENDER_MINOR >= 2))
+  if (respect_alpha_background
+      && FRAME_DISPLAY_INFO (f)->alpha_bits
+      && FRAME_CHECK_XR_VERSION (f, 0, 2))
+    {
+      x_xr_ensure_picture (f);
+
+      if (FRAME_X_PICTURE (f) != None)
+	{
+	  XRenderColor xc;
+
+	  x_xr_apply_ext_clip (f, gc);
+	  x_xrender_color_from_gc_background (f, gc, &xc, true);
+	  XRenderFillRectangle (FRAME_X_DISPLAY (f),
+				PictOpSrc, FRAME_X_PICTURE (f),
+				&xc, x, y, width, height);
+	  x_xr_reset_ext_clip (f);
+	  x_mark_frame_dirty (f);
+
+	  return;
+	}
+    }
+#endif
+
+  XGCValues xgcv;
+  Display *dpy = FRAME_X_DISPLAY (f);
+  XGetGCValues (dpy, gc, GCBackground | GCForeground, &xgcv);
+  XSetForeground (dpy, gc, xgcv.background);
+  XFillRectangle (dpy, FRAME_X_DRAWABLE (f),
+		  gc, x, y, width, height);
+  XSetForeground (dpy, gc, xgcv.foreground);
 #endif
 }
 
@@ -1348,7 +1453,7 @@ x_clear_window (struct frame *f)
   x_end_cr_clip (f);
 #else
 #ifndef USE_GTK
-  if (FRAME_X_DOUBLE_BUFFERED_P (f))
+  if (FRAME_X_DOUBLE_BUFFERED_P (f) || (f->alpha_background != 1.0))
 #endif
     x_clear_area (f, 0, 0, FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
 #ifndef USE_GTK
@@ -1606,7 +1711,7 @@ x_draw_vertical_window_border (struct window *w, int x, int y0, int y1)
 		    face->foreground);
 
 #ifdef USE_CAIRO
-  x_fill_rectangle (f, f->output_data.x->normal_gc, x, y0, 1, y1 - y0);
+  x_fill_rectangle (f, f->output_data.x->normal_gc, x, y0, 1, y1 - y0, false);
 #else
   XDrawLine (FRAME_X_DISPLAY (f), FRAME_X_DRAWABLE (f),
 	     f->output_data.x->normal_gc, x, y0, x, y1);
@@ -1639,13 +1744,13 @@ x_draw_window_divider (struct window *w, int x0, int x1, int y0, int y1)
     {
       XSetForeground (display, f->output_data.x->normal_gc, color_first);
       x_fill_rectangle (f, f->output_data.x->normal_gc,
-			x0, y0, 1, y1 - y0);
+			x0, y0, 1, y1 - y0, false);
       XSetForeground (display, f->output_data.x->normal_gc, color);
       x_fill_rectangle (f, f->output_data.x->normal_gc,
-			x0 + 1, y0, x1 - x0 - 2, y1 - y0);
+			x0 + 1, y0, x1 - x0 - 2, y1 - y0, false);
       XSetForeground (display, f->output_data.x->normal_gc, color_last);
       x_fill_rectangle (f, f->output_data.x->normal_gc,
-			x1 - 1, y0, 1, y1 - y0);
+			x1 - 1, y0, 1, y1 - y0, false);
     }
   else if ((x1 - x0 > y1 - y0) && (y1 - y0 >= 3))
     /* A horizontal divider, at least three pixels high: Draw first and
@@ -1653,13 +1758,13 @@ x_draw_window_divider (struct window *w, int x0, int x1, int y0, int y1)
     {
       XSetForeground (display, f->output_data.x->normal_gc, color_first);
       x_fill_rectangle (f, f->output_data.x->normal_gc,
-			x0, y0, x1 - x0, 1);
+			x0, y0, x1 - x0, 1, false);
       XSetForeground (display, f->output_data.x->normal_gc, color);
       x_fill_rectangle (f, f->output_data.x->normal_gc,
-			x0, y0 + 1, x1 - x0, y1 - y0 - 2);
+			x0, y0 + 1, x1 - x0, y1 - y0 - 2, false);
       XSetForeground (display, f->output_data.x->normal_gc, color_last);
       x_fill_rectangle (f, f->output_data.x->normal_gc,
-			x0, y1 - 1, x1 - x0, 1);
+			x0, y1 - 1, x1 - x0, 1, false);
     }
   else
     {
@@ -1667,7 +1772,7 @@ x_draw_window_divider (struct window *w, int x0, int x1, int y0, int y1)
        differently.  */
       XSetForeground (display, f->output_data.x->normal_gc, color);
       x_fill_rectangle (f, f->output_data.x->normal_gc,
-			x0, y0, x1 - x0, y1 - y0);
+			x0, y0, x1 - x0, y1 - y0, false);
     }
 }
 
@@ -1748,6 +1853,37 @@ XTframe_up_to_date (struct frame *f)
   FRAME_MOUSE_UPDATE (f);
   if (!buffer_flipping_blocked_p () && FRAME_X_NEED_BUFFER_FLIP (f))
     show_back_buffer (f);
+
+#ifdef HAVE_XSYNC
+  if (FRAME_X_OUTPUT (f)->sync_end_pending_p
+      && FRAME_X_BASIC_COUNTER (f) != None)
+    {
+      XSyncSetCounter (FRAME_X_DISPLAY (f),
+		       FRAME_X_BASIC_COUNTER (f),
+		       FRAME_X_OUTPUT (f)->pending_basic_counter_value);
+      FRAME_X_OUTPUT (f)->sync_end_pending_p = false;
+    }
+
+  if (FRAME_X_OUTPUT (f)->ext_sync_end_pending_p
+      && FRAME_X_EXTENDED_COUNTER (f) != None)
+    {
+      XSyncValue add;
+      Bool overflow_p;
+
+      XSyncIntToValue (&add, 1);
+      XSyncValueAdd (&FRAME_X_OUTPUT (f)->current_extended_counter_value,
+		     add, add, &overflow_p);
+
+      if (overflow_p)
+	emacs_abort ();
+
+      XSyncSetCounter (FRAME_X_DISPLAY (f),
+		       FRAME_X_EXTENDED_COUNTER (f),
+		       FRAME_X_OUTPUT (f)->current_extended_counter_value);
+
+      FRAME_X_OUTPUT (f)->ext_sync_end_pending_p = false;
+    }
+#endif
   unblock_input ();
 }
 
@@ -1792,10 +1928,10 @@ x_clear_under_internal_border (struct frame *f)
 	  GC gc = f->output_data.x->normal_gc;
 
 	  XSetForeground (display, gc, color);
-	  x_fill_rectangle (f, gc, 0, margin, width, border);
-	  x_fill_rectangle (f, gc, 0, 0, border, height);
-	  x_fill_rectangle (f, gc, width - border, 0, border, height);
-	  x_fill_rectangle (f, gc, 0, height - border, width, border);
+	  x_fill_rectangle (f, gc, 0, margin, width, border, false);
+	  x_fill_rectangle (f, gc, 0, 0, border, height, false);
+	  x_fill_rectangle (f, gc, width - border, 0, border, height, false);
+	  x_fill_rectangle (f, gc, 0, height - border, width, border, false);
 	  XSetForeground (display, gc, FRAME_FOREGROUND_PIXEL (f));
 	}
       else
@@ -1862,9 +1998,9 @@ x_after_update_window_line (struct window *w, struct glyph_row *desired_row)
 	    GC gc = f->output_data.x->normal_gc;
 
 	    XSetForeground (display, gc, color);
-	    x_fill_rectangle (f, gc, 0, y, width, height);
+	    x_fill_rectangle (f, gc, 0, y, width, height, true);
 	    x_fill_rectangle (f, gc, FRAME_PIXEL_WIDTH (f) - width, y,
-			      width, height);
+			      width, height, true);
 	    XSetForeground (display, gc, FRAME_FOREGROUND_PIXEL (f));
 	  }
 	else
@@ -1898,9 +2034,10 @@ x_draw_fringe_bitmap (struct window *w, struct glyph_row *row, struct draw_fring
       if (face->stipple)
 	XSetFillStyle (display, face->gc, FillOpaqueStippled);
       else
-	XSetForeground (display, face->gc, face->background);
+	XSetBackground (display, face->gc, face->background);
 
-      x_fill_rectangle (f, face->gc, p->bx, p->by, p->nx, p->ny);
+      x_clear_rectangle (f, face->gc, p->bx, p->by, p->nx, p->ny,
+			 true);
 
       if (!face->stipple)
 	XSetForeground (display, face->gc, face->foreground);
@@ -1927,14 +2064,29 @@ x_draw_fringe_bitmap (struct window *w, struct glyph_row *row, struct draw_fring
     {
       Drawable drawable = FRAME_X_DRAWABLE (f);
       char *bits;
-      Pixmap pixmap, clipmask = (Pixmap) 0;
-      int depth = DefaultDepthOfScreen (FRAME_X_SCREEN (f));
+      Pixmap pixmap, clipmask = None;
+      int depth = FRAME_DISPLAY_INFO (f)->n_planes;
       XGCValues gcv;
+      unsigned long background = face->background;
+#ifdef HAVE_XRENDER
+      Picture picture = None;
+      XRenderPictureAttributes attrs;
+
+      memset (&attrs, 0, sizeof attrs);
+#endif
 
       if (p->wd > 8)
 	bits = (char *) (p->bits + p->dh);
       else
 	bits = (char *) p->bits + p->dh;
+
+      if (FRAME_DISPLAY_INFO (f)->alpha_bits)
+	{
+	  background = (background & ~FRAME_DISPLAY_INFO (f)->alpha_mask);
+	  background |= (((unsigned long) (f->alpha_background * 0xffff)
+			  >> (16 - FRAME_DISPLAY_INFO (f)->alpha_bits))
+			 << FRAME_DISPLAY_INFO (f)->alpha_offset);
+	}
 
       /* Draw the bitmap.  I believe these small pixmaps can be cached
 	 by the server.  */
@@ -1943,7 +2095,15 @@ x_draw_fringe_bitmap (struct window *w, struct glyph_row *row, struct draw_fring
 					     ? (p->overlay_p ? face->background
 						: f->output_data.x->cursor_pixel)
 					     : face->foreground),
-					    face->background, depth);
+					    background, depth);
+
+#ifdef HAVE_XRENDER
+      if (FRAME_X_PICTURE_FORMAT (f)
+	  && (x_xr_ensure_picture (f), FRAME_X_PICTURE (f)))
+	picture = XRenderCreatePicture (display, pixmap,
+					FRAME_X_PICTURE_FORMAT (f),
+					0, &attrs);
+#endif
 
       if (p->overlay_p)
 	{
@@ -1951,14 +2111,43 @@ x_draw_fringe_bitmap (struct window *w, struct glyph_row *row, struct draw_fring
 						  FRAME_DISPLAY_INFO (f)->root_window,
 						  bits, p->wd, p->h,
 						  1, 0, 1);
-	  gcv.clip_mask = clipmask;
-	  gcv.clip_x_origin = p->x;
-	  gcv.clip_y_origin = p->y;
-	  XChangeGC (display, gc, GCClipMask | GCClipXOrigin | GCClipYOrigin, &gcv);
+
+#ifdef HAVE_XRENDER
+	  if (picture != None)
+	    {
+	      attrs.clip_mask = clipmask;
+	      attrs.clip_x_origin = p->x;
+	      attrs.clip_y_origin = p->y;
+
+	      XRenderChangePicture (display, FRAME_X_PICTURE (f),
+				    CPClipMask | CPClipXOrigin | CPClipYOrigin,
+				    &attrs);
+	    }
+	  else
+#endif
+	    {
+	      gcv.clip_mask = clipmask;
+	      gcv.clip_x_origin = p->x;
+	      gcv.clip_y_origin = p->y;
+	      XChangeGC (display, gc, GCClipMask | GCClipXOrigin | GCClipYOrigin, &gcv);
+	    }
 	}
 
-      XCopyArea (display, pixmap, drawable, gc, 0, 0,
-		 p->wd, p->h, p->x, p->y);
+#ifdef HAVE_XRENDER
+      if (picture != None)
+	{
+	  x_xr_apply_ext_clip (f, gc);
+	  XRenderComposite (display, PictOpSrc, picture,
+			    None, FRAME_X_PICTURE (f),
+			    0, 0, 0, 0, p->x, p->y, p->wd, p->h);
+	  x_xr_reset_ext_clip (f);
+
+	  XRenderFreePicture (display, picture);
+	}
+      else
+#endif
+	XCopyArea (display, pixmap, drawable, gc, 0, 0,
+		   p->wd, p->h, p->x, p->y);
       XFreePixmap (display, pixmap);
 
       if (p->overlay_p)
@@ -2201,12 +2390,9 @@ x_compute_glyph_string_overhangs (struct glyph_string *s)
 static void
 x_clear_glyph_string_rect (struct glyph_string *s, int x, int y, int w, int h)
 {
-  Display *display = FRAME_X_DISPLAY (s->f);
-  XGCValues xgcv;
-  XGetGCValues (display, s->gc, GCForeground | GCBackground, &xgcv);
-  XSetForeground (display, s->gc, xgcv.background);
-  x_fill_rectangle (s->f, s->gc, x, y, w, h);
-  XSetForeground (display, s->gc, xgcv.foreground);
+  x_clear_rectangle (s->f, s->gc, x, y, w, h,
+		     (s->first_glyph->type != STRETCH_GLYPH
+		      || s->hl != DRAW_CURSOR));
 }
 
 
@@ -2232,9 +2418,10 @@ x_draw_glyph_string_background (struct glyph_string *s, bool force_p)
 	  /* Fill background with a stipple pattern.  */
 	  XSetFillStyle (display, s->gc, FillOpaqueStippled);
 	  x_fill_rectangle (s->f, s->gc, s->x,
-			  s->y + box_line_width,
-			  s->background_width,
-			  s->height - 2 * box_line_width);
+			    s->y + box_line_width,
+			    s->background_width,
+			    s->height - 2 * box_line_width,
+			    false);
 	  XSetFillStyle (display, s->gc, FillSolid);
 	  s->background_filled_p = true;
 	}
@@ -2329,7 +2516,8 @@ x_draw_glyph_string_foreground (struct glyph_string *s)
 		  x_fill_rectangle (s->f, s->gc, s->x,
 				    s->y + box_line_width,
 				    s->background_width,
-				    s->height - 2 * box_line_width);
+				    s->height - 2 * box_line_width,
+				    false);
 		  XSetFillStyle (display, s->gc, FillSolid);
 		}
 	      else
@@ -2779,12 +2967,12 @@ void
 x_query_colors (struct frame *f, XColor *colors, int ncolors)
 {
   struct x_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
+  int i;
 
   if (dpyinfo->red_bits > 0)
     {
       /* For TrueColor displays, we can decompose the RGB value
 	 directly.  */
-      int i;
       unsigned int rmult, gmult, bmult;
       unsigned int rmask, gmask, bmask;
 
@@ -2840,12 +3028,23 @@ x_query_colors (struct frame *f, XColor *colors, int ncolors)
   XQueryColors (FRAME_X_DISPLAY (f), FRAME_X_COLORMAP (f), colors, ncolors);
 }
 
-/* Store F's background color into *BGCOLOR.  */
+/* Store F's real background color into *BGCOLOR.  */
 
 static void
 x_query_frame_background_color (struct frame *f, XColor *bgcolor)
 {
-  bgcolor->pixel = FRAME_BACKGROUND_PIXEL (f);
+  unsigned long background = FRAME_BACKGROUND_PIXEL (f);
+
+  if (FRAME_DISPLAY_INFO (f)->alpha_bits)
+    {
+      background = (background & ~FRAME_DISPLAY_INFO (f)->alpha_mask);
+      background |= (((unsigned long) (f->alpha_background * 0xffff)
+		      >> (16 - FRAME_DISPLAY_INFO (f)->alpha_bits))
+		     << FRAME_DISPLAY_INFO (f)->alpha_offset);
+    }
+
+  bgcolor->pixel = background;
+
   x_query_colors (f, bgcolor, 1);
 }
 
@@ -2919,34 +3118,55 @@ x_alloc_nearest_color_1 (Display *dpy, Colormap cmap, XColor *color)
   if (rc == 0)
     {
       /* If we got to this point, the colormap is full, so we're going
-	 to try to get the next closest color.  The algorithm used is
+	 to try and get the next closest color.  The algorithm used is
 	 a least-squares matching, which is what X uses for closest
 	 color matching with StaticColor visuals.  */
-      int nearest, i;
-      int max_color_delta = 255;
-      int max_delta = 3 * max_color_delta;
-      int nearest_delta = max_delta + 1;
-      int ncells;
-      const XColor *cells = x_color_cells (dpy, &ncells);
 
-      for (nearest = i = 0; i < ncells; ++i)
+      const XColor *cells;
+      int no_cells;
+      int nearest;
+      long nearest_delta, trial_delta;
+      int x;
+      Status status;
+
+      cells = x_color_cells (dpy, &no_cells);
+
+      nearest = 0;
+      /* I'm assuming CSE so I'm not going to condense this. */
+      nearest_delta = ((((color->red >> 8) - (cells[0].red >> 8))
+			* ((color->red >> 8) - (cells[0].red >> 8)))
+		       + (((color->green >> 8) - (cells[0].green >> 8))
+			  * ((color->green >> 8) - (cells[0].green >> 8)))
+		       + (((color->blue >> 8) - (cells[0].blue >> 8))
+			  * ((color->blue >> 8) - (cells[0].blue >> 8))));
+      for (x = 1; x < no_cells; x++)
 	{
-	  int dred   = (color->red   >> 8) - (cells[i].red   >> 8);
-	  int dgreen = (color->green >> 8) - (cells[i].green >> 8);
-	  int dblue  = (color->blue  >> 8) - (cells[i].blue  >> 8);
-	  int delta = dred * dred + dgreen * dgreen + dblue * dblue;
-
-	  if (delta < nearest_delta)
+	  trial_delta = ((((color->red >> 8) - (cells[x].red >> 8))
+			  * ((color->red >> 8) - (cells[x].red >> 8)))
+			 + (((color->green >> 8) - (cells[x].green >> 8))
+			    * ((color->green >> 8) - (cells[x].green >> 8)))
+			 + (((color->blue >> 8) - (cells[x].blue >> 8))
+			    * ((color->blue >> 8) - (cells[x].blue >> 8))));
+	  if (trial_delta < nearest_delta)
 	    {
-	      nearest = i;
-	      nearest_delta = delta;
+	      XColor temp;
+	      temp.red = cells[x].red;
+	      temp.green = cells[x].green;
+	      temp.blue = cells[x].blue;
+	      status = XAllocColor (dpy, cmap, &temp);
+	      if (status)
+		{
+		  nearest = x;
+		  nearest_delta = trial_delta;
+		}
 	    }
 	}
-
-      color->red   = cells[nearest].red;
+      color->red = cells[nearest].red;
       color->green = cells[nearest].green;
-      color->blue  = cells[nearest].blue;
-      rc = XAllocColor (dpy, cmap, color) != 0;
+      color->blue = cells[nearest].blue;
+      status = XAllocColor (dpy, cmap, color);
+
+      rc = status != 0;
     }
   else
     {
@@ -2991,7 +3211,9 @@ x_alloc_nearest_color (struct frame *f, Colormap cmap, XColor *color)
 
   gamma_correct (f, color);
 
-  if (dpyinfo->red_bits > 0)
+  if (dpyinfo->red_bits > 0
+      && (dpyinfo->n_planes != 32
+	  || dpyinfo->alpha_bits > 0))
     {
       color->pixel = x_make_truecolor_pixel (dpyinfo,
 					     color->red,
@@ -3245,7 +3467,7 @@ x_draw_relief_rect (struct frame *f,
   if (left_p)
     {
       x_fill_rectangle (f, top_left_gc, left_x, top_y,
-			vwidth, bottom_y + 1 - top_y);
+			vwidth, bottom_y + 1 - top_y, false);
       if (top_p)
 	corners |= 1 << CORNER_TOP_LEFT;
       if (bot_p)
@@ -3254,7 +3476,7 @@ x_draw_relief_rect (struct frame *f,
   if (right_p)
     {
       x_fill_rectangle (f, bottom_right_gc, right_x + 1 - vwidth, top_y,
-			vwidth, bottom_y + 1 - top_y);
+			vwidth, bottom_y + 1 - top_y, false);
       if (top_p)
 	corners |= 1 << CORNER_TOP_RIGHT;
       if (bot_p)
@@ -3264,7 +3486,7 @@ x_draw_relief_rect (struct frame *f,
     {
       if (!right_p)
 	x_fill_rectangle (f, top_left_gc, left_x, top_y,
-			  right_x + 1 - left_x, hwidth);
+			  right_x + 1 - left_x, hwidth, false);
       else
 	x_fill_trapezoid_for_relief (f, top_left_gc, left_x, top_y,
 				     right_x + 1 - left_x, hwidth, 1);
@@ -3273,7 +3495,7 @@ x_draw_relief_rect (struct frame *f,
     {
       if (!left_p)
 	x_fill_rectangle (f, bottom_right_gc, left_x, bottom_y + 1 - hwidth,
-			  right_x + 1 - left_x, hwidth);
+			  right_x + 1 - left_x, hwidth, false);
       else
 	x_fill_trapezoid_for_relief (f, bottom_right_gc,
 				     left_x, bottom_y + 1 - hwidth,
@@ -3281,10 +3503,10 @@ x_draw_relief_rect (struct frame *f,
     }
   if (left_p && vwidth > 1)
     x_fill_rectangle (f, bottom_right_gc, left_x, top_y,
-		      1, bottom_y + 1 - top_y);
+		      1, bottom_y + 1 - top_y, false);
   if (top_p && hwidth > 1)
     x_fill_rectangle (f, bottom_right_gc, left_x, top_y,
-		      right_x + 1 - left_x, 1);
+		      right_x + 1 - left_x, 1, false);
   if (corners)
     {
       XSetBackground (FRAME_X_DISPLAY (f), top_left_gc,
@@ -3406,21 +3628,25 @@ x_draw_box_rect (struct glyph_string *s,
 
   /* Top.  */
   x_fill_rectangle (s->f, s->gc,
-		  left_x, top_y, right_x - left_x + 1, hwidth);
+		    left_x, top_y, right_x - left_x + 1, hwidth,
+		    false);
 
   /* Left.  */
   if (left_p)
     x_fill_rectangle (s->f, s->gc,
-		    left_x, top_y, vwidth, bottom_y - top_y + 1);
+		      left_x, top_y, vwidth, bottom_y - top_y + 1,
+		      false);
 
   /* Bottom.  */
   x_fill_rectangle (s->f, s->gc,
-		  left_x, bottom_y - hwidth + 1, right_x - left_x + 1, hwidth);
+		    left_x, bottom_y - hwidth + 1, right_x - left_x + 1, hwidth,
+		    false);
 
   /* Right.  */
   if (right_p)
     x_fill_rectangle (s->f, s->gc,
-		    right_x - vwidth + 1, top_y, vwidth, bottom_y - top_y + 1);
+		      right_x - vwidth + 1, top_y, vwidth, bottom_y - top_y + 1,
+		      false);
 
   XSetForeground (display, s->gc, xgcv.foreground);
   x_reset_clip_rectangles (s->f, s->gc);
@@ -3835,7 +4061,7 @@ x_draw_glyph_string_bg_rect (struct glyph_string *s, int x, int y, int w, int h)
 
       /* Fill background with a stipple pattern.  */
       XSetFillStyle (display, s->gc, FillOpaqueStippled);
-      x_fill_rectangle (s->f, s->gc, x, y, w, h);
+      x_fill_rectangle (s->f, s->gc, x, y, w, h, false);
       XSetFillStyle (display, s->gc, FillSolid);
     }
   else
@@ -3891,8 +4117,7 @@ x_draw_image_glyph_string (struct glyph_string *s)
 	  /* Create a pixmap as large as the glyph string.  Fill it
 	     with the background color.  Copy the image to it, using
 	     its mask.  Copy the temporary pixmap to the display.  */
-	  Screen *screen = FRAME_X_SCREEN (s->f);
-	  int depth = DefaultDepthOfScreen (screen);
+	  int depth = FRAME_DISPLAY_INFO (s->f)->n_planes;
 
 	  /* Create a pixmap as large as the glyph string.  */
           pixmap = XCreatePixmap (display, FRAME_X_DRAWABLE (s->f),
@@ -3917,12 +4142,34 @@ x_draw_image_glyph_string (struct glyph_string *s)
 	  else
 	    {
 	      XGCValues xgcv;
-	      XGetGCValues (display, s->gc, GCForeground | GCBackground,
-			    &xgcv);
-	      XSetForeground (display, s->gc, xgcv.background);
-	      XFillRectangle (display, pixmap, s->gc,
-			      0, 0, s->background_width, s->height);
-	      XSetForeground (display, s->gc, xgcv.foreground);
+#if defined HAVE_XRENDER && (RENDER_MAJOR > 0 || (RENDER_MINOR >= 2))
+	      if (FRAME_DISPLAY_INFO (s->f)->alpha_bits
+		  && FRAME_CHECK_XR_VERSION (s->f, 0, 2)
+		  && FRAME_X_PICTURE_FORMAT (s->f))
+		{
+		  XRenderColor xc;
+		  XRenderPictureAttributes attrs;
+		  Picture pict;
+		  memset (&attrs, 0, sizeof attrs);
+
+		  pict = XRenderCreatePicture (display, pixmap,
+					       FRAME_X_PICTURE_FORMAT (s->f),
+					       0, &attrs);
+		  x_xrender_color_from_gc_background (s->f, s->gc, &xc, true);
+		  XRenderFillRectangle (FRAME_X_DISPLAY (s->f), PictOpSrc, pict,
+					&xc, 0, 0, s->background_width, s->height);
+		  XRenderFreePicture (display, pict);
+		}
+	      else
+#endif
+		{
+		  XGetGCValues (display, s->gc, GCForeground | GCBackground,
+				&xgcv);
+		  XSetForeground (display, s->gc, xgcv.background);
+		  XFillRectangle (display, pixmap, s->gc,
+				  0, 0, s->background_width, s->height);
+		  XSetForeground (display, s->gc, xgcv.foreground);
+		}
 	    }
 	}
       else
@@ -4041,7 +4288,7 @@ x_draw_stretch_glyph_string (struct glyph_string *s)
 	    {
 	      /* Fill background with a stipple pattern.  */
 	      XSetFillStyle (display, gc, FillOpaqueStippled);
-	      x_fill_rectangle (s->f, gc, x, y, w, h);
+	      x_fill_rectangle (s->f, gc, x, y, w, h, true);
 	      XSetFillStyle (display, gc, FillSolid);
 	    }
 	  else
@@ -4049,7 +4296,7 @@ x_draw_stretch_glyph_string (struct glyph_string *s)
 	      XGCValues xgcv;
 	      XGetGCValues (display, gc, GCForeground | GCBackground, &xgcv);
 	      XSetForeground (display, gc, xgcv.background);
-	      x_fill_rectangle (s->f, gc, x, y, w, h);
+	      x_fill_rectangle (s->f, gc, x, y, w, h, true);
 	      XSetForeground (display, gc, xgcv.foreground);
 	    }
 
@@ -4399,7 +4646,8 @@ x_draw_glyph_string (struct glyph_string *s)
               y = s->ybase + position;
               if (s->face->underline_defaulted_p)
                 x_fill_rectangle (s->f, s->gc,
-				  s->x, y, decoration_width, thickness);
+				  s->x, y, decoration_width, thickness,
+				  false);
               else
                 {
                   Display *display = FRAME_X_DISPLAY (s->f);
@@ -4407,7 +4655,8 @@ x_draw_glyph_string (struct glyph_string *s)
                   XGetGCValues (display, s->gc, GCForeground, &xgcv);
                   XSetForeground (display, s->gc, s->face->underline_color);
                   x_fill_rectangle (s->f, s->gc,
-				    s->x, y, decoration_width, thickness);
+				    s->x, y, decoration_width, thickness,
+				    false);
                   XSetForeground (display, s->gc, xgcv.foreground);
                 }
             }
@@ -4419,7 +4668,7 @@ x_draw_glyph_string (struct glyph_string *s)
 
 	  if (s->face->overline_color_defaulted_p)
 	    x_fill_rectangle (s->f, s->gc, s->x, s->y + dy,
-			      decoration_width, h);
+			      decoration_width, h, false);
 	  else
 	    {
               Display *display = FRAME_X_DISPLAY (s->f);
@@ -4427,7 +4676,7 @@ x_draw_glyph_string (struct glyph_string *s)
 	      XGetGCValues (display, s->gc, GCForeground, &xgcv);
 	      XSetForeground (display, s->gc, s->face->overline_color);
 	      x_fill_rectangle (s->f, s->gc, s->x, s->y + dy,
-				decoration_width, h);
+				decoration_width, h, false);
 	      XSetForeground (display, s->gc, xgcv.foreground);
 	    }
 	}
@@ -4449,7 +4698,7 @@ x_draw_glyph_string (struct glyph_string *s)
 
 	  if (s->face->strike_through_color_defaulted_p)
 	    x_fill_rectangle (s->f, s->gc, s->x, glyph_y + dy,
-			    s->width, h);
+			      s->width, h, false);
 	  else
 	    {
               Display *display = FRAME_X_DISPLAY (s->f);
@@ -4457,7 +4706,7 @@ x_draw_glyph_string (struct glyph_string *s)
 	      XGetGCValues (display, s->gc, GCForeground, &xgcv);
 	      XSetForeground (display, s->gc, s->face->strike_through_color);
 	      x_fill_rectangle (s->f, s->gc, s->x, glyph_y + dy,
-				decoration_width, h);
+				decoration_width, h, false);
 	      XSetForeground (display, s->gc, xgcv.foreground);
 	    }
 	}
@@ -4569,20 +4818,22 @@ x_clear_area (struct frame *f, int x, int y, int width, int height)
   x_end_cr_clip (f);
 #else
 #ifndef USE_GTK
-  if (FRAME_X_DOUBLE_BUFFERED_P (f))
+  if (FRAME_X_DOUBLE_BUFFERED_P (f)
+      || f->alpha_background != 1.0)
 #endif
     {
 #if defined HAVE_XRENDER && \
   (RENDER_MAJOR > 0 || (RENDER_MINOR >= 2))
       x_xr_ensure_picture (f);
-      if (FRAME_X_PICTURE (f) != None
+      if (FRAME_DISPLAY_INFO (f)->alpha_bits
+	  && FRAME_X_PICTURE (f) != None
 	  && FRAME_CHECK_XR_VERSION (f, 0, 2))
 	{
 	  XRenderColor xc;
-	  GC gc = f->output_data.x->reverse_gc;
+	  GC gc = f->output_data.x->normal_gc;
 
 	  x_xr_apply_ext_clip (f, gc);
-	  x_xrender_color_from_gc_foreground (f, gc, &xc);
+	  x_xrender_color_from_gc_background (f, gc, &xc, true);
 	  XRenderFillRectangle (FRAME_X_DISPLAY (f),
 				PictOpSrc, FRAME_X_PICTURE (f),
 				&xc, x, y, width, height);
@@ -5175,10 +5426,13 @@ x_focus_changed (int type, int state, struct x_display_info *dpyinfo, struct fra
 #ifdef USE_GTK
       GtkWidget *widget;
 
-      gtk_im_context_focus_in (FRAME_X_OUTPUT (frame)->im_context);
-      widget = FRAME_GTK_OUTER_WIDGET (frame);
-      gtk_im_context_set_client_window (FRAME_X_OUTPUT (frame)->im_context,
-					gtk_widget_get_window (widget));
+      if (x_gtk_use_native_input)
+	{
+	  gtk_im_context_focus_in (FRAME_X_OUTPUT (frame)->im_context);
+	  widget = FRAME_GTK_OUTER_WIDGET (frame);
+	  gtk_im_context_set_client_window (FRAME_X_OUTPUT (frame)->im_context,
+					    gtk_widget_get_window (widget));
+	}
 #endif
 #endif
     }
@@ -5199,8 +5453,11 @@ x_focus_changed (int type, int state, struct x_display_info *dpyinfo, struct fra
       if (FRAME_XIC (frame))
         XUnsetICFocus (FRAME_XIC (frame));
 #ifdef USE_GTK
-      gtk_im_context_focus_out (FRAME_X_OUTPUT (frame)->im_context);
-      gtk_im_context_set_client_window (FRAME_X_OUTPUT (frame)->im_context, NULL);
+      if (x_gtk_use_native_input)
+	{
+	  gtk_im_context_focus_out (FRAME_X_OUTPUT (frame)->im_context);
+	  gtk_im_context_set_client_window (FRAME_X_OUTPUT (frame)->im_context, NULL);
+	}
 #endif
 #endif
       if (frame->pointer_invisible)
@@ -5567,7 +5824,8 @@ x_find_modifier_meanings (struct x_display_info *dpyinfo)
   dpyinfo->hyper_mod_mask = 0;
 
 #ifdef HAVE_XKB
-  if (dpyinfo->xkb_desc)
+  if (dpyinfo->xkb_desc
+      && dpyinfo->xkb_desc->server)
     {
       for (i = 0; i < XkbNumVirtualMods; i++)
 	{
@@ -5609,6 +5867,14 @@ x_find_modifier_meanings (struct x_display_info *dpyinfo)
   syms = XGetKeyboardMapping (dpyinfo->display,
 			      min_code, max_code - min_code + 1,
 			      &syms_per_code);
+
+  if (!syms)
+    {
+      dpyinfo->meta_mod_mask = Mod1Mask;
+      dpyinfo->super_mod_mask = Mod2Mask;
+      return;
+    }
+
   mods = XGetModifierMapping (dpyinfo->display);
 
   /* Scan the modifier table to see which modifier bits the Meta and
@@ -8840,6 +9106,47 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		goto done;
               }
 
+
+	    if (event->xclient.data.l[0] == dpyinfo->Xatom_net_wm_ping
+		&& event->xclient.format == 32)
+	      {
+		XEvent send_event = *event;
+
+		send_event.xclient.window = dpyinfo->root_window;
+		XSendEvent (dpyinfo->display, dpyinfo->root_window, False,
+			    SubstructureRedirectMask | SubstructureNotifyMask,
+			    &send_event);
+
+		*finish = X_EVENT_DROP;
+		goto done;
+	      }
+
+#if defined HAVE_XSYNC && !defined HAVE_GTK3
+	    if (event->xclient.data.l[0] == dpyinfo->Xatom_net_wm_sync_request
+		&& event->xclient.format == 32
+		&& dpyinfo->xsync_supported_p)
+	      {
+		struct frame *f
+		  = x_top_window_to_frame (dpyinfo,
+					   event->xclient.window);
+
+		if (f)
+		  {
+		    if (event->xclient.data.l[4] == 0)
+		      {
+			XSyncIntsToValue (&FRAME_X_OUTPUT (f)->pending_basic_counter_value,
+					  event->xclient.data.l[2], event->xclient.data.l[3]);
+			FRAME_X_OUTPUT (f)->sync_end_pending_p = true;
+		      }
+		    else if (event->xclient.data.l[4] == 1)
+		      FRAME_X_OUTPUT (f)->ext_sync_end_pending_p = true;
+
+		    *finish = X_EVENT_DROP;
+		    goto done;
+		  }
+	      }
+#endif
+
 	    goto done;
           }
 
@@ -9293,6 +9600,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 #endif
 	      f->output_data.x->has_been_visible = true;
 	    }
+
+	  x_update_opaque_region (f);
 
           if (not_hidden && iconified)
             {
@@ -12036,8 +12345,8 @@ x_draw_bar_cursor (struct window *w, struct glyph_row *row, int width, enum text
 	    x += cursor_glyph->pixel_width - width;
 
 	  x_fill_rectangle (f, gc, x,
-			  WINDOW_TO_FRAME_PIXEL_Y (w, w->phys_cursor.y),
-			  width, row->height);
+			    WINDOW_TO_FRAME_PIXEL_Y (w, w->phys_cursor.y),
+			    width, row->height, false);
 	}
       else /* HBAR_CURSOR */
 	{
@@ -12058,7 +12367,7 @@ x_draw_bar_cursor (struct window *w, struct glyph_row *row, int width, enum text
 	  x_fill_rectangle (f, gc, x,
 			    WINDOW_TO_FRAME_PIXEL_Y (w, w->phys_cursor.y +
                                                      row->height - width),
-                            w->phys_cursor_width - 1, width);
+                            w->phys_cursor_width - 1, width, false);
 	}
 
       x_reset_clip_rectangles (f, gc);
@@ -14497,8 +14806,18 @@ x_free_frame_resources (struct frame *f)
 
       tear_down_x_back_buffer (f);
       if (FRAME_X_WINDOW (f))
-          XDestroyWindow (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f));
+	XDestroyWindow (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f));
 #endif /* !USE_X_TOOLKIT */
+
+#ifdef HAVE_XSYNC
+      if (FRAME_X_BASIC_COUNTER (f) != None)
+	XSyncDestroyCounter (FRAME_X_DISPLAY (f),
+			     FRAME_X_BASIC_COUNTER (f));
+
+      if (FRAME_X_EXTENDED_COUNTER (f) != None)
+	XSyncDestroyCounter (FRAME_X_DISPLAY (f),
+			     FRAME_X_EXTENDED_COUNTER (f));
+#endif
 
       unload_color (f, FRAME_FOREGROUND_PIXEL (f));
       unload_color (f, FRAME_BACKGROUND_PIXEL (f));
@@ -15364,17 +15683,49 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 
   reset_mouse_highlight (&dpyinfo->mouse_highlight);
 
-  /* See if we can construct pixel values from RGB values.  */
-  if (dpyinfo->visual->class == TrueColor)
-    {
-      get_bits_and_offset (dpyinfo->visual->red_mask,
-                           &dpyinfo->red_bits, &dpyinfo->red_offset);
-      get_bits_and_offset (dpyinfo->visual->blue_mask,
-                           &dpyinfo->blue_bits, &dpyinfo->blue_offset);
-      get_bits_and_offset (dpyinfo->visual->green_mask,
-                           &dpyinfo->green_bits, &dpyinfo->green_offset);
-    }
+#ifdef HAVE_XRENDER
+  int event_base, error_base;
+  dpyinfo->xrender_supported_p
+    = XRenderQueryExtension (dpyinfo->display, &event_base, &error_base);
 
+  if (dpyinfo->xrender_supported_p)
+    {
+      if (!XRenderQueryVersion (dpyinfo->display, &dpyinfo->xrender_major,
+				&dpyinfo->xrender_minor))
+	dpyinfo->xrender_supported_p = false;
+      else
+	dpyinfo->pict_format = XRenderFindVisualFormat (dpyinfo->display,
+							dpyinfo->visual);
+    }
+#endif
+
+#ifdef HAVE_XSYNC
+  int xsync_event_base, xsync_error_base;
+  dpyinfo->xsync_supported_p
+    = XSyncQueryExtension (dpyinfo->display,
+			   &xsync_event_base,
+			   &xsync_error_base);
+
+  if (dpyinfo->xsync_supported_p)
+    dpyinfo->xsync_supported_p = XSyncInitialize (dpyinfo->display,
+						  &dpyinfo->xsync_major,
+						  &dpyinfo->xsync_minor);
+
+  {
+    AUTO_STRING (synchronizeResize, "synchronizeResize");
+    AUTO_STRING (SynchronizeResize, "SynchronizeResize");
+
+    Lisp_Object value = gui_display_get_resource (dpyinfo,
+						  synchronizeResize,
+						  SynchronizeResize,
+						  Qnil, Qnil);
+
+    if (STRINGP (value) &&
+	(!strcmp (SSDATA (value), "false")
+	 || !strcmp (SSDATA (value), "off")))
+      dpyinfo->xsync_supported_p = false;
+  }
+#endif
   /* See if a private colormap is requested.  */
   if (dpyinfo->visual == DefaultVisualOfScreen (dpyinfo->screen))
     {
@@ -15394,6 +15745,52 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
   else
     dpyinfo->cmap = XCreateColormap (dpyinfo->display, dpyinfo->root_window,
                                      dpyinfo->visual, AllocNone);
+
+  /* See if we can construct pixel values from RGB values.  */
+  if (dpyinfo->visual->class == TrueColor)
+    {
+      get_bits_and_offset (dpyinfo->visual->red_mask,
+                           &dpyinfo->red_bits, &dpyinfo->red_offset);
+      get_bits_and_offset (dpyinfo->visual->blue_mask,
+                           &dpyinfo->blue_bits, &dpyinfo->blue_offset);
+      get_bits_and_offset (dpyinfo->visual->green_mask,
+                           &dpyinfo->green_bits, &dpyinfo->green_offset);
+
+#ifdef HAVE_XRENDER
+      if (dpyinfo->pict_format)
+	{
+	  unsigned long channel_mask
+	    = ((unsigned long) dpyinfo->pict_format->direct.alphaMask
+	       << dpyinfo->pict_format->direct.alpha);
+
+	  if (channel_mask)
+	    get_bits_and_offset (channel_mask, &dpyinfo->alpha_bits,
+				 &dpyinfo->alpha_offset);
+	  dpyinfo->alpha_mask = channel_mask;
+	}
+      else
+#endif
+	{
+	  XColor xc;
+	  unsigned long alpha_mask;
+	  xc.red = 65535;
+	  xc.green = 65535;
+	  xc.blue = 65535;
+
+	  if (XAllocColor (dpyinfo->display,
+			   dpyinfo->cmap, &xc) != 0)
+	    {
+	      alpha_mask = xc.pixel & ~(dpyinfo->visual->red_mask
+					| dpyinfo->visual->blue_mask
+					| dpyinfo->visual->green_mask);
+
+	      if (alpha_mask)
+		get_bits_and_offset (alpha_mask, &dpyinfo->alpha_bits,
+				     &dpyinfo->alpha_offset);
+	      dpyinfo->alpha_mask = alpha_mask;
+	    }
+	}
+    }
 
 #ifdef HAVE_XDBE
   dpyinfo->supports_xdbe = false;
@@ -15507,22 +15904,6 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
     }
 #endif
 
-#ifdef HAVE_XRENDER
-  int event_base, error_base;
-  dpyinfo->xrender_supported_p
-    = XRenderQueryExtension (dpyinfo->display, &event_base, &error_base);
-
-  if (dpyinfo->xrender_supported_p)
-    {
-      if (!XRenderQueryVersion (dpyinfo->display, &dpyinfo->xrender_major,
-				&dpyinfo->xrender_minor))
-	dpyinfo->xrender_supported_p = false;
-      else
-	dpyinfo->pict_format = XRenderFindVisualFormat (dpyinfo->display,
-							dpyinfo->visual);
-    }
-#endif
-
 #ifdef HAVE_XFIXES
   int xfixes_event_base, xfixes_error_base;
   dpyinfo->xfixes_supported_p
@@ -15604,6 +15985,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("ATOM", Xatom_ATOM)
       ATOM_REFS_INIT ("ATOM_PAIR", Xatom_ATOM_PAIR)
       ATOM_REFS_INIT ("CLIPBOARD_MANAGER", Xatom_CLIPBOARD_MANAGER)
+      ATOM_REFS_INIT ("XATOM_COUNTER", Xatom_XEMBED_INFO)
       ATOM_REFS_INIT ("_XEMBED_INFO", Xatom_XEMBED_INFO)
       /* For properties of font.  */
       ATOM_REFS_INIT ("PIXEL_SIZE", Xatom_PIXEL_SIZE)
@@ -15638,6 +16020,9 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("_NET_FRAME_EXTENTS", Xatom_net_frame_extents)
       ATOM_REFS_INIT ("_NET_CURRENT_DESKTOP", Xatom_net_current_desktop)
       ATOM_REFS_INIT ("_NET_WORKAREA", Xatom_net_workarea)
+      ATOM_REFS_INIT ("_NET_WM_SYNC_REQUEST", Xatom_net_wm_sync_request)
+      ATOM_REFS_INIT ("_NET_WM_SYNC_REQUEST_COUNTER", Xatom_net_wm_sync_request_counter)
+      ATOM_REFS_INIT ("_NET_WM_FRAME_DRAWN", Xatom_net_wm_frame_drawn)
       /* Session management */
       ATOM_REFS_INIT ("SM_CLIENT_ID", Xatom_SM_CLIENT_ID)
       ATOM_REFS_INIT ("_XSETTINGS_SETTINGS", Xatom_xsettings_prop)
@@ -15645,6 +16030,8 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("_NET_WM_STATE_SKIP_TASKBAR", Xatom_net_wm_state_skip_taskbar)
       ATOM_REFS_INIT ("_NET_WM_STATE_ABOVE", Xatom_net_wm_state_above)
       ATOM_REFS_INIT ("_NET_WM_STATE_BELOW", Xatom_net_wm_state_below)
+      ATOM_REFS_INIT ("_NET_WM_OPAQUE_REGION", Xatom_net_wm_opaque_region)
+      ATOM_REFS_INIT ("_NET_WM_PING", Xatom_net_wm_ping)
 #ifdef HAVE_XKB
       ATOM_REFS_INIT ("Meta", Xatom_Meta)
       ATOM_REFS_INIT ("Super", Xatom_Super)
@@ -16181,7 +16568,8 @@ init_xterm (void)
 
 #ifdef HAVE_XRENDER
 void
-x_xrender_color_from_gc_foreground (struct frame *f, GC gc, XRenderColor *color)
+x_xrender_color_from_gc_foreground (struct frame *f, GC gc, XRenderColor *color,
+				    bool apply_alpha_background)
 {
   XGCValues xgcv;
   XColor xc;
@@ -16190,26 +16578,51 @@ x_xrender_color_from_gc_foreground (struct frame *f, GC gc, XRenderColor *color)
   xc.pixel = xgcv.foreground;
   x_query_colors (f, &xc, 1);
 
-  color->alpha = 65535;
-  color->red = xc.red;
-  color->blue = xc.blue;
-  color->green = xc.green;
+  color->alpha = (apply_alpha_background
+		  ? 65535 * f->alpha_background
+		  : 65535);
+
+  if (color->alpha == 65535)
+    {
+      color->red = xc.red;
+      color->blue = xc.blue;
+      color->green = xc.green;
+    }
+  else
+    {
+      color->red = (xc.red * color->alpha) / 65535;
+      color->blue = (xc.blue * color->alpha) / 65535;
+      color->green = (xc.green * color->alpha) / 65535;
+    }
 }
 
 void
-x_xrender_color_from_gc_background (struct frame *f, GC gc, XRenderColor *color)
+x_xrender_color_from_gc_background (struct frame *f, GC gc, XRenderColor *color,
+				    bool apply_alpha_background)
 {
   XGCValues xgcv;
   XColor xc;
 
   XGetGCValues (FRAME_X_DISPLAY (f), gc, GCBackground, &xgcv);
-  xc.pixel = xgcv.foreground;
+  xc.pixel = xgcv.background;
   x_query_colors (f, &xc, 1);
 
-  color->alpha = 65535;
-  color->red = xc.red;
-  color->blue = xc.blue;
-  color->green = xc.green;
+  color->alpha = (apply_alpha_background
+		  ? 65535 * f->alpha_background
+		  : 65535);
+
+  if (color->alpha == 65535)
+    {
+      color->red = xc.red;
+      color->blue = xc.blue;
+      color->green = xc.green;
+    }
+  else
+    {
+      color->red = (xc.red * color->alpha) / 65535;
+      color->blue = (xc.blue * color->alpha) / 65535;
+      color->green = (xc.green * color->alpha) / 65535;
+    }
 }
 #endif
 
