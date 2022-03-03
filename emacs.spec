@@ -4,8 +4,8 @@
 %def_enable nox
 
 Name: emacs
-Version: 27.2
-Release: alt1
+Version: 29.0.50
+Release: alt1.git1a923e5a
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -51,6 +51,8 @@ BuildRequires: libgpm-devel
 BuildRequires: libgif-devel
 BuildRequires: inotify-tools-devel
 BuildRequires: libXaw3d-devel libXaw-devel
+BuildRequires: libgccjit-devel
+BuildRequires: git
 
 %define obsolete_versioned() %(printf 'Provides: emacs26-%{1} = %version-%release\\nObsoletes: emacs26-%{1}\\n')
 
@@ -94,6 +96,8 @@ Provides: emacsen
 Summary: Things needed to run the GNU Emacs text editor
 Group: Editors
 Requires: emacs-base >= 0.0.5-alt2
+# TODO: without emacs-el installed emacs fails to start
+Requires: emacs-el = %version-%release
 Provides: %_libexecdir/emacs
 Provides: emacs-cedet = %version-%release
 Provides: emacs-gnus = %version-%release
@@ -195,7 +199,7 @@ the X Window System.
 
 You need to install this package only if you plan on exclusively using
 GNU Emacs without the X Window System (%name-athena or %name-gtk3
-will work both in X and out of X, but %name-nox will only work 
+will work both in X and out of X, but %name-nox will only work
 outside of X).
 
 %description common
@@ -248,7 +252,7 @@ sed -ri 's,(\.\./info/[[:alpha:]-]+),\1.info,g' doc/{emacs,misc}/*.texi
 
 %define Substage printf 'Substage #%%s. %%s:\\n'
 
-# We build few binaries (with X and without X support) 
+# We build few binaries (with X and without X support)
 # in several symmetric substages.
 
 %Substage 0 "Clear and create the build directories"
@@ -265,10 +269,16 @@ autoreconf -i -I m4
 %define _configure_script ../configure
 %define _configure_mostly --disable-build-details --sharedstatedir=/var \\\
 	--with-pop --with-png --with-jpeg --with-xpm --with-gif --with-tiff \\\
-	--with-xft --with-dbus --with-rsvg --with-wide-int --with-lcms2 --with-modules
+	--with-xft --with-dbus --with-rsvg --with-wide-int --with-lcms2 --with-modules \\\
+	--with-native-compilation --without-gconf --without-gsettings
+
+# TODO: Find why it is required. Also without this export emacs binary will not start.
+# Another issue is that alternatives link /usr/bin/emacs will not start even if we
+# explicitly export path below.
+export LIBRARY_PATH=%_libdir/gcc/x86_64-alt-linux/11
 
 pushd build-gtk3
-%configure %_configure_mostly --without-gpm --with-x-toolkit=gtk3 --with-cairo
+%configure %_configure_mostly --without-gpm --with-pgtk --with-cairo
 popd
 
 %if_enabled athena
@@ -285,7 +295,7 @@ pushd build-nox
 popd
 %endif
 
-%Substage 2 "Initial make all" 
+%Substage 2 "Initial make all"
 %make_build -C build-gtk3
 %if_enabled athena
 %make_build -C build-athena
@@ -294,7 +304,7 @@ popd
 %make_build -C build-nox
 %endif
 
-%Substage 3 "Make supplementary (and important) things only once (asymmetricly) 
+%Substage 3 "Make supplementary (and important) things only once (asymmetricly)
  (for possibly more capabilities -- in the X build)"
 
 pushd build-%stage3bin
@@ -302,7 +312,7 @@ make -C doc/emacs
 make -C doc/misc
 popd # build-%stage3bin
 
-%Substage 4 "Final make all (now that we have all patched Lisp code compiled, 
+%Substage 4 "Final make all (now that we have all patched Lisp code compiled,
  also a bit asymmetric), clean previous binaries"
 
 %define override_from_stage3() if [ ! '%stage3bin'=='%{1}' ]; then rm -rf etc leim; ln -s -f ../build-%stage3bin/{etc,leim} . ; fi
@@ -466,13 +476,16 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %dir %_emacs_datadir/%version
 %_emacs_datadir/%version/site-lisp
 
+%_libdir/emacs/%version/native-lisp
+
 %_emacs_datadir/%version/lisp/site-start.el
 %_emacs_sitestart_dir/*
 
-%_datadir/metainfo/emacs.appdata.xml
-%_desktopdir/%name.desktop
+%_desktopdir/*.desktop
 %_iconsdir/*/*/*/*
 %_man1dir/*.1*
+
+%_datadir/metainfo/%name.metainfo.xml
 
 %_includedir/emacs-module.h
 
@@ -492,6 +505,11 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Tue Dec 21 2021 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt1.git1a923e5a
+- 29.0.50-git1a923e5a
+- use native compilation
+- use pgtk version of gtk UI
+
 * Mon Dec 06 2021 Sergey Bolshakov <sbolshakov@altlinux.ru> 27.2-alt1
 - 27.2 released
 
@@ -863,7 +881,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 
 * Thu Feb 23 2006 Eugene Vlasov <eugvv@altlinux.ru> 22.0.50-alt0.9.20060223
 - New snapshot
-- Rediffed uk patch (ispell-local-dictionary-alist accept now any coding 
+- Rediffed uk patch (ispell-local-dictionary-alist accept now any coding
   system, supported by Emacs)
 
 * Sun Feb 12 2006 Eugene Vlasov <eugvv@altlinux.ru> 22.0.50-alt0.8.20060211
@@ -894,12 +912,12 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 - Build speedbar as separate package
 - Fix flyspell-buffer for large tex files (thanks to Igor Vlasenko for
   notifying)
-- Fix spell checking with aspell in locale coding other than dictionary 
+- Fix spell checking with aspell in locale coding other than dictionary
   coding (thanks to Igor Vlasenko for notifying)
 
 * Tue Nov 22 2005 Eugene Vlasov <eugvv@altlinux.ru> 22.0.50-alt0.5.20051122
 - New snapshot
-- Rediffed more-cyrillic-support patch, require cyrillic-codepages-setup 
+- Rediffed more-cyrillic-support patch, require cyrillic-codepages-setup
   only if purify-flag is nil (not while preparing to dump)
 - Disabled builtin compress function for installed .el files (used compress
   function from el-pkgutils)
@@ -1017,7 +1035,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 - Fixing spec to properly rebuild
 
 * Sat Jan 10 2004 Ott Alex <ott@altlinux.ru> 21.3-alt6
-- Name changed to emacs21 
+- Name changed to emacs21
 - Remove compression of .elc files
 - Remove dependence on speedbar
 - Remove gnus and dependence on it
@@ -1025,7 +1043,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 - Move emacs-pkgtools to emacs-base
 
 * Sun Nov 30 2003 Ott Alex <ott@altlinux.ru> 21.3-alt5
-- Reorganize package 
+- Reorganize package
 - move php-mode.el to emacs-prog-modes package
 
 * Wed Apr 09 2003 Stanislav Ievlev <inger@altlinux.ru> 21.3-alt4.1
@@ -1039,9 +1057,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
   by 21.2-alt11-clipboard.patch (lost in 21.3-alt1; patch3)
 
 * Tue Apr  1 2003 Ivan Zakharyaschev <imz@altlinux.ru> 21.3-alt2
-- built-in `load': always use the load-handler if it is present 
+- built-in `load': always use the load-handler if it is present
   (e.g. for compressed .elc's; fixes No. 0002355; patches 11 and 12);
-- lisp: 
+- lisp:
   + `vc-cvs-registered' function: split into parts for autoloading
     without any loops (No. 0002334 at bugs.altlinux.ru; patch13);
   + php-mode updated to 1.04;
@@ -1059,7 +1077,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
   + info manual reflects the support for various Cyrillic-based language-envs
     (based on the "uk" patch);
   + Ukrainian word for "Ukrainian" fixed in HELLO (No. 0002213);
-- spec & patches (not visible to a user): 
+- spec & patches (not visible to a user):
   + simplify the menu file (s:%%version:X11:);
   + include /usr/bin/* in emacs-common pkg (and exclude emacs-{nox,X11});
   + patch3 (clipboard): default xselection coding-system value is already correct upstream;
@@ -1077,12 +1095,12 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 
 
 * Mon Feb 10 2003 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt14
-- changes to better support various Cyrillic X fonts 
+- changes to better support various Cyrillic X fonts
   (news in patch33):
-  + faces.el: face-font-registry-alternatives: list the wide-spread 
+  + faces.el: face-font-registry-alternatives: list the wide-spread
     alternatives for Cyrillic iso8859-5 (microsoft-cp1251, koi8-u, koi8);
   + fontset.el: leave "ISO8859-5" as the REGISTRY-ENCODING for Cyrillic;
-  + fontset.el: change the FAMILY for Cyrillic from "*" (any) to nil 
+  + fontset.el: change the FAMILY for Cyrillic from "*" (any) to nil
     (the same a sthe default), because Cyrillic is like Latin: the family
     plays just hte same role;
   + describe koi8-c X font encoding (for now, just as an alias for koi8-u);
@@ -1094,7 +1112,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
     used to be brute), add only "Emacs.default.attributeFamily: fixed";
   + now, there is no need to specify rather brute values in localized
     /etc/X11/Xresources.* in order to get the right encoded Cyrillic font --
-    we get it without any special X resources, if the Cyrillic font is 
+    we get it without any special X resources, if the Cyrillic font is
     available (modify app-defaults accordingly!);
     (a part of the fix for No. 0000825, 0001478, 0001681; complete 0000997);
 - open bzipped2 .el files (as well as gzipped which was supported before)
@@ -1107,7 +1125,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 - add BuildRequires(install): bzip2-utils (to fix No. 0001911).
 
 * Sun Dec  8 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt12
-- files: 
+- files:
   + include non-el/elc files from lisp/ (mainly xpm; fixes No. 0001387);
   + exclude gnus/ from emacs-common (it was included in a previous revision);
   + compress .el-files in *-el pkgs;
@@ -1118,8 +1136,8 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 * Sun Nov 17 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt11
 - make possible primary X selection setting & pasting with mouse
   (in addition to clipboard manipulation with keys; fixes No. 1356);
-- pc-selection-mode: turn-offable; no conflict with traditional 
-  selection manipulation keys (like C-space; fixes No. 1357 at 
+- pc-selection-mode: turn-offable; no conflict with traditional
+  selection manipulation keys (like C-space; fixes No. 1357 at
   bugs.altlinux.ru);
 - lisp/ediff-diff.el: refine the check for valid ediff-diff-options;
 
@@ -1128,7 +1146,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
   (fixes No. 997 at bugs.altlinux.ru).
 
 * Fri Nov  8 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt9
-- make keys like C-h, M-x work even when the (say) Russian XKB 
+- make keys like C-h, M-x work even when the (say) Russian XKB
   group is active (patch5, discard almost the whole state if
   a certain modifier is detected; fixes No. 852 at bugs.altlinux.ru).
   (Please REPORT any related misbehaviors!)
@@ -1146,7 +1164,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
     WARNING: unless you reinstall emacs-speedbar, its info entry won't
     appear in the catalog;
 - gnus subpkg:
-  + Provides: gnus = %%name:%%version-%%release; Conflicts: gnus !=...; 
+  + Provides: gnus = %%name:%%version-%%release; Conflicts: gnus !=...;
     I suppose other Gnus pkgs should do the same;
   + move {emacs-mime,message}.info to this subpkg.
 
@@ -1156,25 +1174,25 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
   info and etc/, so other gnus should merely conflict with these ones).
 
 * Fri Jul 19 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt5
-- follow the convention about using POSIX locks (with fcntl(2)) for 
+- follow the convention about using POSIX locks (with fcntl(2)) for
   mailbox access (in movemail; nnmbox users take care on your own!);
-- drop privileges of movemail utility (no dot-locking in /var/mail/); 
+- drop privileges of movemail utility (no dot-locking in /var/mail/);
 - link with tinfo, not ncurses (everything is there in the latest release);
 - remove termcap from build deps;
-- lisp: drop speedbar.el{,c}, speedbar.info -- you will find it 
+- lisp: drop speedbar.el{,c}, speedbar.info -- you will find it
         in a separate pkg (Alex Ott <ottalex@narod.ru>);
 - etc: add TUTORIAL.ru (Alex Ott);
 - rcs-checkin: hide the dependencies on rcs (mhz).
 
 * Sun Apr 14 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt4
-- lisp: 
+- lisp:
   + add support for X Compound Text with Extended Segments
     in koi8-u and microsoft-cp1251 (koi8-r support already present
     in the offcial GNU release; this is the complete fix for \#786
     at bugs.altlinux.ru);
   + add cp1251 item to the list of choices for ispell coding;
 - package:
-  + correct preun-scripts (alternative management) (Sorry, you will 
+  + correct preun-scripts (alternative management) (Sorry, you will
     have to uninstall 21.2-alt3 manually with --noscripts);
 
 * Fri Apr 12 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt3
@@ -1182,7 +1200,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
   (to overcome the alternatives nightmare);
 
 * Fri Apr 12 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt2
-- package: 
+- package:
   + add Confilcts on older etcskel & app-defaults (the
     old ones use values considered bad for 21.2);
   + Groups of *-el subpkgs changed to Development/Other;
@@ -1192,22 +1210,22 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 * Mon Apr  8 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.2-alt1
 - new mainstream release (21.2):
   + now supports ICCCM Extended Segments in X selctions (fixes \#786 at
-    bugs.altlinux.ru) -- don't forget to sync etcskel's to use c-text 
+    bugs.altlinux.ru) -- don't forget to sync etcskel's to use c-text
     for selections;
-- lisp: 
+- lisp:
   + prefer clipboard over primary selection (the reasononig given in
     \#795 at bugs.altlinux.ru);
-  + the default value for selection-coding-system: 
+  + the default value for selection-coding-system:
     compound-text -> compound-text-with-extensions (this is the second part of
     the fix for \#786 at bugs.altlinux.ru)
-  + Encoded-kb mode indicator turned off in mainstream release, so 
+  + Encoded-kb mode indicator turned off in mainstream release, so
     we are not applying our previous patch any more;
 -config:
   + use "Emacs" class as a specifier for X resourcers (was: "emacs" name)
     (fixes \#764 at bugs.altlinux.ru) -- don't forget to sync /etc/Xresources;
 - spec-file:
   + dumbterm-for-compile patch regenerated;
-  + alternatives: 
+  + alternatives:
     * weights for alternatives shifted by %%{alternativeMajor}00;
     * removal in %%preun to avoid collisions;
 
@@ -1217,24 +1235,24 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 
 * Thu Feb 28 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.1-alt12
 - make co-existence with other Emacsen (XEmacs) easier:
-  + move the site start scripts to a separate pkg (emacsen-startscripts; 
+  + move the site start scripts to a separate pkg (emacsen-startscripts;
     they should be shared between GNU and X- Emacsen); buildreq rules for
     the directory with the scripts also moved to that pkg;
-  + emacs-{nox,X11} provide emacsen (should be also provided 
+  + emacs-{nox,X11} provide emacsen (should be also provided
     by XEmacs binaries);
-  + emacs-{nox,X11} require emacsen-startscripts (should be also required 
+  + emacs-{nox,X11} require emacsen-startscripts (should be also required
     by XEmacs binaries);
 
 * Sat Feb 25 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.1-alt11
-- get rid of the inconsistency in versions and documentation data between 
+- get rid of the inconsistency in versions and documentation data between
   emacs-X11 and emacs-nox variants (fixes \#601, \#612 in bugs.altlinux.ru)
   (%%build stage modified to achieve this);
 - add more strict %%release dependencies;
 - add support for loading bzipped2 .el/.elc; compress several large files;
 - lisp:
     + encoded-kbd: make indicator string shorter;
-    + cyrillic-codepages-setup: override `valid-codes' property with more 
-      correct values (this fixes hanging on C-x; Note: if you do 
+    + cyrillic-codepages-setup: override `valid-codes' property with more
+      correct values (this fixes hanging on C-x; Note: if you do
       codepage-setup manually, then it is not fixed for you);
 - config:
     + macros: rename noXlaunch -> TTYlaunch;
@@ -1247,17 +1265,17 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
     in other pkgs with Emacs Lisp code);
 
 * Sun Feb  9 2002 Ivan Zakharyaschev <imz@altlinux.ru> 21.1-alt10
-- lisp: 
+- lisp:
   + new version of php-mode (1.0.2); compile it;
     on site-start, initialize autoload of it (php-mode);
   + add more seamless support for Cyrillic language environments based
     on CP1251, CP866 and CP1125;
   + fix CP866 table;
 - config:
-  + special bindings for selection management discarded -- the defaults 
-    work fine (even for X); support for analogous KeyPad bindings added 
+  + special bindings for selection management discarded -- the defaults
+    work fine (even for X); support for analogous KeyPad bindings added
     (suggested by vyt@vzljot.ru);
-  + X resources: set our values for colour classes; use "Helv" font 
+  + X resources: set our values for colour classes; use "Helv" font
     family for the menu;
   + do not fail completely if the Flyspell feature fails;
   + mouse wheel support turned on;
@@ -1265,10 +1283,10 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
   + split the config into small parts;
 - menu: explicitly specify the X11-variant of emacs;
 - spec-file:
-  + Head: thrown away unused and recompiled sources; 
+  + Head: thrown away unused and recompiled sources;
     not used terminfo patch left for a while: do we need it??;
-  + build: do not copy any byte-compiled .elc files into the build 
-    tree -- all of them now get recompiled from the patched sources 
+  + build: do not copy any byte-compiled .elc files into the build
+    tree -- all of them now get recompiled from the patched sources
     (particularly quail/cyrillic.elc from leim);
   + install: move menu entry to a separate file;
   + scriplets: use %%*_menus macros;
