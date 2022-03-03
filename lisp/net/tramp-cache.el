@@ -1,6 +1,6 @@
 ;;; tramp-cache.el --- file information caching for Tramp  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2000, 2005-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2000, 2005-2022 Free Software Foundation, Inc.
 
 ;; Author: Daniel Pittman <daniel@inanna.danann.net>
 ;;         Michael Albinus <michael.albinus@gmx.de>
@@ -122,9 +122,9 @@ If KEY is `tramp-cache-undefined', don't create anything, and return nil."
 	       (puthash key (make-hash-table :test #'equal) tramp-cache-data)))
 	  (when (tramp-file-name-p key)
 	    (dolist (elt tramp-connection-properties)
-	      (when (tramp-compat-string-search
+	      (when (string-match-p
 		     (or (nth 0 elt) "")
-		     (tramp-make-tramp-file-name key 'noloc 'nohop))
+		     (tramp-make-tramp-file-name key 'noloc))
 		(tramp-set-connection-property key (nth 1 elt) (nth 2 elt)))))
 	  hash))))
 

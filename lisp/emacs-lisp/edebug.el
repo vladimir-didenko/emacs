@@ -1,6 +1,6 @@
 ;;; edebug.el --- a source-level debugger for Emacs Lisp  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1988-1995, 1997, 1999-2021 Free Software Foundation,
+;; Copyright (C) 1988-1995, 1997, 1999-2022 Free Software Foundation,
 ;; Inc.
 
 ;; Author: Daniel LaLiberte <liberte@holonexus.org>
@@ -98,7 +98,11 @@ This applies to `eval-defun', `eval-region', `eval-buffer', and
 You can use the command `edebug-all-defs' to toggle the value of this
 variable.  You may wish to make it local to each buffer with
 \(make-local-variable \\='edebug-all-defs) in your
-`emacs-lisp-mode-hook'."
+`emacs-lisp-mode-hook'.
+
+Note that this user option has no effect unless the edebug
+package has been loaded."
+  :require 'edebug
   :type 'boolean)
 
 ;;;###autoload
@@ -2573,6 +2577,13 @@ See `edebug-behavior-alist' for implementations.")
     ;; Let's at least show a backtrace so the user can figure out
     ;; which function we're talking about.
     (debug))
+  ;; If we're in a `track-mouse' setting, then any previous mouse
+  ;; movements will make `input-pending-p' later return true.  So
+  ;; discard the inputs in that case.  (And `discard-input' doesn't
+  ;; work here.)
+  (when track-mouse
+    (while (input-pending-p)
+      (read-event)))
   ;; Setup windows for edebug, determine mode, maybe enter recursive-edit.
   ;; Uses local variables of edebug-enter, edebug-before, edebug-after
   ;; and edebug-debugger.
@@ -3903,8 +3914,8 @@ Also see bindings for the eval list buffer *edebug* in `edebug-eval-mode'.
 The edebug buffer commands:
 \\{edebug-mode-map}
 
-Global commands prefixed by `global-edebug-prefix':
-\\{global-edebug-map}
+Global commands prefixed by `edebug-global-prefix':
+\\{edebug-global-map}
 
 Options:
 `edebug-setup-hook'
@@ -4071,8 +4082,8 @@ buffer and \\<global-map>\\[edebug-step-mode] in any buffer.
 Eval list buffer commands:
 \\{edebug-eval-mode-map}
 
-Global commands prefixed by `global-edebug-prefix':
-\\{global-edebug-map}")
+Global commands prefixed by `edebug-global-prefix':
+\\{edebug-global-map}")
 
 ;;; Interface with standard debugger.
 

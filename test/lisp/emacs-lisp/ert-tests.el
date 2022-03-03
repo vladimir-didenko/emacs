@@ -1,6 +1,6 @@
 ;;; ert-tests.el --- ERT's self-tests  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2007-2008, 2010-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2008, 2010-2022 Free Software Foundation, Inc.
 
 ;; Author: Christian Ohler <ohler@gnu.org>
 
@@ -495,6 +495,12 @@ This macro is used to test if macroexpansion in `should' works."
     (should (equal (ert-select-tests '(tag b) (list test)) (list test)))
     (should (equal (ert-select-tests '(tag c) (list test)) '()))))
 
+(ert-deftest ert-test-select-undefined ()
+  (let* ((symbol (make-symbol "ert-not-a-test"))
+         (data (should-error (ert-select-tests symbol t)
+                             :type 'ert-test-unbound)))
+    (should (eq (cadr data) symbol))))
+
 
 ;;; Tests for utility functions.
 (ert-deftest ert-test-parse-keys-and-body ()
@@ -859,7 +865,7 @@ This macro is used to test if macroexpansion in `should' works."
 (ert-deftest ert-test-with-demoted-errors ()
   "Check that ERT correctly handles `with-demoted-errors'."
   :expected-result :failed  ;; FIXME!  Bug#11218
-  (should-not (with-demoted-errors (error "Foo"))))
+  (should-not (with-demoted-errors "FOO: %S" (error "Foo"))))
 
 (ert-deftest ert-test-fail-inside-should ()
   "Check that `ert-fail' inside `should' works correctly."
@@ -875,6 +881,9 @@ This macro is used to test if macroexpansion in `should' works."
   "Check that `lexical-binding' in `ert-deftest' has the file value."
   (should (equal lexical-binding t)))
 
+(ert-deftest ert-test-get-explainer ()
+  (should (eq (ert--get-explainer 'string-equal) 'ert--explain-string-equal))
+  (should (eq (ert--get-explainer 'string=) 'ert--explain-string-equal)))
 
 (provide 'ert-tests)
 

@@ -1,6 +1,6 @@
 ### @configure_input@
 
-# Copyright (C) 1985, 1987-1988, 1993-1994, 2001-2021 Free Software
+# Copyright (C) 1985, 1987-1988, 1993-1994, 2001-2022 Free Software
 # Foundation, Inc.
 
 # This file is part of GNU Emacs.
@@ -19,6 +19,9 @@
 # along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.
 
 SHELL = @SHELL@
+
+# Prevent any settings in the user environment causing problems.
+unexport EMACSDATA EMACSDOC EMACSLOADPATH EMACSPATH
 
 # Following ../lisp/Makefile.in.
 EMACS = ../src/emacs${EXEEXT}

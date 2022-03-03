@@ -1,6 +1,6 @@
 ;;; bookmark.el --- set bookmarks, maybe annotate them, jump to them later -*- lexical-binding: t -*-
 
-;; Copyright (C) 1993-1997, 2001-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1993-1997, 2001-2022 Free Software Foundation, Inc.
 
 ;; Author: Karl Fogel <kfogel@red-bean.com>
 ;; Created: July, 1993
@@ -344,6 +344,17 @@ This point is in `bookmark-current-buffer'.")
 BOOKMARK-RECORD is, e.g., one element from `bookmark-alist'."
   (car bookmark-record))
 
+(defun bookmark-type-from-full-record (bookmark-record)
+  "Return then type of BOOKMARK-RECORD.
+BOOKMARK-RECORD is, e.g., one element from `bookmark-alist'. It's
+type is read from the symbol property named
+`bookmark-handler-type' read on the record handler function."
+  (let ((handler (bookmark-get-handler bookmark-record)))
+    (when (autoloadp (symbol-function handler))
+      (autoload-do-load (symbol-function handler)))
+    (if (symbolp handler)
+        (get handler 'bookmark-handler-type)
+     "")))
 
 (defun bookmark-all-names ()
   "Return a list of all current bookmark names."
@@ -1155,7 +1166,7 @@ and then show any annotations for this bookmark."
   ;; FIXME: we used to only run bookmark-after-jump-hook in
   ;; `bookmark-jump' itself, but in none of the other commands.
   (when bookmark-set-fringe-mark
-    (let ((overlays (overlays-in (point) (point)))
+    (let ((overlays (overlays-in (point-at-bol) (1+ (point-at-bol))))
           temp found)
       (while (and (not found) (setq temp (pop overlays)))
         (when (eq 'bookmark (overlay-get temp 'category))
@@ -1274,7 +1285,10 @@ then offer interactively to relocate BOOKMARK-NAME-OR-RECORD."
 (defun bookmark-default-handler (bmk-record)
   "Default handler to jump to a particular bookmark location.
 BMK-RECORD is a bookmark record, not a bookmark name (i.e., not a string).
-Changes current buffer and point and returns nil, or signals a `file-error'."
+Changes current buffer and point and returns nil, or signals a `file-error'.
+
+If BMK-RECORD has a property called `buffer', it should be a live
+buffer object, and this buffer will be selected."
   (let ((file          (bookmark-get-filename bmk-record))
 	(buf           (bookmark-prop-get bmk-record 'buffer))
         (forward-str   (bookmark-get-front-context-string bmk-record))
@@ -1347,7 +1361,6 @@ minibuffer history list `bookmark-history'."
   (or (bookmark-prop-get bookmark-name-or-record 'location)
       (bookmark-get-filename bookmark-name-or-record)
       "-- Unknown location --"))
-
 
 ;;;###autoload
 (defun bookmark-rename (old-name &optional new-name)
@@ -1787,6 +1800,7 @@ Don't affect the buffer ring order."
   (let (entries)
     (dolist (full-record (bookmark-maybe-sort-alist))
       (let* ((name       (bookmark-name-from-full-record full-record))
+             (type       (bookmark-type-from-full-record full-record))
              (annotation (bookmark-get-annotation full-record))
              (location   (bookmark-location full-record)))
         (push (list
@@ -1800,6 +1814,7 @@ Don't affect the buffer ring order."
                                   'follow-link t
                                   'help-echo "mouse-2: go to this bookmark in other window")
                     name)
+                 ,(or type "")
                  ,@(if bookmark-bmenu-toggle-filenames
                        (list location))])
               entries)))
@@ -1888,6 +1903,7 @@ Bookmark names preceded by a \"*\" have annotations.
   (setq tabulated-list-format
         `[("" 1) ;; Space to add "*" for bookmark with annotation
           ("Bookmark" ,bookmark-bmenu-file-column bookmark-bmenu--name-predicate)
+          ("Type" 8 bookmark-bmenu--type-predicate)
           ,@(if bookmark-bmenu-toggle-filenames
                 '(("File" 0 bookmark-bmenu--file-predicate)))])
   (setq tabulated-list-padding bookmark-bmenu-marks-width)
@@ -1902,6 +1918,10 @@ Bookmark names preceded by a \"*\" have annotations.
 This is used for `tabulated-list-format' in `bookmark-bmenu-mode'."
   (string< (caar a) (caar b)))
 
+(defun bookmark-bmenu--type-predicate (a b)
+  "Predicate to sort \"*Bookmark List*\" buffer by the type column.
+This is used for `tabulated-list-format' in `bookmark-bmenu-mode'."
+  (string< (elt (cadr a) 2) (elt (cadr b) 2)))
 
 (defun bookmark-bmenu--file-predicate (a b)
   "Predicate to sort \"*Bookmark List*\" buffer by the file column.

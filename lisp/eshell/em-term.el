@@ -1,6 +1,6 @@
 ;;; em-term.el --- running visual commands  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1999-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2022 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@gnu.org>
 
@@ -224,7 +224,7 @@ the buffer."
 
 ; (defun eshell-term-send-raw-string (chars)
 ;   (goto-char eshell-last-output-end)
-;   (process-send-string (eshell-interactive-process) chars))
+;   (process-send-string (eshell-head-process) chars))
 
 ; (defun eshell-term-send-raw ()
 ;   "Send the last character typed through the terminal-emulator

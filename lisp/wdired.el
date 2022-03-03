@@ -1,6 +1,6 @@
 ;;; wdired.el --- Rename files editing their names in dired buffers -*- coding: utf-8; lexical-binding: t; -*-
 
-;; Copyright (C) 2004-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2004-2022 Free Software Foundation, Inc.
 
 ;; Filename: wdired.el
 ;; Author: Juan León Lahoz García <juanleon1@gmail.com>
@@ -169,6 +169,7 @@ nonexistent directory will fail."
   "C-p"     #'wdired-previous-line
   "<down>"  #'wdired-next-line
   "C-n"     #'wdired-next-line
+  "C-("     #'dired-hide-details-mode
   "<remap> <upcase-word>"         #'wdired-upcase-word
   "<remap> <capitalize-word>"     #'wdired-capitalize-word
   "<remap> <downcase-word>"       #'wdired-downcase-word

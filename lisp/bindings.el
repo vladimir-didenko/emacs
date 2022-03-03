@@ -1,6 +1,6 @@
 ;;; bindings.el --- define standard key bindings and some variables  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1985-1987, 1992-1996, 1999-2021 Free Software
+;; Copyright (C) 1985-1987, 1992-1996, 1999-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -654,6 +654,18 @@ By default, this shows the information specified by `global-mode-string'.")
   (with-selected-window (posn-window (event-start event))
     (previous-buffer)))
 
+(defun mode-line-window-selected-p ()
+  "Return non-nil if we're updating the mode line for the selected window.
+This function is meant to be called in `:eval' mode line
+constructs to allow altering the look of the mode line depending
+on whether the mode line belongs to the currently selected window
+or not."
+  (let ((window (selected-window)))
+    (or (eq window (old-selected-window))
+	(and (minibuffer-window-active-p (minibuffer-window))
+	     (with-selected-window (minibuffer-window)
+	       (eq window (minibuffer-selected-window)))))))
+
 (defmacro bound-and-true-p (var)
   "Return the value of symbol VAR if it is bound, else nil.
 Note that if `lexical-binding' is in effect, this function isn't
@@ -1148,7 +1160,9 @@ if `inhibit-field-text-motion' is non-nil."
 ;(define-key global-map [delete] 'backward-delete-char)
 
 ;; natural bindings for terminal keycaps --- defined in X keysym order
-(define-key global-map [Scroll_Lock]    'scroll-lock-mode)
+(define-key global-map
+            (if (eq system-type 'windows-nt) [scroll] [Scroll_Lock])
+            #'scroll-lock-mode)
 (define-key global-map [C-S-backspace]  'kill-whole-line)
 (define-key global-map [home]		'move-beginning-of-line)
 (define-key global-map [C-home]		'beginning-of-buffer)

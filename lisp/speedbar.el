@@ -1,6 +1,6 @@
 ;;; speedbar.el --- quick access to files and tags in a frame  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1996-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1996-2022 Free Software Foundation, Inc.
 
 ;; Author: Eric M. Ludlam <zappo@gnu.org>
 ;; Keywords: file, tags, tools
@@ -938,7 +938,9 @@ supported at a time.
   ;; hscroll
   (setq-local auto-hscroll-mode nil)
   ;; reset the selection variable
-  (setq speedbar-last-selected-file nil))
+  (setq speedbar-last-selected-file nil)
+  (unless (display-graphic-p)
+    (message "Use `M-x speedbar-get-focus' to see the speedbar window")))
 
 (defun speedbar-frame-reposition-smartly ()
   "Reposition the speedbar frame to be next to the attached frame."

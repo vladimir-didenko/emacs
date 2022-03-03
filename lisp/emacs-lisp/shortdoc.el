@@ -1,6 +1,6 @@
 ;;; shortdoc.el --- Short function summaries  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2020-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2020-2022 Free Software Foundation, Inc.
 
 ;; Keywords: lisp, help
 ;; Package: emacs
@@ -1298,6 +1298,9 @@ If FUNCTION is non-nil, place point on the entry for FUNCTION (if any)."
   (when function
     (text-property-search-forward 'shortdoc-function function t)
     (beginning-of-line)))
+
+;;;###autoload
+(defalias 'shortdoc #'shortdoc-display-group)
 
 (defun shortdoc--display-function (data)
   (let ((function (pop data))

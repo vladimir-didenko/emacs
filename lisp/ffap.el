@@ -1,6 +1,6 @@
 ;;; ffap.el --- find file (or url) at point  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1995-1997, 2000-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1995-1997, 2000-2022 Free Software Foundation, Inc.
 
 ;; Author: Michelangelo Grigni <mic@mathcs.emory.edu>
 ;; Maintainer: emacs-devel@gnu.org
@@ -1449,10 +1449,13 @@ which may actually result in an URL rather than a filename."
 	       (ffap-file-exists-string (substring name 0 (match-beginning 0)))))
 	 ;; If it contains a colon, get rid of it (and return if exists)
 	 ((and (string-match path-separator name)
-	       (setq name (ffap-string-at-point 'nocolon))
-	       (> (length name) 0)
-	       (ffap-file-exists-string name)))
-	 ;; File does not exist, try the alist:
+	       (let ((this-name (ffap-string-at-point 'nocolon)))
+                 ;; But don't interpret the first part if ":/bin" as
+                 ;; the empty string.
+	         (when (> (length this-name) 0)
+                   (setq name this-name)
+	           (ffap-file-exists-string name)))))
+         ;; File does not exist, try the alist:
 	 ((let ((alist ffap-alist) tem try case-fold-search)
 	    (while (and alist (not try))
 	      (setq tem (car alist) alist (cdr alist))

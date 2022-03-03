@@ -1,6 +1,6 @@
 /* Font support for Haiku windowing
 
-Copyright (C) 2021 Free Software Foundation, Inc.
+Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -29,6 +29,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "fontset.h"
 #include "haikuterm.h"
 #include "character.h"
+#include "coding.h"
 #include "font.h"
 #include "termchar.h"
 #include "pdumper.h"
@@ -439,35 +440,35 @@ haikufont_spec_or_entity_to_pattern (Lisp_Object ent,
     }
 
   tem = FONT_SLANT_SYMBOLIC (ent);
-  if (!NILP (tem))
+  if (!NILP (tem) && !EQ (tem, Qunspecified))
     {
       ptn->specified |= FSPEC_SLANT;
       ptn->slant = haikufont_lisp_to_slant (tem);
     }
 
   tem = FONT_WEIGHT_SYMBOLIC (ent);
-  if (!NILP (tem))
+  if (!NILP (tem) && !EQ (tem, Qunspecified))
     {
       ptn->specified |= FSPEC_WEIGHT;
       ptn->weight = haikufont_lisp_to_weight (tem);
     }
 
   tem = FONT_WIDTH_SYMBOLIC (ent);
-  if (!NILP (tem))
+  if (!NILP (tem) && !EQ (tem, Qunspecified))
     {
       ptn->specified |= FSPEC_WIDTH;
       ptn->width = haikufont_lisp_to_width (tem);
     }
 
   tem = AREF (ent, FONT_SPACING_INDEX);
-  if (FIXNUMP (tem))
+  if (!NILP (tem) && !EQ (tem, Qunspecified))
     {
       ptn->specified |= FSPEC_SPACING;
       ptn->mono_spacing_p = XFIXNUM (tem) != FONT_SPACING_PROPORTIONAL;
     }
 
   tem = AREF (ent, FONT_FAMILY_INDEX);
-  if (!NILP (tem) &&
+  if (!NILP (tem) && !EQ (tem, Qunspecified) &&
       (list_p && !haikufont_maybe_handle_special_family (tem, ptn)))
     {
       ptn->specified |= FSPEC_FAMILY;
@@ -951,12 +952,21 @@ haikufont_draw (struct glyph_string *s, int from, int to,
   struct font_info *info = (struct font_info *) s->font;
   unsigned char mb[MAX_MULTIBYTE_LENGTH];
   void *view = FRAME_HAIKU_VIEW (f);
+  unsigned long foreground, background;
 
   block_input ();
   prepare_face_for_display (s->f, face);
 
-  BView_draw_lock (view);
-  BView_StartClip (view);
+  if (s->hl != DRAW_CURSOR)
+    {
+      foreground = s->face->foreground;
+      background = s->face->background;
+    }
+  else
+    haiku_merge_cursor_foreground (s, &foreground, &background);
+
+  /* Presumably the draw lock is already held by
+     haiku_draw_glyph_string; */
   if (with_background)
     {
       int height = FONT_HEIGHT (s->font), ascent = FONT_BASE (s->font);
@@ -977,25 +987,12 @@ haikufont_draw (struct glyph_string *s, int from, int to,
 	  s->first_glyph->slice.glyphless.lower_yoff
 	  - s->first_glyph->slice.glyphless.upper_yoff;
 
-      BView_SetHighColor (view, s->hl == DRAW_CURSOR ?
-			  FRAME_CURSOR_COLOR (s->f).pixel : face->background);
-
+      BView_SetHighColor (view, background);
       BView_FillRectangle (view, x, y - ascent, s->width, height);
       s->background_filled_p = 1;
     }
 
-  if (s->left_overhang && s->clip_head && !s->for_overlaps)
-    {
-      /* XXX: Why is this neccessary? */
-      BView_ClipToRect (view, s->clip_head->x, 0,
-			FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f));
-    }
-
-  if (s->hl == DRAW_CURSOR)
-    BView_SetHighColor (view, FRAME_OUTPUT_DATA (s->f)->cursor_fg);
-  else
-    BView_SetHighColor (view, face->foreground);
-
+  BView_SetHighColor (view, foreground);
   BView_MovePenTo (view, x, y);
   BView_SetFont (view, ((struct haikufont_info *) info)->be_font);
 
@@ -1007,12 +1004,13 @@ haikufont_draw (struct glyph_string *s, int from, int to,
   else
     {
       ptrdiff_t b_len = 0;
-      char *b = xmalloc (b_len);
+      char *b = alloca ((to - from + 1) * MAX_MULTIBYTE_LENGTH);
 
       for (int idx = from; idx < to; ++idx)
 	{
 	  int len = CHAR_STRING (s->char2b[idx], mb);
-	  b = xrealloc (b, b_len = (b_len + len));
+	  b_len += len;
+
 	  if (len == 1)
 	    b[b_len - len] = mb[0];
 	  else
@@ -1020,12 +1018,38 @@ haikufont_draw (struct glyph_string *s, int from, int to,
 	}
 
       BView_DrawString (view, b, b_len);
-      xfree (b);
     }
-  BView_EndClip (view);
-  BView_draw_unlock (view);
+
   unblock_input ();
   return 1;
+}
+
+static Lisp_Object
+haikufont_list_family (struct frame *f)
+{
+  Lisp_Object list = Qnil;
+  size_t length;
+  ptrdiff_t idx;
+  haiku_font_family_or_style *styles;
+
+  block_input ();
+  styles = be_list_font_families (&length);
+  unblock_input ();
+
+  if (!styles)
+    return list;
+
+  block_input ();
+  for (idx = 0; idx < length; ++idx)
+    {
+      if (styles[idx][0])
+	list = Fcons (intern ((char *) &styles[idx]), list);
+    }
+
+  free (styles);
+  unblock_input ();
+
+  return list;
 }
 
 struct font_driver const haikufont_driver =
@@ -1041,7 +1065,8 @@ struct font_driver const haikufont_driver =
     .prepare_face = haikufont_prepare_face,
     .encode_char = haikufont_encode_char,
     .text_extents = haikufont_text_extents,
-    .shape = haikufont_shape
+    .shape = haikufont_shape,
+    .list_family = haikufont_list_family
   };
 
 void

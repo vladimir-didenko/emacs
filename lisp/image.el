@@ -1,6 +1,6 @@
 ;;; image.el --- image API  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1998-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1998-2022 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: multimedia
@@ -58,7 +58,7 @@ static \\(unsigned \\)?char \\1_bits" . xbm)
 		"\\(?:!DOCTYPE[ \t\r\n]+[^>]*>[ \t\r\n]*<[ \t\r\n]*" comment-re "*\\)?"
 		"[Ss][Vv][Gg]"))
      . svg)
-    )
+    ("\\`....ftyp\\(heic\\|heix\\|hevc\\|heim\\|heis\\|hevm\\|hevs\\|mif1\\|msf1\\)" . heic))
   "Alist of (REGEXP . IMAGE-TYPE) pairs used to auto-detect image types.
 When the first bytes of an image file match REGEXP, it is assumed to
 be of image type IMAGE-TYPE if IMAGE-TYPE is a symbol.  If not a symbol,
@@ -78,7 +78,7 @@ a non-nil value, TYPE is the image's type.")
     ("\\.ps\\'" . postscript)
     ("\\.tiff?\\'" . tiff)
     ("\\.svgz?\\'" . svg)
-    )
+    ("\\.hei[cf]s?\\'" . heic))
   "Alist of (REGEXP . IMAGE-TYPE) pairs used to identify image files.
 When the name of an image file match REGEXP, it is assumed to
 be of image type IMAGE-TYPE.")
@@ -97,7 +97,8 @@ be of image type IMAGE-TYPE.")
     (tiff . maybe)
     (svg . maybe)
     (webp . maybe)
-    (postscript . nil))
+    (postscript . nil)
+    (heic . maybe))
   "Alist of (IMAGE-TYPE . AUTODETECT) pairs used to auto-detect image files.
 \(See `image-type-auto-detected-p').
 
@@ -170,18 +171,16 @@ or \"ffmpeg\") is installed."
 
 (define-error 'unknown-image-type "Unknown image type")
 
-;; Map put into text properties on images.
-(defvar image-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map "-" 'image-decrease-size)
-    (define-key map "+" 'image-increase-size)
-    (define-key map [C-wheel-down] 'image-mouse-decrease-size)
-    (define-key map [C-mouse-5]    'image-mouse-decrease-size)
-    (define-key map [C-wheel-up]   'image-mouse-increase-size)
-    (define-key map [C-mouse-4]    'image-mouse-increase-size)
-    (define-key map "r" 'image-rotate)
-    (define-key map "o" 'image-save)
-    map))
+(defvar-keymap image-map
+  :doc "Map put into text properties on images."
+  "-" #'image-decrease-size
+  "+" #'image-increase-size
+  "r" #'image-rotate
+  "o" #'image-save
+  "C-<wheel-down>" #'image-mouse-decrease-size
+  "C-<mouse-5>"    #'image-mouse-decrease-size
+  "C-<wheel-up>"   #'image-mouse-increase-size
+  "C-<mouse-4>"    #'image-mouse-increase-size)
 
 (defun image-load-path-for-library (library image &optional path no-error)
   "Return a suitable search path for images used by LIBRARY.
@@ -893,8 +892,9 @@ Frames are indexed from 0.  Optional argument NOCHECK non-nil means
 do not check N is within the range of frames present in the image."
   (unless nocheck
     (if (< n 0) (setq n 0)
-      (setq n (min n (1- (car (plist-get (cdr image)
-                                         :animate-multi-frame-data)))))))
+      (setq n (min n (1- (car (or (plist-get (cdr image)
+                                             :animate-multi-frame-data)
+                                  (image-multi-frame-p image))))))))
   (plist-put (cdr image) :index n)
   (force-window-update (plist-get (cdr image) :animate-buffer)))
 

@@ -8,7 +8,7 @@
 @syncodeindex pg cp
 
 @copying
-Copyright @copyright{} 1995--2021 Free Software Foundation, Inc.
+Copyright @copyright{} 1995--2022 Free Software Foundation, Inc.
 
 @quotation
 Permission is granted to copy, distribute and/or modify this document
@@ -12223,7 +12223,6 @@ controlling variable is a predicate list, as described above.
 @vindex gnus-treat-highlight-citation
 @vindex gnus-treat-highlight-headers
 @vindex gnus-treat-highlight-signature
-@vindex gnus-treat-play-sounds
 @vindex gnus-treat-x-pgp-sig
 @vindex gnus-treat-unfold-headers
 @vindex gnus-treat-fold-headers
@@ -12359,8 +12358,6 @@ is controlled by @code{gnus-body-boundary-delimiter}.
 
 @xref{Article Highlighting}.
 
-@vindex gnus-treat-play-sounds
-@item gnus-treat-play-sounds
 @item gnus-treat-ansi-sequences (t)
 @vindex gnus-treat-x-pgp-sig
 @item gnus-treat-x-pgp-sig (head)
@@ -13477,7 +13474,7 @@ Also @pxref{Formatting Variables}.
 @subsection Server Commands
 @cindex server commands
 
-The following key binding are available in the server buffer.  Be aware
+The following key bindings are available in the server buffer.  Be aware
 that some of the commands will only work on servers that you've added
 through this interface (with @kbd{a}), not with servers you've defined
 in your init files.
@@ -14841,12 +14838,17 @@ mail belongs in that group.
 The last of these groups should always be a general one, and the regular
 expression should @emph{always} be @samp{""} so that it matches any mails
 that haven't been matched by any of the other regexps.  (These rules are
-processed from the beginning of the alist toward the end.  The first rule
-to make a match will ``win'', unless you have crossposting enabled.  In
-that case, all matching rules will ``win''.)  If no rule matched, the mail
-will end up in the @samp{bogus} group.  When new groups are created by
-splitting mail, you may want to run @code{gnus-group-find-new-groups} to
-see the new groups.  This also applies to the @samp{bogus} group.
+processed from the beginning of the alist toward the end.
+
+If multiple rules match (excluding the general @samp{""} group), mail
+is crossposted to all these groups.  However, if
+@code{nnmail-crosspost} is set to @code{nil}, the first rule to make a
+match will ``win''.
+
+If no rule matched, the mail will end up in the @samp{bogus} group.
+When new groups are created by splitting mail, you may want to run
+@code{gnus-group-find-new-groups} to see the new groups.  This also
+applies to the @samp{bogus} group.
 
 If you like to tinker with this yourself, you can set this variable to a
 function of your choice.  This function will be called without any
@@ -21672,7 +21674,9 @@ engine.
 @item remove-prefix
 The directory part to be removed from the filenames returned by the
 search query.  This absolute path should include everything up to the
-top level of the message store.
+top level of the message store.  Note that this is the path to the
+location of the actual messages, not to the search engine's indexes
+(nor, in the case of Mairix, to its symlink directories).
 
 @item switches
 Additional command-line switches to be fed to the search program.  The
@@ -24137,37 +24141,22 @@ If you want to see them in the Cc and To fields, set:
 @end lisp
 
 
-@subsubsection Toolbar
+@subsubsection Tool bar
 
 @table @code
 
-@item gnus-use-toolbar
-@vindex gnus-use-toolbar
-This variable specifies the position to display the toolbar.  If
-@code{nil}, don't display toolbars.  If it is non-@code{nil}, it should
-be one of the symbols @code{default}, @code{top}, @code{bottom},
-@code{right}, and @code{left}.  @code{default} means to use the default
-toolbar, the rest mean to display the toolbar on the place which those
-names show.  The default is @code{default}.
+@item gnus-group-tool-bar
+@vindex gnus-group-tool-bar
+Specifies the tool bar in the group buffer.  It can be either a list
+or a symbol referring to a list.  Pre-defined symbols include
+@code{gnus-group-tool-bar-gnome} and @code{gnus-group-tool-bar-retro}.
 
-@item gnus-toolbar-thickness
-@vindex gnus-toolbar-thickness
-Cons of the height and the width specifying the thickness of a toolbar.
-The height is used for the toolbar displayed on the top or the bottom,
-the width is used for the toolbar displayed on the right or the left.
-The default is that of the default toolbar.
-
-@item gnus-group-toolbar
-@vindex gnus-group-toolbar
-The toolbar in the group buffer.
-
-@item gnus-summary-toolbar
-@vindex gnus-summary-toolbar
-The toolbar in the summary buffer.
-
-@item gnus-summary-mail-toolbar
-@vindex gnus-summary-mail-toolbar
-The toolbar in the summary buffer of mail groups.
+@item gnus-summary-tool-bar
+@vindex gnus-summary-tool-bar
+Specifies the tool bar in the summary buffer.  It can be either a list
+or a symbol referring to a list.  Pre-defined symbols include
+@code{gnus-summary-tool-bar-gnome} and
+@code{gnus-summary-tool-bar-retro}.
 
 @end table
 

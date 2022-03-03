@@ -1,6 +1,6 @@
 ;;; subr-x.el --- extra Lisp functions  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2013-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2013-2022 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: convenience
@@ -444,9 +444,14 @@ is inserted before adjusting the number of empty lines."
 ;;;###autoload
 (defun string-pixel-width (string)
   "Return the width of STRING in pixels."
-  (with-temp-buffer
-    (insert string)
-    (car (buffer-text-pixel-size nil nil t))))
+  (if (zerop (length string))
+      0
+    ;; Keeping a work buffer around is more efficient than creating a
+    ;; new temporary buffer.
+    (with-current-buffer (get-buffer-create " *string-pixel-width*")
+      (delete-region (point-min) (point-max))
+      (insert string)
+      (car (buffer-text-pixel-size nil nil t)))))
 
 ;;;###autoload
 (defun string-glyph-split (string)
@@ -510,6 +515,48 @@ this defaults to the current buffer."
           ;; Finally update the range.
           (put-text-property sub-start sub-end 'display disp)))
       (setq sub-start sub-end))))
+
+;;;###autoload
+(defun read-process-name (prompt)
+  "Query the user for a process and return the process object."
+  ;; Currently supports only the PROCESS argument.
+  ;; Must either return a list containing a process, or signal an error.
+  ;; (Returning `nil' would mean the current buffer's process.)
+  (unless (fboundp 'process-list)
+    (error "Asynchronous subprocesses are not supported on this system"))
+  ;; Local function to return cons of a complete-able name, and the
+  ;; associated process object, for use with `completing-read'.
+  (cl-flet ((procitem
+             (p) (when (process-live-p p)
+                   (let ((pid (process-id p))
+                         (procname (process-name p))
+                         (procbuf (process-buffer p)))
+                     (and (eq (process-type p) 'real)
+                          (cons (if procbuf
+                                    (format "%s (%s) in buffer %s"
+                                            procname pid
+                                            (buffer-name procbuf))
+                                  (format "%s (%s)" procname pid))
+                                p))))))
+    ;; Perform `completing-read' for a process.
+    (let* ((currproc (get-buffer-process (current-buffer)))
+           (proclist (or (process-list)
+                         (error "No processes found")))
+           (collection (delq nil (mapcar #'procitem proclist)))
+           (selection (completing-read
+                       (format-prompt prompt
+                                      (and currproc
+                                           (eq (process-type currproc) 'real)
+                                           (procitem currproc)))
+                       collection nil :require-match nil nil
+                       (car (seq-find (lambda (proc)
+                                        (eq currproc (cdr proc)))
+                                      collection))))
+           (process (and selection
+                         (cdr (assoc selection collection)))))
+      (unless process
+        (error "No process selected"))
+      process)))
 
 (provide 'subr-x)
 

@@ -1,6 +1,6 @@
 ;;; eieio-core.el --- Core implementation for eieio  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1995-1996, 1998-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1995-1996, 1998-2022 Free Software Foundation, Inc.
 
 ;; Author: Eric M. Ludlam <zappo@gnu.org>
 ;; Version: 1.4
@@ -215,7 +215,7 @@ It creates an autoload function for CNAME's constructor."
       (when eieio-backward-compatibility
         (set cname cname)
         (make-obsolete-variable cname (format "\
-use \\='%s or turn off `eieio-backward-compatibility' instead" cname)
+use '%s or turn off `eieio-backward-compatibility' instead" cname)
                                 "25.1"))
 
       (setf (cl--find-class cname) newc)
@@ -340,7 +340,7 @@ See `defclass' for more information."
     ;; turn this into a usable self-pointing symbol;  FIXME: Why?
     (when eieio-backward-compatibility
       (set cname cname)
-      (make-obsolete-variable cname (format "use \\='%s instead" cname)
+      (make-obsolete-variable cname (format "use '%s instead" cname)
                               "25.1"))
 
     ;; Create a handy list of the class test too
@@ -362,7 +362,7 @@ See `defclass' for more information."
                   (setq obj (cdr obj)))
                 ans))))
         (make-obsolete csym (format
-                             "use (cl-typep ... \\='(list-of %s)) instead"
+                             "use (cl-typep ... '(list-of %s)) instead"
                              cname)
                        "25.1")))
 
@@ -420,7 +420,7 @@ See `defclass' for more information."
                  (progn
                    (set initarg initarg)
                    (make-obsolete-variable
-                    initarg (format "use \\='%s instead" initarg) "25.1"))))
+                    initarg (format "use '%s instead" initarg) "25.1"))))
 
 	;; The customgroup should be a list of symbols.
 	(cond ((and (null customg) custom)
@@ -749,7 +749,7 @@ Argument FN is the function calling this verifier."
                       (guard (not (memq name eieio--known-slot-names))))
                  (macroexp-warn-and-return
                   (format-message "Unknown slot `%S'" name)
-                  exp nil 'compile-only))
+                  exp nil 'compile-only name))
                 (_ exp))))
            (gv-setter eieio-oset))
   (cl-check-type slot symbol)
@@ -785,12 +785,12 @@ Fills in CLASS's SLOT with its default value."
                       (guard (not (memq name eieio--known-slot-names))))
                  (macroexp-warn-and-return
                   (format-message "Unknown slot `%S'" name)
-                  exp nil 'compile-only))
+                  exp nil 'compile-only name))
                 ((and (or `',name (and name (pred keywordp)))
                       (guard (not (memq name eieio--known-class-slot-names))))
                  (macroexp-warn-and-return
                   (format-message "Slot `%S' is not class-allocated" name)
-                  exp nil 'compile-only))
+                  exp nil 'compile-only name))
                 (_ exp)))))
   (cl-check-type class (or eieio-object class))
   (cl-check-type slot symbol)
@@ -847,12 +847,12 @@ Fills in the default value in CLASS' in SLOT with VALUE."
                       (guard (not (memq name eieio--known-slot-names))))
                  (macroexp-warn-and-return
                   (format-message "Unknown slot `%S'" name)
-                  exp nil 'compile-only))
+                  exp nil 'compile-only name))
                 ((and (or `',name (and name (pred keywordp)))
                       (guard (not (memq name eieio--known-class-slot-names))))
                  (macroexp-warn-and-return
                   (format-message "Slot `%S' is not class-allocated" name)
-                  exp nil 'compile-only))
+                  exp nil 'compile-only name))
                 (_ exp)))))
   (setq class (eieio--class-object class))
   (cl-check-type class eieio--class)

@@ -1,6 +1,6 @@
 /* Parameters and display hooks for terminal devices.
 
-Copyright (C) 1985-1986, 1993-1994, 2001-2021 Free Software Foundation,
+Copyright (C) 1985-1986, 1993-1994, 2001-2022 Free Software Foundation,
 Inc.
 
 This file is part of GNU Emacs.
@@ -80,10 +80,29 @@ enum event_kind
 				   which the key was typed.
 				   .timestamp gives a timestamp (in
 				   milliseconds) for the keystroke.  */
-  MULTIBYTE_CHAR_KEYSTROKE_EVENT,	/* The multibyte char code is in .code,
-				   perhaps with modifiers applied.
-				   The others are the same as
-				   ASCII_KEYSTROKE_EVENT.  */
+  MULTIBYTE_CHAR_KEYSTROKE_EVENT,	/* The multibyte char code is
+					   in .code, perhaps with
+					   modifiers applied.  The
+					   others are the same as
+					   ASCII_KEYSTROKE_EVENT,
+					   except when ARG is a
+					   string, which will be
+					   decoded and the decoded
+					   string's characters will be
+					   used as .code
+					   individually.
+
+					   The string can have a
+					   property `coding', which
+					   should be a symbol
+					   describing a coding system
+					   to use to decode the string.
+
+					   If it is nil, then the
+					   locale coding system will
+					   be used.  If it is t, then
+					   no decoding will take
+					   place.  */
   NON_ASCII_KEYSTROKE_EVENT,	/* .code is a number identifying the
 				   function key.  A code N represents
 				   a key whose name is
@@ -269,10 +288,8 @@ enum event_kind
   , FILE_NOTIFY_EVENT
 #endif
 
-#ifdef HAVE_PGTK
   /* Pre-edit text was changed. */
-  , PGTK_PREEDIT_TEXT_EVENT
-#endif
+  , PREEDIT_TEXT_EVENT
 
   /* Either the mouse wheel has been released without it being
      clicked, or the user has lifted his finger from a touchpad.
@@ -293,6 +310,21 @@ enum event_kind
   , TOUCHSCREEN_UPDATE_EVENT
   , TOUCHSCREEN_BEGIN_EVENT
   , TOUCHSCREEN_END_EVENT
+
+  /* In a PINCH_EVENT, X and Y are the position of the pointer
+     relative to the top-left corner of the frame, and arg is a list
+     of (DX DY SCALE ANGLE), in which:
+
+       - DX and DY are the difference between the positions of the
+         fingers comprising the current gesture and the last such
+         gesture in the same sequence.
+       - SCALE is the division of the current distance between the
+         fingers and the distance at the start of the gesture.
+       - DELTA-ANGLE is the delta between the angle of the current
+         event and the last event in the same sequence, in degrees.  A
+         positive delta represents a change clockwise, and a negative
+         delta represents a change counter-clockwise.  */
+  , PINCH_EVENT
 };
 
 /* Bit width of an enum event_kind tag at the start of structs and unions.  */
@@ -799,6 +831,13 @@ struct terminal
      frames on the terminal when it calls this hook, so infinite
      recursion is prevented.  */
   void (*delete_terminal_hook) (struct terminal *);
+
+  /* Called to determine whether a position is on the toolkit tool bar
+     or menu bar.  May be NULL.  It should accept five arguments
+     FRAME, X, Y, MENU_BAR_P, TOOL_BAR_P, and store true into
+     MENU_BAR_P if X and Y are in FRAME's toolkit menu bar, and true
+     into TOOL_BAR_P if X and Y are in FRAME's toolkit tool bar.  */
+  void (*toolkit_position_hook) (struct frame *, int, int, bool *, bool *);
 } GCALIGNED_STRUCT;
 
 INLINE bool

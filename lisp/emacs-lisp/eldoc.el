@@ -1,6 +1,6 @@
 ;;; eldoc.el --- Show function arglist or variable docstring in echo area  -*- lexical-binding:t; -*-
 
-;; Copyright (C) 1996-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1996-2022 Free Software Foundation, Inc.
 
 ;; Author: Noah Friedman <friedman@splode.com>
 ;; Keywords: extensions
@@ -387,6 +387,10 @@ Also store it in `eldoc-last-message' and return that value."
            ;; conflicts with eldoc.
            (and (boundp 'show-paren-context-when-offscreen)
                 show-paren-context-when-offscreen
+                ;; There's no conflict with the child-frame and
+                ;; overlay versions.
+                (not (memq show-paren-context-when-offscreen
+                           '(child-frame overlay)))
                 (not (pos-visible-in-window-p
                       (overlay-end show-paren--overlay)))))))
 

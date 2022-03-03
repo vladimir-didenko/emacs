@@ -1,6 +1,6 @@
 ;;; comp.el --- compilation of Lisp code into native code -*- lexical-binding: t -*-
 
-;; Copyright (C) 2019-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2019-2022 Free Software Foundation, Inc.
 
 ;; Author: Andrea Corallo <akrl@sdf.com>
 ;; Keywords: lisp
@@ -1181,7 +1181,9 @@ clashes."
 	                   for i across orig-name
 	                   for byte = (format "%x" i)
 	                   do (aset str j (aref byte 0))
-	                      (aset str (1+ j) (aref byte 1))
+			      (aset str (1+ j) (if (length> byte 1)
+						   (aref byte 1)
+						 ?\_))
 	                   finally return str))
          (human-readable (string-replace
                           "-" "_" orig-name))
@@ -1765,6 +1767,7 @@ This is responsible for generating the proper stack adjustment, when known,
 and the annotation emission."
   (declare (debug (body))
            (indent defun))
+  (declare-function comp-body-eff nil (body op-name sp-delta))
   `(pcase op
      ,@(cl-loop for (op . body) in cases
 		for sp-delta = (gethash op comp-op-stack-info)
@@ -1943,7 +1946,6 @@ and the annotation emission."
       (byte-condition-case) ;; Obsolete
       (byte-temp-output-buffer-setup-OBSOLETE)
       (byte-temp-output-buffer-show-OBSOLETE)
-      (byte-unbind-all) ;; Obsolete
       (byte-set-marker auto)
       (byte-match-beginning auto)
       (byte-match-end auto)
@@ -3568,7 +3570,7 @@ Update all insn accordingly."
   ;; Symbols imported by C inlined functions.  We do this here because
   ;; is better to add all objs to the relocation containers before we
   ;; compacting them.
-  (mapc #'comp-add-const-to-relocs '(nil t consp listp))
+  (mapc #'comp-add-const-to-relocs '(nil t consp listp symbol-with-pos-p))
 
   (let* ((d-default (comp-ctxt-d-default comp-ctxt))
          (d-default-idx (comp-data-container-idx d-default))
@@ -4004,9 +4006,12 @@ the deferred compilation mechanism."
     (signal 'native-compiler-error
             (list "Not a function symbol or file" function-or-file)))
   (catch 'no-native-compile
-    (let* ((data function-or-file)
+    (let* ((print-symbols-bare t)
+           (max-specpdl-size (max max-specpdl-size 5000))
+           (data function-or-file)
            (comp-native-compiling t)
            (byte-native-qualities nil)
+           (symbols-with-pos-enabled t)
            ;; Have byte compiler signal an error when compilation fails.
            (byte-compile-debug t)
            (comp-ctxt (make-comp-ctxt :output output
@@ -4050,10 +4055,10 @@ the deferred compilation mechanism."
 	     (signal (car err) (if (consp err-val)
 			           (cons function-or-file err-val)
 			         (list function-or-file err-val)))))))
-      (if (stringp function-or-file)
-          data
-        ;; So we return the compiled function.
-        (native-elisp-load data)))))
+        (if (stringp function-or-file)
+            data
+          ;; So we return the compiled function.
+          (native-elisp-load data)))))
 
 (defun native-compile-async-skip-p (file load selector)
   "Return non-nil if FILE's compilation should be skipped.
@@ -4193,9 +4198,9 @@ last directory in `native-comp-eln-load-path')."
              if (or (null byte+native-compile)
                     (cl-notany (lambda (re) (string-match re file))
                                native-comp-bootstrap-deny-list))
-             do (comp--native-compile file)
+             collect (comp--native-compile file)
              else
-             do (byte-compile-file file))))
+             collect (byte-compile-file file))))
 
 ;;;###autoload
 (defun batch-byte+native-compile ()
@@ -4209,12 +4214,20 @@ variable 'NATIVE_DISABLED' is set, only byte compile."
   (if (equal (getenv "NATIVE_DISABLED") "1")
       (batch-byte-compile)
     (cl-assert (length= command-line-args-left 1))
-    (let ((byte+native-compile t)
-          (byte-to-native-output-file nil))
-      (batch-native-compile)
-      (pcase byte-to-native-output-file
-        (`(,tempfile . ,target-file)
-         (rename-file tempfile target-file t))))))
+    (let* ((byte+native-compile t)
+           (byte-to-native-output-buffer-file nil)
+           (eln-file (car (batch-native-compile))))
+      (pcase byte-to-native-output-buffer-file
+        (`(,temp-buffer . ,target-file)
+         (unwind-protect
+             (progn
+               (byte-write-target-file temp-buffer target-file)
+               ;; Touch the .eln in order to have it older than the
+               ;; corresponding .elc.
+               (when (stringp eln-file)
+                 (set-file-times eln-file)))
+           (kill-buffer temp-buffer))))
+      (setq command-line-args-left (cdr command-line-args-left)))))
 
 ;;;###autoload
 (defun native-compile-async (files &optional recursively load selector)

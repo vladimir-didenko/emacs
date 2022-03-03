@@ -1,6 +1,6 @@
 /* Pure Gtk+-3 communication module.      -*- coding: utf-8 -*-
 
-Copyright (C) 1989, 1993-1994, 2005-2006, 2008-2020 Free Software
+Copyright (C) 1989, 1993-1994, 2005-2006, 2008-2022 Free Software
 Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -101,10 +101,39 @@ static void pgtk_delete_display (struct pgtk_display_info *dpyinfo);
 static void pgtk_clear_frame_area (struct frame *f, int x, int y, int width,
 				   int height);
 static void pgtk_fill_rectangle (struct frame *f, unsigned long color, int x,
-				 int y, int width, int height);
+				 int y, int width, int height,
+				 bool respect_alpha_background);
 static void pgtk_clip_to_row (struct window *w, struct glyph_row *row,
 			      enum glyph_row_area area, cairo_t * cr);
-static struct frame *pgtk_any_window_to_frame (GdkWindow * window);
+static struct frame *pgtk_any_window_to_frame (GdkWindow *window);
+
+static void
+pgtk_toolkit_position (struct frame *f, int x, int y,
+		       bool *menu_bar_p, bool *tool_bar_p)
+{
+  GdkRectangle test_rect;
+  int scale;
+
+  y += (FRAME_MENUBAR_HEIGHT (f)
+	+ FRAME_TOOLBAR_TOP_HEIGHT (f));
+  x += FRAME_TOOLBAR_LEFT_WIDTH (f);
+
+  if (FRAME_EXTERNAL_MENU_BAR (f))
+    *menu_bar_p = (x >= 0 && x < FRAME_PIXEL_WIDTH (f)
+		   && y >= 0 && y < FRAME_MENUBAR_HEIGHT (f));
+
+  if (FRAME_X_OUTPUT (f)->toolbar_widget)
+    {
+      scale = xg_get_scale (f);
+      test_rect.x = x / scale;
+      test_rect.y = y / scale;
+      test_rect.width = 1;
+      test_rect.height = 1;
+
+      *tool_bar_p = gtk_widget_intersect (FRAME_X_OUTPUT (f)->toolbar_widget,
+					  &test_rect, NULL);
+    }
+}
 
 /*
  * This is not a flip context in the same sense as gpu rendering
@@ -153,10 +182,24 @@ static int
 evq_flush (struct input_event *hold_quit)
 {
   struct event_queue_t *evq = &event_q;
-  int i, n = evq->nr;
-  for (i = 0; i < n; i++)
-    kbd_buffer_store_buffered_event (&evq->q[i], hold_quit);
-  evq->nr = 0;
+  int n = 0;
+
+  while (evq->nr > 0)
+    {
+      /* kbd_buffer_store_buffered_event may do longjmp, so
+	 we need to shift event queue first and pass the event
+	 to kbd_buffer_store_buffered_event so that events in
+	 queue are not processed twice.  Bug#52941 */
+      union buffered_input_event ev = evq->q[0];
+      int i;
+      for (i = 1; i < evq->nr; i++)
+	evq->q[i - 1] = evq->q[i];
+      evq->nr--;
+
+      kbd_buffer_store_buffered_event (&ev, hold_quit);
+      n++;
+    }
+
   return n;
 }
 
@@ -245,6 +288,9 @@ x_free_frame_resources (struct frame *f)
 
   block_input ();
 
+#ifdef HAVE_XWIDGETS
+  kill_frame_xwidget_views (f);
+#endif
   free_frame_faces (f);
 
   if (FRAME_X_OUTPUT (f)->scale_factor_atimer != NULL)
@@ -432,8 +478,6 @@ x_set_offset (struct frame *f, int xoff, int yoff, int change_gravity)
      External: Position the window
    -------------------------------------------------------------------------- */
 {
-  int modified_top, modified_left;
-
   if (change_gravity > 0)
     {
       f->top_pos = yoff;
@@ -451,44 +495,23 @@ x_set_offset (struct frame *f, int xoff, int yoff, int change_gravity)
   block_input ();
   x_wm_set_size_hint (f, 0, false);
 
-  if (x_gtk_use_window_move)
+  if (change_gravity != 0)
     {
-      if (change_gravity != 0)
+      if (FRAME_GTK_OUTER_WIDGET (f))
 	{
-	  if (FRAME_GTK_OUTER_WIDGET (f))
-	    {
-	      gtk_window_move (GTK_WINDOW (FRAME_GTK_OUTER_WIDGET (f)),
-			       f->left_pos, f->top_pos);
-	    }
-	  else
-	    {
-	      GtkWidget *fixed = FRAME_GTK_WIDGET (f);
-	      GtkWidget *parent = gtk_widget_get_parent (fixed);
-	      gtk_fixed_move (GTK_FIXED (parent), fixed,
-			      f->left_pos, f->top_pos);
-	    }
+	  gtk_window_move (GTK_WINDOW (FRAME_GTK_OUTER_WIDGET (f)),
+			   f->left_pos, f->top_pos);
 	}
-      unblock_input ();
-      return;
+      else
+	{
+	  GtkWidget *fixed = FRAME_GTK_WIDGET (f);
+	  GtkWidget *parent = gtk_widget_get_parent (fixed);
+	  gtk_fixed_move (GTK_FIXED (parent), fixed,
+			  f->left_pos, f->top_pos);
+	}
     }
-
-  modified_left = f->left_pos;
-  modified_top = f->top_pos;
-
-  if (FRAME_GTK_OUTER_WIDGET (f))
-    {
-      gtk_window_move (GTK_WINDOW (FRAME_GTK_OUTER_WIDGET (f)),
-		       modified_left, modified_top);
-    }
-  else
-    {
-      GtkWidget *fixed = FRAME_GTK_WIDGET (f);
-      GtkWidget *parent = gtk_widget_get_parent (fixed);
-      gtk_fixed_move (GTK_FIXED (parent), fixed,
-		      modified_left, modified_top);
-    }
-
   unblock_input ();
+  return;
 }
 
 static void
@@ -564,10 +587,6 @@ pgtk_iconify_frame (struct frame *f)
 
   block_input ();
 
-#if 0
-  x_set_bitmap_icon (f);
-#endif
-
   if (FRAME_GTK_OUTER_WIDGET (f))
     {
       if (!FRAME_VISIBLE_P (f))
@@ -582,20 +601,8 @@ pgtk_iconify_frame (struct frame *f)
 
   /* Make sure the X server knows where the window should be positioned,
      in case the user deiconifies with the window manager.  */
-  if (!FRAME_VISIBLE_P (f) && !FRAME_ICONIFIED_P (f)
-#if 0
-      && !FRAME_X_EMBEDDED_P (f)
-#endif
-    )
+  if (!FRAME_VISIBLE_P (f) && !FRAME_ICONIFIED_P (f))
     x_set_offset (f, f->left_pos, f->top_pos, 0);
-
-#if 0
-  if (!FRAME_VISIBLE_P (f))
-    {
-      /* If the frame was withdrawn, before, we must map it.  */
-      XMapRaised (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f));
-    }
-#endif
 
   SET_FRAME_ICONIFIED (f, true);
   SET_FRAME_VISIBLE (f, 0);
@@ -899,14 +906,6 @@ x_set_parent_frame (struct frame *f, Lisp_Object new_value,
 	}
 
       g_object_unref (fixed);
-
-      if (FRAME_GTK_OUTER_WIDGET (f))
-	{
-	  if (EQ (x_gtk_resize_child_frames, Qresize_mode))
-	    gtk_container_set_resize_mode
-	      (GTK_CONTAINER (FRAME_GTK_OUTER_WIDGET (f)),
-	       p ? GTK_RESIZE_IMMEDIATE : GTK_RESIZE_QUEUE);
-	}
 
       unblock_input ();
 
@@ -1226,7 +1225,9 @@ pgtk_compute_glyph_string_overhangs (struct glyph_string *s)
 static void
 x_clear_glyph_string_rect (struct glyph_string *s, int x, int y, int w, int h)
 {
-  pgtk_fill_rectangle (s->f, s->xgcv.background, x, y, w, h);
+  pgtk_fill_rectangle (s->f, s->xgcv.background, x, y, w, h,
+		       (s->first_glyph->type != STRETCH_GLYPH
+			|| s->hl != DRAW_CURSOR));
 }
 
 
@@ -1311,12 +1312,12 @@ x_draw_glyph_string_background (struct glyph_string *s, bool force_p)
 
 static void
 pgtk_draw_rectangle (struct frame *f, unsigned long color, int x, int y,
-		     int width, int height)
+		     int width, int height, bool respect_alpha_background)
 {
   cairo_t *cr;
 
   cr = pgtk_begin_cr_clip (f);
-  pgtk_set_cr_source_with_color (f, color);
+  pgtk_set_cr_source_with_color (f, color, respect_alpha_background);
   cairo_rectangle (cr, x + 0.5, y + 0.5, width, height);
   cairo_set_line_width (cr, 1);
   cairo_stroke (cr);
@@ -1346,7 +1347,8 @@ x_draw_glyph_string_foreground (struct glyph_string *s)
 	  struct glyph *g = s->first_glyph + i;
 	  pgtk_draw_rectangle (s->f,
 			       s->face->foreground, x, s->y,
-			       g->pixel_width - 1, s->height - 1);
+			       g->pixel_width - 1, s->height - 1,
+			       false);
 	  x += g->pixel_width;
 	}
     }
@@ -1396,7 +1398,7 @@ x_draw_composite_glyph_string_foreground (struct glyph_string *s)
     {
       if (s->cmp_from == 0)
 	pgtk_draw_rectangle (s->f, s->face->foreground, x, s->y,
-			     s->width - 1, s->height - 1);
+			     s->width - 1, s->height - 1, false);
     }
   else if (!s->first_glyph->u.cmp.automatic)
     {
@@ -1538,7 +1540,8 @@ x_draw_glyphless_glyph_string_foreground (struct glyph_string *s)
 	pgtk_draw_rectangle (s->f, s->face->foreground,
 			     x, s->ybase - glyph->ascent,
 			     glyph->pixel_width - 1,
-			     glyph->ascent + glyph->descent - 1);
+			     glyph->ascent + glyph->descent - 1,
+			     false);
       x += glyph->pixel_width;
     }
 }
@@ -1641,7 +1644,7 @@ x_fill_trapezoid_for_relief (struct frame *f, unsigned long color, int x,
   cairo_t *cr;
 
   cr = pgtk_begin_cr_clip (f);
-  pgtk_set_cr_source_with_color (f, color);
+  pgtk_set_cr_source_with_color (f, color, false);
   cairo_move_to (cr, top_p ? x : x + height, y);
   cairo_line_to (cr, x, y + height);
   cairo_line_to (cr, top_p ? x + width - height : x + width, y + height);
@@ -1668,7 +1671,7 @@ x_erase_corners_for_relief (struct frame *f, unsigned long color, int x,
   int i;
 
   cr = pgtk_begin_cr_clip (f);
-  pgtk_set_cr_source_with_color (f, color);
+  pgtk_set_cr_source_with_color (f, color, false);
   for (i = 0; i < CORNER_LAST; i++)
     if (corners & (1 << i))
       {
@@ -1801,7 +1804,7 @@ x_draw_relief_rect (struct frame *f,
   if (left_p)
     {
       pgtk_fill_rectangle (f, top_left_color, left_x, top_y,
-			   vwidth, bottom_y + 1 - top_y);
+			   vwidth, bottom_y + 1 - top_y, false);
       if (top_p)
 	corners |= 1 << CORNER_TOP_LEFT;
       if (bot_p)
@@ -1810,7 +1813,7 @@ x_draw_relief_rect (struct frame *f,
   if (right_p)
     {
       pgtk_fill_rectangle (f, bottom_right_color, right_x + 1 - vwidth, top_y,
-			   vwidth, bottom_y + 1 - top_y);
+			   vwidth, bottom_y + 1 - top_y, false);
       if (top_p)
 	corners |= 1 << CORNER_TOP_RIGHT;
       if (bot_p)
@@ -1820,7 +1823,7 @@ x_draw_relief_rect (struct frame *f,
     {
       if (!right_p)
 	pgtk_fill_rectangle (f, top_left_color, left_x, top_y,
-			     right_x + 1 - left_x, hwidth);
+			     right_x + 1 - left_x, hwidth, false);
       else
 	x_fill_trapezoid_for_relief (f, top_left_color, left_x, top_y,
 				     right_x + 1 - left_x, hwidth, 1);
@@ -1830,7 +1833,7 @@ x_draw_relief_rect (struct frame *f,
       if (!left_p)
 	pgtk_fill_rectangle (f, bottom_right_color, left_x,
 			     bottom_y + 1 - hwidth, right_x + 1 - left_x,
-			     hwidth);
+			     hwidth, false);
       else
 	x_fill_trapezoid_for_relief (f, bottom_right_color,
 				     left_x, bottom_y + 1 - hwidth,
@@ -1838,10 +1841,10 @@ x_draw_relief_rect (struct frame *f,
     }
   if (left_p && vwidth > 1)
     pgtk_fill_rectangle (f, bottom_right_color, left_x, top_y,
-			 1, bottom_y + 1 - top_y);
+			 1, bottom_y + 1 - top_y, false);
   if (top_p && hwidth > 1)
     pgtk_fill_rectangle (f, bottom_right_color, left_x, top_y,
-			 right_x + 1 - left_x, 1);
+			 right_x + 1 - left_x, 1, false);
   if (corners)
     {
       x_erase_corners_for_relief (f, FRAME_BACKGROUND_PIXEL (f), left_x,
@@ -1876,23 +1879,25 @@ x_draw_box_rect (struct glyph_string *s,
 
   /* Top.  */
   pgtk_fill_rectangle (s->f, s->xgcv.foreground,
-		       left_x, top_y, right_x - left_x + 1, hwidth);
+		       left_x, top_y, right_x - left_x + 1, hwidth,
+		       false);
 
   /* Left.  */
   if (left_p)
     pgtk_fill_rectangle (s->f, s->xgcv.foreground,
-			 left_x, top_y, vwidth, bottom_y - top_y + 1);
+			 left_x, top_y, vwidth, bottom_y - top_y + 1,
+			 false);
 
   /* Bottom.  */
   pgtk_fill_rectangle (s->f, s->xgcv.foreground,
 		       left_x, bottom_y - hwidth + 1, right_x - left_x + 1,
-		       hwidth);
+		       hwidth, false);
 
   /* Right.  */
   if (right_p)
     pgtk_fill_rectangle (s->f, s->xgcv.foreground,
 			 right_x - vwidth + 1, top_y, vwidth,
-			 bottom_y - top_y + 1);
+			 bottom_y - top_y + 1, false);
 
   s->xgcv.foreground = foreground_backup;
 
@@ -1962,7 +1967,7 @@ x_draw_horizontal_wave (struct frame *f, unsigned long color, int x, int y,
   int xoffset, n;
 
   cr = pgtk_begin_cr_clip (f);
-  pgtk_set_cr_source_with_color (f, color);
+  pgtk_set_cr_source_with_color (f, color, false);
   cairo_rectangle (cr, x, y, width, height);
   cairo_clip (cr);
 
@@ -2138,7 +2143,7 @@ x_cr_draw_image (struct frame *f, Emacs_GC *gc, cairo_pattern_t *image,
     cairo_rectangle (cr, dest_x, dest_y, width, height);
   else
     {
-      pgtk_set_cr_source_with_gc_background (f, gc);
+      pgtk_set_cr_source_with_gc_background (f, gc, false);
       cairo_rectangle (cr, dest_x, dest_y, width, height);
       cairo_fill_preserve (cr);
     }
@@ -2155,7 +2160,7 @@ x_cr_draw_image (struct frame *f, Emacs_GC *gc, cairo_pattern_t *image,
     }
   else
     {
-      pgtk_set_cr_source_with_gc_foreground (f, gc);
+      pgtk_set_cr_source_with_gc_foreground (f, gc, false);
       cairo_clip (cr);
       cairo_mask (cr, image);
     }
@@ -2205,7 +2210,7 @@ x_draw_image_foreground (struct glyph_string *s)
 	      int relief = eabs (s->img->relief);
 	      pgtk_draw_rectangle (s->f, s->xgcv.foreground, x - relief, y - relief,
 				   s->slice.width + relief*2 - 1,
-				   s->slice.height + relief*2 - 1);
+				   s->slice.height + relief*2 - 1, false);
 	    }
 	}
       pgtk_end_cr_clip (s->f);
@@ -2213,7 +2218,7 @@ x_draw_image_foreground (struct glyph_string *s)
   else
     /* Draw a rectangle if image could not be loaded.  */
     pgtk_draw_rectangle (s->f, s->xgcv.foreground, x, y,
-			 s->slice.width - 1, s->slice.height - 1);
+			 s->slice.width - 1, s->slice.height - 1, false);
 }
 
 /* Draw image glyph string S.
@@ -2358,7 +2363,8 @@ x_draw_stretch_glyph_string (struct glyph_string *s)
 	    }
 	  else
 	    {
-	      pgtk_fill_rectangle (s->f, color, x, y, w, h);
+	      pgtk_fill_rectangle (s->f, color, x, y, w, h,
+				   true);
 	    }
 
 	  pgtk_end_cr_clip (s->f);
@@ -2524,8 +2530,12 @@ pgtk_draw_glyph_string (struct glyph_string *s)
 	      unsigned long thickness, position;
 	      int y;
 
-	      if (s->prev && s->prev->face->underline
-		  && s->prev->face->underline == FACE_UNDER_LINE)
+	      if (s->prev
+		  && s->prev->face->underline == FACE_UNDER_LINE
+		  && (s->prev->face->underline_at_descent_line_p
+		      == s->face->underline_at_descent_line_p)
+		  && (s->prev->face->underline_pixels_above_descent_line
+		      == s->face->underline_pixels_above_descent_line))
 		{
 		  /* We use the same underline style as the previous one.  */
 		  thickness = s->prev->underline_thickness;
@@ -2540,8 +2550,11 @@ pgtk_draw_glyph_string (struct glyph_string *s)
 		    thickness = font->underline_thickness;
 		  else
 		    thickness = 1;
-		  if (x_underline_at_descent_line)
-		    position = (s->height - thickness) - (s->ybase - s->y);
+		  if ((x_underline_at_descent_line
+		       || s->face->underline_at_descent_line_p))
+		    position = ((s->height - thickness)
+				- (s->ybase - s->y)
+				- s->face->underline_pixels_above_descent_line);
 		  else
 		    {
 		      /* Get the underline position.  This is the recommended
@@ -2560,7 +2573,11 @@ pgtk_draw_glyph_string (struct glyph_string *s)
 		      else
 			position = underline_minimum_offset;
 		    }
-		  position = max (position, underline_minimum_offset);
+
+		  /* Ignore minimum_offset if the amount of pixels was
+		     explictly specified.  */
+		  if (!s->face->underline_pixels_above_descent_line)
+		    position = max (position, underline_minimum_offset);
 		}
 	      /* Check the sanity of thickness and position.  We should
 	         avoid drawing underline out of the current line area.  */
@@ -2573,11 +2590,13 @@ pgtk_draw_glyph_string (struct glyph_string *s)
 	      y = s->ybase + position;
 	      if (s->face->underline_defaulted_p)
 		pgtk_fill_rectangle (s->f, s->xgcv.foreground,
-				     s->x, y, s->width, thickness);
+				     s->x, y, s->width, thickness,
+				     false);
 	      else
 		{
 		  pgtk_fill_rectangle (s->f, s->face->underline_color,
-				       s->x, y, s->width, thickness);
+				       s->x, y, s->width, thickness,
+				       false);
 		}
 	    }
 	}
@@ -2588,11 +2607,11 @@ pgtk_draw_glyph_string (struct glyph_string *s)
 
 	  if (s->face->overline_color_defaulted_p)
 	    pgtk_fill_rectangle (s->f, s->xgcv.foreground, s->x, s->y + dy,
-				 s->width, h);
+				 s->width, h, false);
 	  else
 	    {
 	      pgtk_fill_rectangle (s->f, s->face->overline_color, s->x,
-				   s->y + dy, s->width, h);
+				   s->y + dy, s->width, h, false);
 	    }
 	}
 
@@ -2613,11 +2632,11 @@ pgtk_draw_glyph_string (struct glyph_string *s)
 
 	  if (s->face->strike_through_color_defaulted_p)
 	    pgtk_fill_rectangle (s->f, s->xgcv.foreground, s->x, glyph_y + dy,
-				 s->width, h);
+				 s->width, h, false);
 	  else
 	    {
 	      pgtk_fill_rectangle (s->f, s->face->strike_through_color, s->x,
-				   glyph_y + dy, s->width, h);
+				   glyph_y + dy, s->width, h, false);
 	    }
 	}
 
@@ -2750,7 +2769,7 @@ x_draw_hollow_cursor (struct window *w, struct glyph_row *row)
   /* The foreground of cursor_gc is typically the same as the normal
      background color, which can cause the cursor box to be invisible.  */
   cairo_t *cr = pgtk_begin_cr_clip (f);
-  pgtk_set_cr_source_with_color (f, FRAME_X_OUTPUT (f)->cursor_color);
+  pgtk_set_cr_source_with_color (f, FRAME_X_OUTPUT (f)->cursor_color, false);
 
   /* When on R2L character, show cursor at the right edge of the
      glyph, unless the cursor box is as wide as the glyph or wider
@@ -2764,7 +2783,7 @@ x_draw_hollow_cursor (struct window *w, struct glyph_row *row)
     }
   /* Set clipping, draw the rectangle, and reset clipping again.  */
   pgtk_clip_to_row (w, row, TEXT_AREA, cr);
-  pgtk_draw_rectangle (f, FRAME_X_OUTPUT (f)->cursor_color, x, y, wd, h - 1);
+  pgtk_draw_rectangle (f, FRAME_X_OUTPUT (f)->cursor_color, x, y, wd, h - 1, false);
   pgtk_end_cr_clip (f);
 }
 
@@ -2838,7 +2857,7 @@ x_draw_bar_cursor (struct window *w, struct glyph_row *row, int width,
 
 	  pgtk_fill_rectangle (f, color, x,
 			       WINDOW_TO_FRAME_PIXEL_Y (w, w->phys_cursor.y),
-			       width, row->height);
+			       width, row->height, false);
 	}
       else			/* HBAR_CURSOR */
 	{
@@ -2859,7 +2878,7 @@ x_draw_bar_cursor (struct window *w, struct glyph_row *row, int width,
 	  pgtk_fill_rectangle (f, color, x,
 			       WINDOW_TO_FRAME_PIXEL_Y (w, w->phys_cursor.y +
 							row->height - width),
-			       w->phys_cursor_width - 1, width);
+			       w->phys_cursor_width - 1, width, false);
 	}
 
       pgtk_end_cr_clip (f);
@@ -2930,17 +2949,24 @@ pgtk_draw_window_cursor (struct window *w, struct glyph_row *glyph_row, int x,
 }
 
 static void
-pgtk_copy_bits (struct frame *f, cairo_rectangle_t * src_rect,
-		cairo_rectangle_t * dst_rect)
+pgtk_copy_bits (struct frame *f, cairo_rectangle_t *src_rect,
+		cairo_rectangle_t *dst_rect)
 {
   cairo_t *cr;
+  GdkWindow *window;
   cairo_surface_t *surface;	/* temporary surface */
+  int scale;
+
+  window = gtk_widget_get_window (FRAME_GTK_WIDGET (f));
 
   surface =
-    cairo_surface_create_similar (FRAME_CR_SURFACE (f),
-				  CAIRO_CONTENT_COLOR_ALPHA,
-				  (int) src_rect->width,
-				  (int) src_rect->height);
+    gdk_window_create_similar_surface (window, CAIRO_CONTENT_COLOR_ALPHA,
+				       FRAME_CR_SURFACE_DESIRED_WIDTH (f),
+				       FRAME_CR_SURFACE_DESIRED_HEIGHT
+				       (f));
+
+  scale = gtk_widget_get_scale_factor (FRAME_GTK_WIDGET (f));
+  cairo_surface_set_device_scale (surface, scale, scale);
 
   cr = cairo_create (surface);
   cairo_set_source_surface (cr, FRAME_CR_SURFACE (f), -src_rect->x,
@@ -2952,6 +2978,7 @@ pgtk_copy_bits (struct frame *f, cairo_rectangle_t * src_rect,
 
   cr = pgtk_begin_cr_clip (f);
   cairo_set_source_surface (cr, surface, dst_rect->x, dst_rect->y);
+  cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
   cairo_rectangle (cr, dst_rect->x, dst_rect->y, dst_rect->width,
 		   dst_rect->height);
   cairo_clip (cr);
@@ -2998,6 +3025,91 @@ pgtk_scroll_run (struct window *w, struct run *run)
     }
 
   block_input ();
+
+#ifdef HAVE_XWIDGETS
+  /* "Copy" xwidget views in the area that will be scrolled.  */
+  GtkWidget *tem, *parent = FRAME_GTK_WIDGET (f);
+  GList *children = gtk_container_get_children (GTK_CONTAINER (parent));
+  GList *iter;
+  struct xwidget_view *view;
+
+  for (iter = children; iter; iter = iter->next)
+    {
+      tem = iter->data;
+      view = g_object_get_data (G_OBJECT (tem), XG_XWIDGET_VIEW);
+
+      if (view && !view->hidden)
+	{
+	  int window_y = view->y + view->clip_top;
+	  int window_height = view->clip_bottom - view->clip_top;
+
+	  Emacs_Rectangle r1, r2, result;
+	  r1.x = w->pixel_left;
+	  r1.y = from_y;
+	  r1.width = w->pixel_width;
+	  r1.height = height;
+	  r2 = r1;
+	  r2.y = window_y;
+	  r2.height = window_height;
+
+	  /* The window is offscreen, just unmap it.  */
+	  if (window_height == 0)
+	    {
+	      view->hidden = true;
+	      gtk_widget_hide (tem);
+	      continue;
+	    }
+
+	  bool intersects_p =
+	    gui_intersect_rectangles (&r1, &r2, &result);
+
+	  if (XWINDOW (view->w) == w && intersects_p)
+	    {
+	      int y = view->y + (to_y - from_y);
+	      int text_area_x, text_area_y, text_area_width, text_area_height;
+	      int clip_top, clip_bottom;
+
+	      window_box (w, view->area, &text_area_x, &text_area_y,
+			  &text_area_width, &text_area_height);
+
+	      view->y = y;
+
+	      clip_top = 0;
+	      clip_bottom = XXWIDGET (view->model)->height;
+
+	      if (y < text_area_y)
+		clip_top = text_area_y - y;
+
+	      if ((y + clip_bottom) > (text_area_y + text_area_height))
+		{
+		  clip_bottom -= (y + clip_bottom) - (text_area_y + text_area_height);
+		}
+
+	      view->clip_top = clip_top;
+	      view->clip_bottom = clip_bottom;
+
+	      /* This means the view has moved offscreen.  Unmap
+		 it and hide it here.  */
+	      if ((view->clip_bottom - view->clip_top) <= 0)
+		{
+		  view->hidden = true;
+		  gtk_widget_hide (tem);
+		}
+	      else
+		{
+		  gtk_fixed_move (GTK_FIXED (FRAME_GTK_WIDGET (f)),
+				  tem, view->x + view->clip_left,
+				  view->y + view->clip_top);
+		  gtk_widget_set_size_request (tem, view->clip_right - view->clip_left,
+					       view->clip_bottom - view->clip_top);
+		  gtk_widget_queue_allocate (tem);
+		}
+	    }
+	}
+    }
+
+  g_list_free (children);
+#endif
 
   /* Cursor off.  Will be switched on again in x_update_window_end.  */
   gui_clear_cursor (w);
@@ -3128,7 +3240,7 @@ pgtk_draw_vertical_window_border (struct window *w, int x, int y0, int y1)
 
   face = FACE_FROM_ID_OR_NULL (f, VERTICAL_BORDER_FACE_ID);
   if (face)
-    pgtk_set_cr_source_with_color (f, face->foreground);
+    pgtk_set_cr_source_with_color (f, face->foreground, false);
 
   cairo_rectangle (cr, x, y0, 1, y1 - y0);
   cairo_fill (cr);
@@ -3159,32 +3271,32 @@ pgtk_draw_window_divider (struct window *w, int x0, int x1, int y0, int y1)
   if (y1 - y0 > x1 - x0 && x1 - x0 > 2)
     /* Vertical.  */
     {
-      pgtk_set_cr_source_with_color (f, color_first);
+      pgtk_set_cr_source_with_color (f, color_first, false);
       cairo_rectangle (cr, x0, y0, 1, y1 - y0);
       cairo_fill (cr);
-      pgtk_set_cr_source_with_color (f, color);
+      pgtk_set_cr_source_with_color (f, color, false);
       cairo_rectangle (cr, x0 + 1, y0, x1 - x0 - 2, y1 - y0);
       cairo_fill (cr);
-      pgtk_set_cr_source_with_color (f, color_last);
+      pgtk_set_cr_source_with_color (f, color_last, false);
       cairo_rectangle (cr, x1 - 1, y0, 1, y1 - y0);
       cairo_fill (cr);
     }
   else if (x1 - x0 > y1 - y0 && y1 - y0 > 3)
     /* Horizontal.  */
     {
-      pgtk_set_cr_source_with_color (f, color_first);
+      pgtk_set_cr_source_with_color (f, color_first, false);
       cairo_rectangle (cr, x0, y0, x1 - x0, 1);
       cairo_fill (cr);
-      pgtk_set_cr_source_with_color (f, color);
+      pgtk_set_cr_source_with_color (f, color, false);
       cairo_rectangle (cr, x0, y0 + 1, x1 - x0, y1 - y0 - 2);
       cairo_fill (cr);
-      pgtk_set_cr_source_with_color (f, color_last);
+      pgtk_set_cr_source_with_color (f, color_last, false);
       cairo_rectangle (cr, x0, y1 - 1, x1 - x0, 1);
       cairo_fill (cr);
     }
   else
     {
-      pgtk_set_cr_source_with_color (f, color);
+      pgtk_set_cr_source_with_color (f, color, false);
       cairo_rectangle (cr, x0, y0, x1 - x0, y1 - y0);
       cairo_fill (cr);
     }
@@ -3407,7 +3519,7 @@ pgtk_cr_draw_image (struct frame *f, Emacs_GC * gc, cairo_pattern_t * image,
     cairo_rectangle (cr, dest_x, dest_y, width, height);
   else
     {
-      pgtk_set_cr_source_with_gc_background (f, gc);
+      pgtk_set_cr_source_with_gc_background (f, gc, false);
       cairo_rectangle (cr, dest_x, dest_y, width, height);
       cairo_fill_preserve (cr);
     }
@@ -3423,7 +3535,7 @@ pgtk_cr_draw_image (struct frame *f, Emacs_GC * gc, cairo_pattern_t * image,
     }
   else
     {
-      pgtk_set_cr_source_with_gc_foreground (f, gc);
+      pgtk_set_cr_source_with_gc_foreground (f, gc, false);
       cairo_clip (cr);
       cairo_mask (cr, image);
     }
@@ -3455,7 +3567,7 @@ pgtk_draw_fringe_bitmap (struct window *w, struct glyph_row *row,
 	}
       else
 	{
-	  pgtk_set_cr_source_with_color (f, face->background);
+	  pgtk_set_cr_source_with_color (f, face->background, true);
 	  cairo_rectangle (cr, p->bx, p->by, p->nx, p->ny);
 	  cairo_fill (cr);
 	}
@@ -3618,9 +3730,12 @@ recover_from_visible_bell (struct atimer *timer)
 static void
 pgtk_flash (struct frame *f)
 {
-  block_input ();
-
   {
+    if (!FRAME_CR_CONTEXT (f))
+      return;
+
+    block_input ();
+
     cairo_surface_t *surface_orig = FRAME_CR_SURFACE (f);
 
     int width = FRAME_CR_SURFACE_DESIRED_WIDTH (f);
@@ -3690,9 +3805,8 @@ pgtk_flash (struct frame *f)
     }
 
     cairo_destroy (cr);
+    unblock_input ();
   }
-
-  unblock_input ();
 }
 
 /* Make audible bell.  */
@@ -4473,22 +4587,6 @@ x_set_frame_alpha (struct frame *f)
   else if (alpha < alpha_min && alpha_min <= 1.0)
     alpha = alpha_min;
 
-#if 0
-  /* If there is a parent from the window manager, put the property there
-     also, to work around broken window managers that fail to do that.
-     Do this unconditionally as this function is called on reparent when
-     alpha has not changed on the frame.  */
-
-  if (!FRAME_PARENT_FRAME (f))
-    {
-      Window parent = x_find_topmost_parent (f);
-      if (parent != None)
-	XChangeProperty (dpy, parent, dpyinfo->Xatom_net_wm_window_opacity,
-			 XA_CARDINAL, 32, PropModeReplace,
-			 (unsigned char *) &opac, 1);
-    }
-#endif
-
   set_opacity_recursively (FRAME_WIDGET (f), &alpha);
   /* without this, blending mode is strange on wayland. */
   gtk_widget_queue_resize_no_redraw (FRAME_WIDGET (f));
@@ -4738,6 +4836,7 @@ pgtk_create_terminal (struct pgtk_display_info *dpyinfo)
   terminal->focus_frame_hook = pgtk_focus_frame;
   terminal->set_frame_offset_hook = x_set_offset;
   terminal->free_pixmap = pgtk_free_pixmap;
+  terminal->toolkit_position_hook = pgtk_toolkit_position;
 
   /* Other hooks are NULL by default.  */
 
@@ -4812,18 +4911,54 @@ pgtk_any_window_to_frame (GdkWindow * window)
 }
 
 static gboolean
-pgtk_handle_event (GtkWidget * widget, GdkEvent * event, gpointer * data)
+pgtk_handle_event (GtkWidget *widget, GdkEvent *event, gpointer *data)
 {
+#if GTK_CHECK_VERSION (3, 18, 0)
+  struct frame *f;
+  union buffered_input_event inev;
+  GtkWidget *frame_widget;
+  gint x, y;
+
+  if (event->type == GDK_TOUCHPAD_PINCH
+      && (event->touchpad_pinch.phase
+	  != GDK_TOUCHPAD_GESTURE_PHASE_END))
+    {
+      f = pgtk_any_window_to_frame (gtk_widget_get_window (widget));
+      frame_widget = FRAME_GTK_WIDGET (f);
+
+      gtk_widget_translate_coordinates (widget, frame_widget,
+					lrint (event->touchpad_pinch.x),
+					lrint (event->touchpad_pinch.y),
+					&x, &y);
+      if (f)
+	{
+
+	  inev.ie.kind = PINCH_EVENT;
+	  XSETFRAME (inev.ie.frame_or_window, f);
+	  XSETINT (inev.ie.x, x);
+	  XSETINT (inev.ie.y, y);
+	  inev.ie.arg = list4 (make_float (event->touchpad_pinch.dx),
+			       make_float (event->touchpad_pinch.dy),
+			       make_float (event->touchpad_pinch.scale),
+			       make_float (event->touchpad_pinch.angle_delta));
+	  inev.ie.modifiers = pgtk_gtk_to_emacs_modifiers (FRAME_DISPLAY_INFO (f),
+							   event->touchpad_pinch.state);
+	  evq_enqueue (&inev);
+	}
+
+      return TRUE;
+    }
+#endif
   return FALSE;
 }
 
 static void
 pgtk_fill_rectangle (struct frame *f, unsigned long color, int x, int y,
-		     int width, int height)
+		     int width, int height, bool respect_alpha_background)
 {
   cairo_t *cr;
   cr = pgtk_begin_cr_clip (f);
-  pgtk_set_cr_source_with_color (f, color);
+  pgtk_set_cr_source_with_color (f, color, respect_alpha_background);
   cairo_rectangle (cr, x, y, width, height);
   cairo_fill (cr);
   pgtk_end_cr_clip (f);
@@ -4832,7 +4967,9 @@ pgtk_fill_rectangle (struct frame *f, unsigned long color, int x, int y,
 void
 pgtk_clear_under_internal_border (struct frame *f)
 {
-  if (FRAME_INTERNAL_BORDER_WIDTH (f) > 0)
+  if (FRAME_INTERNAL_BORDER_WIDTH (f) > 0
+      && (!FRAME_GTK_OUTER_WIDGET (f)
+	  || gtk_widget_get_realized (FRAME_GTK_OUTER_WIDGET (f))))
     {
       int border = FRAME_INTERNAL_BORDER_WIDTH (f);
       int width = FRAME_PIXEL_WIDTH (f);
@@ -5062,7 +5199,7 @@ pgtk_gtk_to_emacs_modifiers (struct pgtk_display_info *dpyinfo, int state)
   return mod;
 }
 
-static int
+int
 pgtk_emacs_to_gtk_modifiers (struct pgtk_display_info *dpyinfo, int state)
 {
   int mod_ctrl;
@@ -5105,9 +5242,9 @@ pgtk_emacs_to_gtk_modifiers (struct pgtk_display_info *dpyinfo, int state)
 void
 pgtk_enqueue_string (struct frame *f, gchar * str)
 {
-  gunichar *ustr;
+  gunichar *ustr, *uptr;
 
-  ustr = g_utf8_to_ucs4 (str, -1, NULL, NULL, NULL);
+  uptr = ustr = g_utf8_to_ucs4 (str, -1, NULL, NULL, NULL);
   if (ustr == NULL)
     return;
   for (; *ustr != 0; ustr++)
@@ -5126,6 +5263,7 @@ pgtk_enqueue_string (struct frame *f, gchar * str)
       evq_enqueue (&inev);
     }
 
+  g_free (uptr);
 }
 
 void
@@ -5133,7 +5271,7 @@ pgtk_enqueue_preedit (struct frame *f, Lisp_Object preedit)
 {
   union buffered_input_event inev;
   EVENT_INIT (inev.ie);
-  inev.ie.kind = PGTK_PREEDIT_TEXT_EVENT;
+  inev.ie.kind = PREEDIT_TEXT_EVENT;
   inev.ie.arg = preedit;
   inev.ie.code = 0;
   XSETFRAME (inev.ie.frame_or_window, f);
@@ -5433,6 +5571,7 @@ configure_event (GtkWidget *widget,
 		 gpointer *user_data)
 {
   struct frame *f = pgtk_any_window_to_frame (event->configure.window);
+
   if (f && widget == FRAME_GTK_OUTER_WIDGET (f))
     {
       if (any_help_event_p)
@@ -5444,6 +5583,15 @@ configure_event (GtkWidget *widget,
 	    frame = Qnil;
 	  help_echo_string = Qnil;
 	  gen_help_event (Qnil, frame, Qnil, Qnil, 0);
+	}
+
+      if (f->win_gravity == NorthWestGravity)
+	gtk_window_get_position (GTK_WINDOW (widget),
+				 &f->left_pos, &f->top_pos);
+      else
+	{
+	  f->top_pos = event->configure.y;
+	  f->left_pos = event->configure.x;
 	}
     }
   return FALSE;
@@ -5527,6 +5675,32 @@ window_state_event (GtkWidget *widget,
 	    }
 	}
     }
+
+  if (event->window_state.new_window_state
+      & GDK_WINDOW_STATE_FULLSCREEN)
+    store_frame_param (f, Qfullscreen, Qfullboth);
+  else if (event->window_state.new_window_state
+	   & GDK_WINDOW_STATE_MAXIMIZED)
+    store_frame_param (f, Qfullscreen, Qmaximized);
+  else
+    store_frame_param (f, Qfullscreen, Qnil);
+
+  if (event->window_state.new_window_state
+      & GDK_WINDOW_STATE_ICONIFIED)
+    SET_FRAME_ICONIFIED (f, true);
+  else
+    {
+      FRAME_X_OUTPUT (f)->has_been_visible = true;
+      inev.ie.kind = DEICONIFY_EVENT;
+      XSETFRAME (inev.ie.frame_or_window, f);
+      SET_FRAME_ICONIFIED (f, false);
+    }
+
+  if (event->window_state.new_window_state
+      & GDK_WINDOW_STATE_STICKY)
+    store_frame_param (f, Qsticky, Qt);
+  else
+    store_frame_param (f, Qsticky, Qnil);
 
   if (inev.ie.kind != NO_EVENT)
     evq_enqueue (&inev);
@@ -5812,7 +5986,7 @@ motion_notify_event (GtkWidget * widget, GdkEvent * event,
       clear_mouse_face (hlinfo);
     }
 
-  if (f && xg_event_is_for_scrollbar (f, event))
+  if (f && xg_event_is_for_scrollbar (f, event, false))
     f = 0;
   if (f)
     {
@@ -5960,9 +6134,6 @@ button_event (GtkWidget * widget, GdkEvent * event, gpointer * user_data)
   dpyinfo = FRAME_DISPLAY_INFO (frame);
 
   dpyinfo->last_mouse_glyph_frame = NULL;
-#if 0
-  x_display_set_last_user_time (dpyinfo, event->button.time);
-#endif
 
   if (gui_mouse_grabbed (dpyinfo))
     f = dpyinfo->last_mouse_frame;
@@ -5990,14 +6161,6 @@ button_event (GtkWidget * widget, GdkEvent * event, gpointer * user_data)
 	    }
 	}
     }
-
-  /* xg_event_is_for_scrollbar() doesn't work correctly on sway, and
-   * we shouldn't need it.
-   */
-#if 0
-  if (f && xg_event_is_for_scrollbar (f, event))
-    f = 0;
-#endif
 
   if (f)
     {
@@ -6040,11 +6203,6 @@ button_event (GtkWidget * widget, GdkEvent * event, gpointer * user_data)
 	  if (!NILP (tab_bar_arg))
 	    inev.ie.arg = tab_bar_arg;
 	}
-#if 0
-      if (FRAME_X_EMBEDDED_P (f))
-	xembed_send_message (f, event->button.time,
-			     XEMBED_REQUEST_FOCUS, 0, 0, 0);
-#endif
     }
 
   if (event->type == GDK_BUTTON_PRESS)
@@ -6133,78 +6291,64 @@ scroll_event (GtkWidget * widget, GdkEvent * event, gpointer * user_data)
     }
   else if (gdk_event_get_scroll_deltas (event, &delta_x, &delta_y))
     {
-      dpyinfo->scroll.acc_x += delta_x;
-      dpyinfo->scroll.acc_y += delta_y;
-      if (dpyinfo->scroll.acc_y >= dpyinfo->scroll.y_per_line
-	  || !mwheel_coalesce_scroll_events)
+      if (!mwheel_coalesce_scroll_events)
 	{
-	  int nlines = dpyinfo->scroll.acc_y / dpyinfo->scroll.y_per_line;
-	  inev.ie.kind = WHEEL_EVENT;
-	  inev.ie.modifiers |= down_modifier;
-	  inev.ie.arg = list3 (make_fixnum (nlines),
-			       make_float (-dpyinfo->scroll.acc_x * 100),
-			       make_float (-dpyinfo->scroll.acc_y * 100));
-	  if (!mwheel_coalesce_scroll_events)
+	  inev.ie.kind = ((fabs (delta_x) > fabs (delta_y))
+			  ? HORIZ_WHEEL_EVENT
+			  : WHEEL_EVENT);
+	  inev.ie.modifiers |= (inev.ie.kind == HORIZ_WHEEL_EVENT
+				? (delta_x >= 0 ? up_modifier : down_modifier)
+				: (delta_y >= 0 ? down_modifier : up_modifier));
+	  inev.ie.arg = list3 (Qnil, make_float (-delta_x * 100),
+			       make_float (-delta_y * 100));
+	}
+      else
+	{
+	  dpyinfo->scroll.acc_x += delta_x;
+	  dpyinfo->scroll.acc_y += delta_y;
+	  if (dpyinfo->scroll.acc_y >= dpyinfo->scroll.y_per_line)
 	    {
-	      dpyinfo->scroll.acc_y = 0;
-	      dpyinfo->scroll.acc_x = 0;
-	    }
-	  else
-	    {
+	      int nlines = dpyinfo->scroll.acc_y / dpyinfo->scroll.y_per_line;
+	      inev.ie.kind = WHEEL_EVENT;
+	      inev.ie.modifiers |= down_modifier;
+	      inev.ie.arg = list3 (make_fixnum (nlines),
+				   make_float (-dpyinfo->scroll.acc_x * 100),
+				   make_float (-dpyinfo->scroll.acc_y * 100));
 	      dpyinfo->scroll.acc_y -= dpyinfo->scroll.y_per_line * nlines;
 	    }
-	}
-      else if (dpyinfo->scroll.acc_y <= -dpyinfo->scroll.y_per_line
-	       || !mwheel_coalesce_scroll_events)
-	{
-	  int nlines = -dpyinfo->scroll.acc_y / dpyinfo->scroll.y_per_line;
-	  inev.ie.kind = WHEEL_EVENT;
-	  inev.ie.modifiers |= up_modifier;
-	  inev.ie.arg = list3 (make_fixnum (nlines),
-			       make_float (-dpyinfo->scroll.acc_x * 100),
-			       make_float (-dpyinfo->scroll.acc_y * 100));
-
-	  if (!mwheel_coalesce_scroll_events)
+	  else if (dpyinfo->scroll.acc_y <= -dpyinfo->scroll.y_per_line)
 	    {
-	      dpyinfo->scroll.acc_y = 0;
-	      dpyinfo->scroll.acc_x = 0;
+	      int nlines = -dpyinfo->scroll.acc_y / dpyinfo->scroll.y_per_line;
+	      inev.ie.kind = WHEEL_EVENT;
+	      inev.ie.modifiers |= up_modifier;
+	      inev.ie.arg = list3 (make_fixnum (nlines),
+				   make_float (-dpyinfo->scroll.acc_x * 100),
+				   make_float (-dpyinfo->scroll.acc_y * 100));
+
+	      dpyinfo->scroll.acc_y -= -dpyinfo->scroll.y_per_line * nlines;
 	    }
-	  else
-	    dpyinfo->scroll.acc_y -= -dpyinfo->scroll.y_per_line * nlines;
-	}
-      else if (dpyinfo->scroll.acc_x >= dpyinfo->scroll.x_per_char
-	       || !mwheel_coalesce_scroll_events)
-	{
-	  int nchars = dpyinfo->scroll.acc_x / dpyinfo->scroll.x_per_char;
-	  inev.ie.kind = HORIZ_WHEEL_EVENT;
-	  inev.ie.modifiers |= up_modifier;
-	  inev.ie.arg = list3 (make_fixnum (nchars),
-			       make_float (-dpyinfo->scroll.acc_x * 100),
-			       make_float (-dpyinfo->scroll.acc_y * 100));
-
-	  if (mwheel_coalesce_scroll_events)
-	    dpyinfo->scroll.acc_x -= dpyinfo->scroll.x_per_char * nchars;
-	  else
+	  else if (dpyinfo->scroll.acc_x >= dpyinfo->scroll.x_per_char
+		   || !mwheel_coalesce_scroll_events)
 	    {
-	      dpyinfo->scroll.acc_x = 0;
-	      dpyinfo->scroll.acc_y = 0;
+	      int nchars = dpyinfo->scroll.acc_x / dpyinfo->scroll.x_per_char;
+	      inev.ie.kind = HORIZ_WHEEL_EVENT;
+	      inev.ie.modifiers |= up_modifier;
+	      inev.ie.arg = list3 (make_fixnum (nchars),
+				   make_float (-dpyinfo->scroll.acc_x * 100),
+				   make_float (-dpyinfo->scroll.acc_y * 100));
+
+	      dpyinfo->scroll.acc_x -= dpyinfo->scroll.x_per_char * nchars;
 	    }
-	}
-      else if (dpyinfo->scroll.acc_x <= -dpyinfo->scroll.x_per_char)
-	{
-	  int nchars = -dpyinfo->scroll.acc_x / dpyinfo->scroll.x_per_char;
-	  inev.ie.kind = HORIZ_WHEEL_EVENT;
-	  inev.ie.modifiers |= down_modifier;
-	  inev.ie.arg = list3 (make_fixnum (nchars),
-			       make_float (-dpyinfo->scroll.acc_x * 100),
-			       make_float (-dpyinfo->scroll.acc_y * 100));
-
-	  if (mwheel_coalesce_scroll_events)
-	    dpyinfo->scroll.acc_x -= -dpyinfo->scroll.x_per_char * nchars;
-	  else
+	  else if (dpyinfo->scroll.acc_x <= -dpyinfo->scroll.x_per_char)
 	    {
-	      dpyinfo->scroll.acc_x = 0;
-	      dpyinfo->scroll.acc_y = 0;
+	      int nchars = -dpyinfo->scroll.acc_x / dpyinfo->scroll.x_per_char;
+	      inev.ie.kind = HORIZ_WHEEL_EVENT;
+	      inev.ie.modifiers |= down_modifier;
+	      inev.ie.arg = list3 (make_fixnum (nchars),
+				   make_float (-dpyinfo->scroll.acc_x * 100),
+				   make_float (-dpyinfo->scroll.acc_y * 100));
+
+	      dpyinfo->scroll.acc_x -= -dpyinfo->scroll.x_per_char * nchars;
 	    }
 	}
     }
@@ -6773,7 +6917,8 @@ pgtk_clear_area (struct frame *f, int x, int y, int width, int height)
   eassert (width > 0 && height > 0);
 
   cr = pgtk_begin_cr_clip (f);
-  pgtk_set_cr_source_with_color (f, FRAME_X_OUTPUT (f)->background_color);
+  pgtk_set_cr_source_with_color (f, FRAME_X_OUTPUT (f)->background_color,
+				 true);
   cairo_rectangle (cr, x, y, width, height);
   cairo_fill (cr);
   pgtk_end_cr_clip (f);
@@ -6811,80 +6956,46 @@ syms_of_pgtkterm (void)
   Fput (Qcontrol, Qmodifier_value, make_fixnum (ctrl_modifier));
 
   DEFVAR_LISP ("x-ctrl-keysym", Vx_ctrl_keysym,
-	       doc: /* Which keys Emacs uses for the ctrl modifier.
-This should be one of the symbols `ctrl', `alt', `hyper', `meta',
-`super'.  For example, `ctrl' means use the Ctrl_L and Ctrl_R keysyms.
-The default is nil, which is the same as `ctrl'.  */ );
+	       doc: /* SKIP: real doc in xterm.c.  */);
   Vx_ctrl_keysym = Qnil;
 
   DEFVAR_LISP ("x-alt-keysym", Vx_alt_keysym,
-	       doc: /* Which keys Emacs uses for the alt modifier.
-This should be one of the symbols `ctrl', `alt', `hyper', `meta',
-`super'.  For example, `alt' means use the Alt_L and Alt_R keysyms.
-The default is nil, which is the same as `alt'.  */ );
+	       doc: /* SKIP: real doc in xterm.c.  */);
   Vx_alt_keysym = Qnil;
 
   DEFVAR_LISP ("x-hyper-keysym", Vx_hyper_keysym,
-	       doc: /* Which keys Emacs uses for the hyper modifier.
-This should be one of the symbols `ctrl', `alt', `hyper', `meta',
-`super'.  For example, `hyper' means use the Hyper_L and Hyper_R
-keysyms.  The default is nil, which is the same as `hyper'.  */ );
+	       doc: /* SKIP: real doc in xterm.c.  */);
   Vx_hyper_keysym = Qnil;
 
   DEFVAR_LISP ("x-meta-keysym", Vx_meta_keysym,
-	       doc: /* Which keys Emacs uses for the meta modifier.
-This should be one of the symbols `ctrl', `alt', `hyper', `meta',
-`super'.  For example, `meta' means use the Meta_L and Meta_R keysyms.
-The default is nil, which is the same as `meta'.  */ );
+	       doc: /* SKIP: real doc in xterm.c.  */);
   Vx_meta_keysym = Qnil;
 
   DEFVAR_LISP ("x-super-keysym", Vx_super_keysym,
-	       doc: /* Which keys Emacs uses for the super modifier.
-This should be one of the symbols `ctrl', `alt', `hyper', `meta',
-`super'.  For example, `super' means use the Super_L and Super_R
-keysyms.  The default is nil, which is the same as `super'.  */ );
+	       doc: /* SKIP: real doc in xterm.c.  */);
   Vx_super_keysym = Qnil;
 
-  /* TODO: move to common code */
-  DEFVAR_LISP ("x-toolkit-scroll-bars", Vx_toolkit_scroll_bars,
-	       doc: /* Which toolkit scroll bars Emacs uses, if any.
-A value of nil means Emacs doesn't use toolkit scroll bars.
-With the X Window system, the value is a symbol describing the
-X toolkit.  Possible values are: gtk, motif, xaw, or xaw3d.
-With MS Windows or Nextstep, the value is t.  */ );
-  /* Vx_toolkit_scroll_bars = Qt; */
-  Vx_toolkit_scroll_bars = intern_c_string ("gtk");
+  DEFVAR_BOOL ("x-use-underline-position-properties",
+	       x_use_underline_position_properties,
+     doc: /* SKIP: real doc in xterm.c.  */);
+  x_use_underline_position_properties = 1;
 
-  DEFVAR_BOOL ("x-use-underline-position-properties", x_use_underline_position_properties,
-	       doc: /*Non-nil means make use of UNDERLINE_POSITION font properties.
-A value of nil means ignore them.  If you encounter fonts with bogus
-UNDERLINE_POSITION font properties, for example 7x13 on XFree prior
-to 4.1, set this to nil. */);
-  x_use_underline_position_properties = 0;
-
-  DEFVAR_BOOL ("x-underline-at-descent-line", x_underline_at_descent_line,
-	       doc: /* Non-nil means to draw the underline at the same place as the descent line.
-A value of nil means to draw the underline according to the value of the
-variable `x-use-underline-position-properties', which is usually at the
-baseline level.  The default value is nil.  */);
+  DEFVAR_BOOL ("x-underline-at-descent-line",
+	       x_underline_at_descent_line,
+     doc: /* SKIP: real doc in xterm.c.  */);
   x_underline_at_descent_line = 0;
 
-  DEFVAR_BOOL ("x-gtk-use-window-move", x_gtk_use_window_move,
-	       doc: /* Non-nil means rely on gtk_window_move to set frame positions.
-If this variable is t (the default), the GTK build uses the function
-gtk_window_move to set or store frame positions and disables some time
-consuming frame position adjustments.  In newer versions of GTK, Emacs
-always uses gtk_window_move and ignores the value of this variable.  */);
-  x_gtk_use_window_move = true;
-
+  DEFVAR_LISP ("x-toolkit-scroll-bars", Vx_toolkit_scroll_bars,
+     doc: /* SKIP: real doc in xterm.c.  */);
+  Vx_toolkit_scroll_bars = intern_c_string ("gtk");
 
   DEFVAR_LISP ("pgtk-wait-for-event-timeout", Vpgtk_wait_for_event_timeout,
-	       doc: /* How long to wait for X events.
+	       doc: /* How long to wait for GTK events.
 
-Emacs will wait up to this many seconds to receive X events after
-making changes which affect the state of the graphical interface.
-Under some window managers this can take an indefinite amount of time,
-so it is important to limit the wait.
+Emacs will wait up to this many seconds to receive some GTK events
+after making changes which affect the state of the graphical
+interface.  Under some window managers this can take an indefinite
+amount of time, so it is important to limit the wait.
 
 If set to a non-float value, there will be no wait at all.  */);
   Vpgtk_wait_for_event_timeout = make_float (0.1);
@@ -6903,13 +7014,12 @@ If set to a non-float value, there will be no wait at all.  */);
 }
 
 /* Cairo does not allow resizing a surface/context after it is
- * created, so we need to trash the old context, create a new context
- * on the next cr_clip_begin with the new dimensions and request a
- * re-draw.
- *
- * This Will leave the active context available to present on screen
- * until a redrawn frame is completed.
- */
+   created, so we need to trash the old context, create a new context
+   on the next cr_clip_begin with the new dimensions and request a
+   re-draw.
+
+   This will leave the active context available to present on screen
+   until a redrawn frame is completed.  */
 void
 pgtk_cr_update_surface_desired_size (struct frame *f, int width, int height, bool force)
 {
@@ -6956,25 +7066,39 @@ pgtk_end_cr_clip (struct frame *f)
 }
 
 void
-pgtk_set_cr_source_with_gc_foreground (struct frame *f, Emacs_GC * gc)
+pgtk_set_cr_source_with_gc_foreground (struct frame *f, Emacs_GC *gc,
+				       bool respects_alpha_background)
 {
-  pgtk_set_cr_source_with_color (f, gc->foreground);
+  pgtk_set_cr_source_with_color (f, gc->foreground,
+				 respects_alpha_background);
 }
 
 void
-pgtk_set_cr_source_with_gc_background (struct frame *f, Emacs_GC * gc)
+pgtk_set_cr_source_with_gc_background (struct frame *f, Emacs_GC *gc,
+				       bool respects_alpha_background)
 {
-  pgtk_set_cr_source_with_color (f, gc->background);
+  pgtk_set_cr_source_with_color (f, gc->background,
+				 respects_alpha_background);
 }
 
 void
-pgtk_set_cr_source_with_color (struct frame *f, unsigned long color)
+pgtk_set_cr_source_with_color (struct frame *f, unsigned long color,
+			       bool respects_alpha_background)
 {
   Emacs_Color col;
   col.pixel = color;
   pgtk_query_color (f, &col);
-  cairo_set_source_rgb (FRAME_CR_CONTEXT (f), col.red / 65535.0,
-			col.green / 65535.0, col.blue / 65535.0);
+
+  if (!respects_alpha_background)
+    cairo_set_source_rgb (FRAME_CR_CONTEXT (f), col.red / 65535.0,
+			  col.green / 65535.0, col.blue / 65535.0);
+  else
+    {
+      cairo_set_source_rgba (FRAME_CR_CONTEXT (f), col.red / 65535.0,
+			     col.green / 65535.0, col.blue / 65535.0,
+			     f->alpha_background);
+      cairo_set_operator (FRAME_CR_CONTEXT (f), CAIRO_OPERATOR_SOURCE);
+    }
 }
 
 void
@@ -7024,7 +7148,7 @@ pgtk_cr_export_frames (Lisp_Object frames, cairo_surface_type_t surface_type)
   int width, height;
   void (*surface_set_size_func) (cairo_surface_t *, double, double) = NULL;
   Lisp_Object acc = Qnil;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   specbind (Qredisplay_dont_pause, Qt);
   redisplay_preserve_echo_area (31);

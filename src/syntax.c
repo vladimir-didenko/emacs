@@ -1,5 +1,5 @@
 /* GNU Emacs routines to deal with syntax tables; also word and list parsing.
-   Copyright (C) 1985, 1987, 1993-1995, 1997-1999, 2001-2021 Free
+   Copyright (C) 1985, 1987, 1993-1995, 1997-1999, 2001-2022 Free
    Software Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -1101,10 +1101,11 @@ this is probably the wrong function to use, because it can't take
 `syntax-after' instead.  */)
   (Lisp_Object character)
 {
-  int char_int;
   CHECK_CHARACTER (character);
-  char_int = XFIXNUM (character);
+  int char_int = XFIXNAT (character);
   SETUP_BUFFER_SYNTAX_TABLE ();
+  if (NILP (BVAR (current_buffer, enable_multibyte_characters)))
+    char_int = make_char_multibyte (char_int);
   return make_fixnum (syntax_code_spec[SYNTAX (char_int)]);
 }
 

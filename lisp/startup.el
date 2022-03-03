@@ -1,6 +1,6 @@
 ;;; startup.el --- process Emacs shell arguments  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1986, 1992, 1994-2021 Free Software Foundation,
+;; Copyright (C) 1985-1986, 1992, 1994-2022 Free Software Foundation,
 ;; Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -519,20 +519,73 @@ DIRS are relative."
       xdg-dir)
      (t emacs-d-dir))))
 
+(defvar comp--compilable)
 (defvar comp--delayed-sources)
-(defvar comp--loadable)
+(defun startup--require-comp-safely ()
+  "Require the native compiler avoiding circular dependencies."
+  (when (featurep 'native-compile)
+    ;; Require comp with `comp--compilable' set to nil to break
+    ;; circularity.
+    (let ((comp--compilable nil))
+      (require 'comp))
+    (native--compile-async comp--delayed-sources nil 'late)
+    (setq comp--delayed-sources nil)))
+
 (declare-function native--compile-async "comp.el"
                   (files &optional recursively load selector))
 (defun startup--honor-delayed-native-compilations ()
   "Honor pending delayed deferred native compilations."
   (when (and (native-comp-available-p)
              comp--delayed-sources)
-    (require 'comp)
-    (setq comp--loadable t)
-    (native--compile-async comp--delayed-sources nil 'late)
-    (setq comp--delayed-sources nil)))
+    (startup--require-comp-safely))
+  (setq comp--compilable t))
 
 (defvar native-comp-eln-load-path)
+(defvar native-comp-deferred-compilation)
+(defvar comp-enable-subr-trampolines)
+
+(defvar startup--original-eln-load-path nil
+  "Original value of `native-comp-eln-load-path'.")
+
+(defun startup-redirect-eln-cache (cache-directory)
+  "Redirect the user's eln-cache directory to CACHE-DIRECTORY.
+CACHE-DIRECTORY must be a single directory, a string.
+This function destructively changes `native-comp-eln-load-path'
+so that its first element is CACHE-DIRECTORY.  If CACHE-DIRECTORY
+is not an absolute file name, it is interpreted relative
+to `user-emacs-directory'.
+For best results, call this function in your early-init file,
+so that the rest of initialization and package loading uses
+the updated value."
+  (let ((tmp-dir (and (equal (getenv "HOME") "/nonexistent")
+                      (file-writable-p (expand-file-name
+                                        (or temporary-file-directory "")))
+                      (car native-comp-eln-load-path))))
+    (if tmp-dir
+        (setq native-comp-eln-load-path
+              (cdr native-comp-eln-load-path)))
+    ;; Remove the original eln-cache.
+    (setq native-comp-eln-load-path
+          (cdr native-comp-eln-load-path))
+    ;; Add the new eln-cache.
+    (push (expand-file-name (file-name-as-directory cache-directory)
+                            user-emacs-directory)
+          native-comp-eln-load-path)
+    (when tmp-dir
+      ;; Recompute tmp-dir, in case user-emacs-directory affects it.
+      (setq tmp-dir (make-temp-file "emacs-testsuite-" t))
+      (add-hook 'kill-emacs-hook (lambda () (delete-directory tmp-dir t)))
+      (push tmp-dir native-comp-eln-load-path))))
+
+(defun startup--update-eln-cache ()
+  "Update the user eln-cache directory due to user customizations."
+  ;; Don't override user customizations!
+  (when (equal native-comp-eln-load-path
+               startup--original-eln-load-path)
+    (startup-redirect-eln-cache "eln-cache")
+    (setq startup--original-eln-load-path
+          (copy-sequence native-comp-eln-load-path))))
+
 (defun normal-top-level ()
   "Emacs calls this function when it first starts up.
 It sets `command-line-processed', processes the command-line,
@@ -551,6 +604,14 @@ It is the default value of the variable `top-level'."
 	  (startup--xdg-or-homedot startup--xdg-config-home-emacs nil))
 
     (when (featurep 'native-compile)
+      (unless (native-comp-available-p)
+        ;; Disable deferred async compilation and trampoline synthesis
+        ;; in this session.  This is necessary if libgccjit is not
+        ;; available on MS-Windows, but Emacs was built with
+        ;; native-compilation support.
+        (setq native-comp-deferred-compilation nil
+              comp-enable-subr-trampolines nil))
+
       ;; Form `native-comp-eln-load-path'.
       (let ((path-env (getenv "EMACSNATIVELOADPATH")))
         (when path-env
@@ -570,6 +631,7 @@ It is the default value of the variable `top-level'."
         (let ((tmp-dir (make-temp-file "emacs-testsuite-" t)))
           (add-hook 'kill-emacs-hook (lambda () (delete-directory tmp-dir t)))
           (push tmp-dir native-comp-eln-load-path))))
+
     ;; Look in each dir in load-path for a subdirs.el file.  If we
     ;; find one, load it, which will add the appropriate subdirs of
     ;; that dir into load-path.  This needs to be done before setting
@@ -665,7 +727,9 @@ It is the default value of the variable `top-level'."
                            ;; native-comp-eln-load-path.
                            (expand-file-name
                             (decode-coding-string dir coding t)))
-                         npath))))
+                         npath)))
+          (setq startup--original-eln-load-path
+                (copy-sequence native-comp-eln-load-path)))
 	(dolist (filesym '(data-directory doc-directory exec-directory
 					  installation-directory
 					  invocation-directory invocation-name
@@ -715,6 +779,7 @@ It is the default value of the variable `top-level'."
     (let ((old-face-font-rescale-alist face-font-rescale-alist))
       (unwind-protect
 	  (command-line)
+
 	;; Do this again, in case .emacs defined more abbreviations.
 	(if default-directory
 	    (setq default-directory (abbreviate-file-name default-directory)))
@@ -781,6 +846,7 @@ It is the default value of the variable `top-level'."
 	    (font-menu-add-default))
 	(unless inhibit-startup-hooks
 	  (run-hooks 'window-setup-hook))))
+
     ;; Subprocesses of Emacs do not have direct access to the terminal, so
     ;; unless told otherwise they should only assume a dumb terminal.
     ;; We are careful to do it late (after term-setup-hook), although the
@@ -1056,6 +1122,9 @@ the `--debug-init' option to view a complete error backtrace."
     (when debug-on-error-should-be-set
       (setq debug-on-error debug-on-error-from-init-file))))
 
+(defvar lisp-directory nil
+  "Directory where Emacs's own *.el and *.elc Lisp files are installed.")
+
 (defun command-line ()
   "A subroutine of `normal-top-level'.
 Amongst another things, it parses the command-line arguments."
@@ -1087,8 +1156,7 @@ Amongst another things, it parses the command-line arguments."
   (let ((simple-file-name
 	 ;; Look for simple.el or simple.elc and use their directory
 	 ;; as the place where all Lisp files live.
-	 (locate-file "simple" load-path (get-load-suffixes)))
-	lisp-dir)
+	 (locate-file "simple" load-path (get-load-suffixes))))
     ;; Don't abort if simple.el cannot be found, but print a warning.
     ;; Although in most usage we are going to cryptically abort a moment
     ;; later anyway, due to missing required bidi data files (eg bug#13430).
@@ -1104,12 +1172,13 @@ please check its value")
 	  (unless (file-readable-p lispdir)
 	    (princ (format "Lisp directory %s not readable?" lispdir))
 	    (terpri)))
-      (setq lisp-dir (file-truename (file-name-directory simple-file-name)))
+      (setq lisp-directory
+            (file-truename (file-name-directory simple-file-name)))
       (setq load-history
 	    (mapcar (lambda (elt)
 		      (if (and (stringp (car elt))
 			       (not (file-name-absolute-p (car elt))))
-			  (cons (concat lisp-dir
+			  (cons (concat lisp-directory
 					(car elt))
 				(cdr elt))
 			elt))
@@ -1142,7 +1211,8 @@ please check its value")
                          ("--no-x-resources") ("--debug-init")
                          ("--user") ("--iconic") ("--icon-type") ("--quick")
 			 ("--no-blinking-cursor") ("--basic-display")
-                         ("--dump-file") ("--temacs") ("--seccomp")))
+                         ("--dump-file") ("--temacs") ("--seccomp")
+                         ("--init-directory")))
              (argi (pop args))
              (orig-argi argi)
              argval)
@@ -1182,6 +1252,9 @@ please check its value")
 	  (push '(vertical-scroll-bars . nil) initial-frame-alist))
 	 ((member argi '("-q" "-no-init-file"))
 	  (setq init-file-user nil))
+	 ((member argi '("-init-directory"))
+	  (setq user-emacs-directory (or argval (pop args))
+                argval nil))
 	 ((member argi '("-u" "-user"))
 	  (setq init-file-user (or argval (pop args))
 		argval nil))
@@ -1258,7 +1331,8 @@ please check its value")
 		(and (eq xdg-dir user-emacs-directory)
 		     (not (eq xdg-dir startup--xdg-config-default))))
 	    user-emacs-directory
-	  ;; The name is not obvious, so access more directories to calculate it.
+	  ;; The name is not obvious, so access more directories
+	  ;; to calculate it.
 	  (setq xdg-dir (concat "~" init-file-user "/.config/emacs/"))
 	  (startup--xdg-or-homedot xdg-dir init-file-user)))
 
@@ -1273,6 +1347,12 @@ please check its value")
       "early-init.el"
       startup-init-directory)))
   (setq early-init-file user-init-file)
+
+  ;; Amend `native-comp-eln-load-path', since the early-init file may
+  ;; have altered `user-emacs-directory' and/or changed the eln-cache
+  ;; directory.
+  (when (featurep 'native-compile)
+    (startup--update-eln-cache))
 
   ;; If any package directory exists, initialize the package system.
   (and user-init-file
@@ -1407,6 +1487,12 @@ please check its value")
         "init.el"
         startup-init-directory))
      t)
+
+    ;; Amend `native-comp-eln-load-path' again, since the early-init
+    ;; file may have altered `user-emacs-directory' and/or changed the
+    ;; eln-cache directory.
+    (when (featurep 'native-compile)
+      (startup--update-eln-cache))
 
     (when (and deactivate-mark transient-mark-mode)
       (with-current-buffer (window-buffer)
@@ -2587,7 +2673,7 @@ nil default-directory" name)
                        ;; actually exist on some systems.
                        (when (file-exists-p truename)
                          (setq file-ex truename))
-                       (load file-ex nil t t)))
+                       (command-line--load-script file-ex)))
 
                     ((equal argi "-insert")
                      (setq inhibit-startup-screen t)
@@ -2712,10 +2798,24 @@ nil default-directory" name)
           (nondisplayed-buffers-p nil))
       (when (> displayable-buffers-len 0)
         (switch-to-buffer (car displayable-buffers)))
-      (when (> displayable-buffers-len 1)
-        (switch-to-buffer-other-window (car (cdr displayable-buffers)))
+      (cond
+       ;; Two buffers; display them both.
+       ((= displayable-buffers-len 2)
+        (switch-to-buffer-other-window (cadr displayable-buffers))
         ;; Focus on the first buffer.
         (other-window -1))
+       ;; More than two buffers: Ensure that the buffer display order
+       ;; reflects the order they were given on the command line.
+       ;; (This will end up with a `next-buffer' order that's in
+       ;; reverse order -- the final file is the focused one, and then
+       ;; the rest are in `next-buffer' in descending order.
+       ((> displayable-buffers-len 2)
+        (let ((bufs (reverse (cdr displayable-buffers))))
+          (switch-to-buffer-other-window (pop bufs))
+          (dolist (buf bufs)
+            (switch-to-buffer buf nil t))
+          ;; Focus on the first buffer.
+          (other-window -1))))
       (when (> displayable-buffers-len 2)
         (setq nondisplayed-buffers-p t))
 
@@ -2761,6 +2861,19 @@ nil default-directory" name)
         ;; 	(setq menubar-bindings-done t))
 
         (display-startup-screen (> displayable-buffers-len 0))))))
+
+(defun command-line--load-script (file)
+  (load-with-code-conversion
+   file file nil t
+   (lambda (buffer file)
+     (with-current-buffer buffer
+       (goto-char (point-min))
+       ;; Removing the #! and then calling `eval-buffer' will make the
+       ;; reader not signal an error if it then turns out that the
+       ;; buffer is empty.
+       (when (looking-at "#!")
+         (delete-line))
+       (eval-buffer buffer nil file nil t)))))
 
 (defun command-line-normalize-file-name (file)
   "Collapse multiple slashes to one, to handle non-Emacs file names."

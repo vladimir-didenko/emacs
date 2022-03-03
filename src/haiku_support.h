@@ -1,5 +1,5 @@
 /* Haiku window system support.  Hey Emacs, this is -*- C++ -*-
-   Copyright (C) 2021 Free Software Foundation, Inc.
+   Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -31,6 +31,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #ifdef USE_BE_CAIRO
 #include <cairo.h>
 #endif
+
+#include <math.h>
+
+#include <kernel/OS.h>
 
 enum haiku_cursor
   {
@@ -72,6 +76,7 @@ enum haiku_event_type
     ICONIFICATION,
     MOVE_EVENT,
     SCROLL_BAR_VALUE_EVENT,
+    SCROLL_BAR_PART_EVENT,
     SCROLL_BAR_DRAG_EVENT,
     WHEEL_MOVE_EVENT,
     MENU_BAR_RESIZE,
@@ -82,7 +87,9 @@ enum haiku_event_type
     MENU_BAR_HELP_EVENT,
     ZOOM_EVENT,
     REFS_EVENT,
-    APP_QUIT_REQUESTED_EVENT
+    APP_QUIT_REQUESTED_EVENT,
+    DUMMY_EVENT,
+    MENU_BAR_LEFT
   };
 
 struct haiku_quit_requested_event
@@ -119,6 +126,11 @@ struct haiku_app_quit_requested_event
   char dummy;
 };
 
+struct haiku_dummy_event
+{
+  char dummy;
+};
+
 #define HAIKU_MODIFIER_ALT (1)
 #define HAIKU_MODIFIER_CTRL (1 << 1)
 #define HAIKU_MODIFIER_SHIFT (1 << 2)
@@ -128,9 +140,11 @@ struct haiku_key_event
 {
   void *window;
   int modifiers;
-  uint32_t mb_char;
-  uint32_t unraw_mb_char;
-  short kc;
+  unsigned keysym;
+  uint32_t multibyte_char;
+
+  /* Time the keypress occurred, in microseconds.  */
+  bigtime_t time;
 };
 
 struct haiku_activation_event
@@ -145,7 +159,13 @@ struct haiku_mouse_motion_event
   bool just_exited_p;
   int x;
   int y;
-  uint32_t be_code;
+  bigtime_t time;
+};
+
+struct haiku_menu_bar_left_event
+{
+  void *window;
+  int x, y;
 };
 
 struct haiku_button_event
@@ -155,6 +175,7 @@ struct haiku_button_event
   int modifiers;
   int x;
   int y;
+  bigtime_t time;
 };
 
 struct haiku_iconification_event
@@ -193,6 +214,8 @@ struct haiku_menu_bar_help_event
 {
   void *window;
   int mb_idx;
+  void *data;
+  bool highlight_p;
 };
 
 struct haiku_zoom_event
@@ -273,13 +296,28 @@ struct haiku_font_pattern
 struct haiku_scroll_bar_value_event
 {
   void *scroll_bar;
+  void *window;
   int position;
 };
 
 struct haiku_scroll_bar_drag_event
 {
   void *scroll_bar;
+  void *window;
   int dragging_p;
+};
+
+enum haiku_scroll_bar_part
+  {
+    HAIKU_SCROLL_BAR_UP_BUTTON,
+    HAIKU_SCROLL_BAR_DOWN_BUTTON
+  };
+
+struct haiku_scroll_bar_part_event
+{
+  void *scroll_bar;
+  void *window;
+  enum haiku_scroll_bar_part part;
 };
 
 struct haiku_menu_bar_resize_event
@@ -292,6 +330,7 @@ struct haiku_menu_bar_resize_event
 struct haiku_menu_bar_state_event
 {
   void *window;
+  bool no_lock;
 };
 
 #define HAIKU_THIN 0
@@ -311,6 +350,46 @@ struct haiku_menu_bar_state_event
 #define HAIKU_MEDIUM 2000
 
 #ifdef __cplusplus
+/* Haiku's built in Height and Width functions for calculating
+   rectangle sizes are broken, probably for compatibility with BeOS:
+   they do not round up in a reasonable fashion, and they return the
+   numerical difference between the end and start sides in both
+   directions, instead of the actual size.
+
+   For example:
+
+     BRect (1, 1, 5, 5).IntegerWidth ()
+
+   Will return 4, when in reality the rectangle is 5 pixels wide,
+   since the left corner is also a pixel!
+
+   All code in Emacs should use the macros below to calculate the
+   dimensions of a BRect, instead of relying on the broken Width and
+   Height functions.  */
+
+#define BE_RECT_HEIGHT(rect) (ceil (((rect).bottom - (rect).top) + 1))
+#define BE_RECT_WIDTH(rect) (ceil (((rect).right - (rect).left) + 1))
+#endif /* __cplusplus */
+
+/* C++ code cannot include lisp.h, but file dialogs need to be able
+   to bind to the specpdl and handle quitting correctly.  */
+
+#ifdef __cplusplus
+
+#if SIZE_MAX > 0xffffffff
+#define WRAP_SPECPDL_REF 1
+#endif
+#ifdef WRAP_SPECPDL_REF
+typedef struct { ptrdiff_t bytes; } specpdl_ref;
+#else
+typedef ptrdiff_t specpdl_ref;
+#endif
+
+#else
+#include "lisp.h"
+#endif
+
+#ifdef __cplusplus
 extern "C"
 {
 #endif
@@ -328,25 +407,27 @@ extern "C"
 #endif
 
   extern port_id port_application_to_emacs;
+  extern port_id port_popup_menu_to_emacs;
 
   extern void haiku_io_init (void);
   extern void haiku_io_init_in_app_thread (void);
 
   extern void
-  haiku_read_size (ssize_t *len);
+  haiku_read_size (ssize_t *len, bool popup_menu_p);
 
   extern int
   haiku_read (enum haiku_event_type *type, void *buf, ssize_t len);
 
   extern int
   haiku_read_with_timeout (enum haiku_event_type *type, void *buf, ssize_t len,
-			   time_t timeout);
+			   time_t timeout, bool popup_menu_p);
 
   extern int
   haiku_write (enum haiku_event_type type, void *buf);
 
   extern int
-  haiku_write_without_signal (enum haiku_event_type type, void *buf);
+  haiku_write_without_signal (enum haiku_event_type type, void *buf,
+			      bool popup_menu_p);
 
   extern void
   rgb_color_hsl (uint32_t rgb, double *h, double *s, double *l);
@@ -433,10 +514,6 @@ extern "C"
   BView_SetHighColorForVisibleBell (void *view, uint32_t color);
 
   extern void
-  BView_FillRectangleForVisibleBell (void *view, int x, int y, int width,
-				     int height);
-
-  extern void
   BView_SetLowColor (void *view, uint32_t color);
 
   extern void
@@ -498,6 +575,9 @@ extern "C"
 		  int vx, int vy, int vwidth, int vheight,
 		  uint32_t color);
 
+  extern void
+  BView_InvertRect (void *view, int x, int y, int width, int height);
+
   extern void *
   BBitmap_transform_bitmap (void *bitmap, void *mask, uint32_t m_color,
 			    double rot, int desw, int desh);
@@ -536,9 +616,6 @@ extern "C"
   extern void
   BWindow_Flush (void *window);
 
-  extern void
-  BMapKey (uint32_t kc, int *non_ascii_p, unsigned *code);
-
   extern void *
   BScrollBar_make_for_view (void *view, int horizontal_p,
 			    int x, int y, int x1, int y1,
@@ -560,7 +637,11 @@ extern "C"
   BView_invalidate (void *view);
 
   extern void
-  BView_draw_lock (void *view);
+  BView_draw_lock (void *view, bool invalidate_region,
+		   int x, int y, int width, int height);
+
+  extern void
+  BView_invalidate_region (void *view, int x, int y, int width, int height);
 
   extern void
   BView_draw_unlock (void *view);
@@ -576,6 +657,10 @@ extern "C"
 
   extern void
   BView_mouse_up (void *view, int x, int y);
+
+  extern void
+  BBitmap_import_fringe_bitmap (void *bitmap, unsigned short *bits,
+				int wd, int h);
 
   extern void
   BBitmap_import_mono_bits (void *bitmap, void *bits, int wd, int h);
@@ -600,6 +685,9 @@ extern "C"
 
   extern void
   BView_forget_scroll_bar (void *view, int x, int y, int width, int height);
+
+  extern bool
+  BView_inside_scroll_bar (void *view, int x, int y);
 
   extern void
   BView_get_mouse (void *view, int *x, int *y);
@@ -652,7 +740,12 @@ extern "C"
   BMenu_item_at (void *menu, int idx);
 
   extern void *
-  BMenu_run (void *menu, int x, int y);
+  BMenu_run (void *menu, int x, int y,
+	     void (*run_help_callback) (void *, void *),
+	     void (*block_input_function) (void),
+	     void (*unblock_input_function) (void),
+	     void (*process_pending_signals_function) (void),
+	     void *run_help_callback_data);
 
   extern void
   BPopUpMenu_delete (void *menu);
@@ -684,8 +777,14 @@ extern "C"
   extern void *
   BAlert_add_button (void *alert, const char *text);
 
-  extern int32_t
-  BAlert_go (void *alert);
+  extern void
+  BAlert_set_offset_spacing (void *alert);
+
+  extern int32
+  BAlert_go (void *alert,
+	     void (*block_input_function) (void),
+	     void (*unblock_input_function) (void),
+	     void (*process_pending_signals_function) (void));
 
   extern void
   BButton_set_enabled (void *button, int enabled_p);
@@ -740,19 +839,16 @@ extern "C"
 			int dir_only_p,	void *window, const char *save_text,
 			const char *prompt,
 			void (*block_input_function) (void),
-			void (*unblock_input_function) (void));
+			void (*unblock_input_function) (void),
+			void (*maybe_quit_function) (void));
 
   extern void
   record_c_unwind_protect_from_cxx (void (*) (void *), void *);
 
-  extern ptrdiff_t
-  c_specpdl_idx_from_cxx (void);
+  extern specpdl_ref c_specpdl_idx_from_cxx (void);
 
   extern void
-  c_unbind_to_nil_from_cxx (ptrdiff_t idx);
-
-  extern void
-  EmacsView_do_visible_bell (void *view, uint32_t color);
+  c_unbind_to_nil_from_cxx (specpdl_ref idx);
 
   extern void
   BWindow_zoom (void *window);
@@ -784,8 +880,8 @@ extern "C"
   BView_show_tooltip (void *view);
 
 #ifdef USE_BE_CAIRO
-  extern cairo_surface_t *
-  EmacsView_cairo_surface (void *view);
+  extern cairo_t *
+  EmacsView_cairo_context (void *view);
 
   extern void
   BView_cr_dump_clipping (void *view, cairo_t *ctx);
@@ -818,6 +914,30 @@ extern "C"
 
   extern void
   BWindow_set_size_alignment (void *window, int align_width, int align_height);
+
+  extern void
+  BWindow_sync (void *window);
+
+  extern void
+  BWindow_send_behind (void *window, void *other_window);
+
+  extern bool
+  BWindow_is_active (void *window);
+
+  extern bool
+  be_use_subpixel_antialiasing (void);
+
+  extern void
+  BWindow_set_override_redirect (void *window, bool override_redirect_p);
+
+  extern const char *
+  be_find_setting (const char *name);
+
+  extern void
+  EmacsWindow_signal_menu_update_complete (void *window);
+
+  extern haiku_font_family_or_style *
+  be_list_font_families (size_t *length);
 
 #ifdef __cplusplus
   extern void *

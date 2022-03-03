@@ -1,6 +1,6 @@
 ;;; macros.el --- non-primitive commands for keyboard macros -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1987, 1992, 1994-1995, 2001-2021 Free Software
+;; Copyright (C) 1985-1987, 1992, 1994-1995, 2001-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -134,8 +134,9 @@ use this command, and then save the file."
           (_ (prin1 definition (current-buffer))))))
     (insert ")\n")
     (if keys
-        (let ((keys (or (where-is-internal (symbol-function macroname)
-                                           '(keymap))
+        (let ((keys (or (and (symbol-function macroname)
+                             (where-is-internal (symbol-function macroname)
+                                                '(keymap)))
                         (where-is-internal macroname '(keymap)))))
 	  (while keys
 	    (insert "(global-set-key ")

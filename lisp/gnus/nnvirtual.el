@@ -1,6 +1,6 @@
 ;;; nnvirtual.el --- virtual newsgroups access for Gnus  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1994-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1994-2022 Free Software Foundation, Inc.
 
 ;; Author: David Moore <dmoore@ucsd.edu>
 ;;	Lars Magne Ingebrigtsen <larsi@gnus.org>
@@ -365,7 +365,7 @@ It is computed from the marks of individual component groups.")
                               (lambda (article)
                                 (nnvirtual-reverse-map-article
                                  group article))
-			      (gnus-uncompress-range
+			      (range-uncompress
 			       (gnus-group-expire-articles-1 group))))))
     (sort (delq nil unexpired) #'<)))
 

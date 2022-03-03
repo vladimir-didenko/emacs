@@ -1,6 +1,6 @@
 ;;; package.el --- Simple package system for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2007-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2022 Free Software Foundation, Inc.
 
 ;; Author: Tom Tromey <tromey@redhat.com>
 ;;         Daniel Hackney <dan@haxney.org>
@@ -397,7 +397,13 @@ a sane initial value."
   :type '(repeat symbol))
 
 (defcustom package-native-compile nil
-  "Non-nil means to native compile packages on installation."
+  "Non-nil means to natively compile packages as part of their installation.
+This controls ahead-of-time compilation of packages when they are
+installed.  If this option is nil, packages will be natively
+compiled when they are loaded for the first time.
+
+This option does not have any effect if Emacs was not built with
+native compilation support."
   :type '(boolean)
   :risky t
   :version "28.1")
@@ -999,7 +1005,8 @@ untar into a directory named DIR; otherwise, signal an error."
   "Make sure that the autoload file FILE exists and if not create it."
   (unless (file-exists-p file)
     (require 'autoload)
-    (write-region (autoload-rubric file "package" nil) nil file nil 'silent))
+    (let ((coding-system-for-write 'utf-8-emacs-unix))
+      (write-region (autoload-rubric file "package" nil) nil file nil 'silent)))
   file)
 
 (defvar autoload-timestamps)
@@ -2033,6 +2040,7 @@ if all the in-between dependencies are also in PACKAGE-LIST."
                                                  package-alist))))
                  (setf (package-desc-signed (car pkg-descs)) t))))))))))
 
+;;;###autoload
 (defun package-installed-p (package &optional min-version)
   "Return non-nil if PACKAGE, of MIN-VERSION or newer, is installed.
 If PACKAGE is a symbol, it is the package name and MIN-VERSION
@@ -4076,7 +4084,9 @@ The list is displayed in a buffer named `*Packages*'."
   "Return the version number of the package in which this is used.
 Assumes it is used from an Elisp file placed inside the top-level directory
 of an installed ELPA package.
-The return value is a string (or nil in case we can't find it)."
+The return value is a string (or nil in case we can't find it).
+It works in more cases if the call is in the file which contains
+the `Version:' header."
   ;; In a sense, this is a lie, but it does just what we want: precompute
   ;; the version at compile time and hardcodes it into the .elc file!
   (declare (pure t))
@@ -4095,6 +4105,7 @@ The return value is a string (or nil in case we can't find it)."
       (let* ((pkgdir (file-name-directory file))
              (pkgname (file-name-nondirectory (directory-file-name pkgdir)))
              (mainfile (expand-file-name (concat pkgname ".el") pkgdir)))
+        (unless (file-readable-p mainfile) (setq mainfile file))
         (when (file-readable-p mainfile)
           (require 'lisp-mnt)
           (with-temp-buffer

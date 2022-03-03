@@ -1,6 +1,6 @@
 ;;; sendmail.el --- mail sending commands for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1992-1996, 1998, 2000-2021 Free Software
+;; Copyright (C) 1985-1986, 1992-1996, 1998, 2000-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -877,7 +877,7 @@ The variable is used to trigger insertion of the \"Mail-Followup-To\"
 header when sending a message to a mailing list."
   :type '(repeat string))
 
-(declare-function mml-to-mime "mml" ())
+(declare-function mm-long-lines-p "mm-bodies" (length))
 
 (defun mail-send ()
   "Send the message in the current buffer.
@@ -955,7 +955,11 @@ the user from the mailer."
 	      (error "Invalid header line (maybe a continuation line lacks initial whitespace)"))
 	    (forward-line 1)))
 	(goto-char opoint)
-	(when mail-encode-mml
+        (require 'mml)
+	(when (or mail-encode-mml
+                  ;; When we have long lines, we have to MIME encode
+                  ;; to get line folding.
+                  (mm-long-lines-p 1000))
 	  (mml-to-mime)
 	  (setq mail-encode-mml nil))
 	(run-hooks 'mail-send-hook)

@@ -1,6 +1,6 @@
 ;;; woman.el --- browse UN*X manual pages `wo (without) man'  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2000-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2000-2022 Free Software Foundation, Inc.
 
 ;; Author: Francis J. Wright <F.J.Wright@qmul.ac.uk>
 ;; Maintainer: emacs-devel@gnu.org
@@ -2280,9 +2280,9 @@ Currently set only from \\='\\\" t in the first line of the source file.")
       (replace-match woman-unpadded-space-string t t))
 
     ;; Discard optional hyphen \%; concealed newlines \<newline>;
-    ;; point-size change function \sN,\s+N, \s-N:
+    ;; kerning \/, \,; point-size change function \sN,\s+N, \s-N:
     (goto-char from)
-    (while (re-search-forward "\\\\\\([%\n]\\|s[-+]?[0-9]+\\)" nil t)
+    (while (re-search-forward "\\\\\\([%\n/,]\\|s[-+]?[0-9]+\\)" nil t)
       (woman-delete-match 0))
 
     ;; BEWARE: THIS SHOULD PROBABLY ALL BE DONE MUCH LATER!!!!!
@@ -4578,6 +4578,8 @@ logging the message."
                  (woman-find-file file) (current-buffer))))
     (bookmark-default-handler
      `("" (buffer . ,buf) . ,(bookmark-get-bookmark-record bookmark)))))
+
+(put 'woman-bookmark-jump 'bookmark-handler-type "WoMan")
 
 ;; Obsolete.
 

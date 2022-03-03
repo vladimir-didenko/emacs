@@ -1,5 +1,5 @@
 /* Threading code.
-Copyright (C) 2012-2021 Free Software Foundation, Inc.
+Copyright (C) 2012-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -82,6 +82,22 @@ release_global_lock (void)
 {
   sys_mutex_unlock (&global_lock);
 }
+
+static void
+rebind_for_thread_switch (void)
+{
+  ptrdiff_t distance
+    = current_thread->m_specpdl_ptr - current_thread->m_specpdl;
+  specpdl_unrewind (specpdl_ptr, -distance, true);
+}
+
+static void
+unbind_for_thread_switch (struct thread_state *thr)
+{
+  ptrdiff_t distance = thr->m_specpdl_ptr - thr->m_specpdl;
+  specpdl_unrewind (thr->m_specpdl_ptr, distance, true);
+}
+
 
 /* You must call this after acquiring the global lock.
    acquire_global_lock does it for you.  */
@@ -329,7 +345,7 @@ Note that calls to `mutex-lock' and `mutex-unlock' must be paired.  */)
   (Lisp_Object mutex)
 {
   struct Lisp_Mutex *lmutex;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   CHECK_MUTEX (mutex);
   lmutex = XMUTEX (mutex);
@@ -709,7 +725,7 @@ DEFUN ("thread-yield", Fthread_yield, Sthread_yield, 0, 0, 0,
 static Lisp_Object
 invoke_thread_function (void)
 {
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   current_thread->result = Ffuncall (1, &current_thread->function);
   return unbind_to (count, Qnil);

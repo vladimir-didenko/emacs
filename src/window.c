@@ -1,6 +1,6 @@
 /* Window creation, deletion and examination for GNU Emacs.
    Does not include redisplay.
-   Copyright (C) 1985-1987, 1993-1998, 2000-2021 Free Software
+   Copyright (C) 1985-1987, 1993-1998, 2000-2022 Free Software
    Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -481,7 +481,9 @@ Return WINDOW.  */)
 DEFUN ("selected-window", Fselected_window, Sselected_window, 0, 0, 0,
        doc: /* Return the selected window.
 The selected window is the window in which the standard cursor for
-selected windows appears and to which many commands apply.  */)
+selected windows appears and to which many commands apply.
+
+Also see `old-selected-window' and `minibuffer-selected-window'.  */)
   (void)
 {
   return selected_window;
@@ -2574,7 +2576,7 @@ window_list (void)
   if (!CONSP (Vwindow_list))
     {
       Lisp_Object tail, frame;
-      ptrdiff_t count = SPECPDL_INDEX ();
+      specpdl_ref count = SPECPDL_INDEX ();
 
       Vwindow_list = Qnil;
       /*  Don't allow quitting in Fnconc.  Otherwise we might end up
@@ -2732,7 +2734,7 @@ static Lisp_Object
 next_window (Lisp_Object window, Lisp_Object minibuf, Lisp_Object all_frames,
 	     bool next_p)
 {
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   decode_next_window_args (&window, &minibuf, &all_frames);
 
@@ -2886,7 +2888,7 @@ static Lisp_Object
 window_list_1 (Lisp_Object window, Lisp_Object minibuf, Lisp_Object all_frames)
 {
   Lisp_Object tail, list, rest;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   decode_next_window_args (&window, &minibuf, &all_frames);
   list = Qnil;
@@ -3505,7 +3507,7 @@ select_frame_norecord (Lisp_Object frame)
 static void
 run_window_configuration_change_hook (struct frame *f)
 {
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   Lisp_Object frame, global_wcch
     = Fdefault_value (Qwindow_configuration_change_hook);
   XSETFRAME (frame, f);
@@ -3538,7 +3540,7 @@ run_window_configuration_change_hook (struct frame *f)
 	if (!NILP (Flocal_variable_p (Qwindow_configuration_change_hook,
 				      buffer)))
 	  {
-	    ptrdiff_t inner_count = SPECPDL_INDEX ();
+	    specpdl_ref inner_count = SPECPDL_INDEX ();
 	    record_unwind_protect (select_window_norecord, selected_window);
 	    select_window_norecord (window);
 	    run_funs (Fbuffer_local_value (Qwindow_configuration_change_hook,
@@ -3575,7 +3577,7 @@ has established the size of the new window.  */)
   (Lisp_Object window)
 {
   struct window *w = decode_live_window (window);
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   record_unwind_current_buffer ();
   Fset_buffer (w->contents);
@@ -3815,7 +3817,7 @@ run_window_change_functions (void)
   Lisp_Object tail, frame;
   bool selected_frame_change = !EQ (selected_frame, old_selected_frame);
   bool run_window_state_change_hook = false;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   window_change_record_frames = false;
   record_unwind_protect_void (window_change_record);
@@ -4012,7 +4014,7 @@ set_window_buffer (Lisp_Object window, Lisp_Object buffer,
 {
   struct window *w = XWINDOW (window);
   struct buffer *b = XBUFFER (buffer);
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   bool samebuf = EQ (buffer, w->contents);
 
   wset_buffer (w, buffer);
@@ -4232,7 +4234,7 @@ temp_output_buffer_show (register Lisp_Object buf)
       /* Run temp-buffer-show-hook, with the chosen window selected
 	 and its buffer current.  */
       {
-        ptrdiff_t count = SPECPDL_INDEX ();
+        specpdl_ref count = SPECPDL_INDEX ();
         Lisp_Object prev_window, prev_buffer;
         prev_window = selected_window;
         XSETBUFFER (prev_buffer, old);
@@ -5486,7 +5488,7 @@ window_internal_height (struct window *w)
 static void
 window_scroll (Lisp_Object window, EMACS_INT n, bool whole, bool noerror)
 {
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   n = clip_to_bounds (INT_MIN, n, INT_MAX);
 
@@ -5861,7 +5863,8 @@ window_scroll_pixel_based (Lisp_Object window, int n, bool whole, bool noerror)
 
       /* We moved the window start towards ZV, so PT may be now
 	 in the scroll margin at the top.  */
-      move_it_to (&it, PT, -1, -1, -1, MOVE_TO_POS);
+      if (IT_CHARPOS (it) < PT)
+	move_it_to (&it, PT, -1, -1, -1, MOVE_TO_POS);
       if (IT_CHARPOS (it) == PT
 	  && it.current_y >= this_scroll_margin
 	  && it.current_y <= last_y - WINDOW_TAB_LINE_HEIGHT (w)
@@ -6211,7 +6214,7 @@ scroll_command (Lisp_Object window, Lisp_Object n, int direction)
 {
   struct window *w;
   bool other_window;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   eassert (eabs (direction) == 1);
 
@@ -6307,10 +6310,12 @@ followed by all visible frames on the current terminal.  */)
       if (NILP (window))
 	window = display_buffer (Vother_window_scroll_buffer, Qt, Qnil);
     }
+  else if (FUNCTIONP (Vother_window_scroll_default))
+    /* Nothing specified; try to get a window from the function.  */
+    window = call0 (Vother_window_scroll_default);
   else
     {
-      /* Nothing specified; look for a neighboring window on the same
-	 frame.  */
+      /* Otherwise, look for a neighboring window on the same frame.  */
       window = Fnext_window (selected_window, Qlambda, Qnil);
 
       if (EQ (window, selected_window))
@@ -6340,7 +6345,7 @@ It is determined by the function `other-window-for-scrolling',
 which see.  */)
   (Lisp_Object arg)
 {
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   scroll_command (Fother_window_for_scrolling (), arg, 1);
   return unbind_to (count, Qnil);
 }
@@ -6351,7 +6356,7 @@ DEFUN ("scroll-other-window-down", Fscroll_other_window_down,
 For more details, see the documentation for `scroll-other-window'.  */)
   (Lisp_Object arg)
 {
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   scroll_command (Fother_window_for_scrolling (), arg, -1);
   return unbind_to (count, Qnil);
 }
@@ -8267,6 +8272,14 @@ is displayed in the `mode-line' face.  */);
   DEFVAR_LISP ("other-window-scroll-buffer", Vother_window_scroll_buffer,
 	       doc: /* If this is a live buffer, \\[scroll-other-window] should scroll its window.  */);
   Vother_window_scroll_buffer = Qnil;
+
+  DEFVAR_LISP ("other-window-scroll-default", Vother_window_scroll_default,
+	       doc: /* Function that provides the window to scroll by \\[scroll-other-window].
+The function `other-window-for-scrolling' first tries to use
+`minibuffer-scroll-window' and `other-window-scroll-buffer'.
+But when both are nil, then by default it uses a neighboring window.
+This variable is intended to get another default instead of `next-window'.  */);
+  Vother_window_scroll_default = Qnil;
 
   DEFVAR_BOOL ("auto-window-vscroll", auto_window_vscroll_p,
 	       doc: /* Non-nil means to automatically adjust `window-vscroll' to view tall lines.  */);

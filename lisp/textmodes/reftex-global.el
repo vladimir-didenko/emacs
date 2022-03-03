@@ -1,6 +1,6 @@
 ;;; reftex-global.el --- operations on entire documents with RefTeX  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1997-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1997-2022 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <dominik@science.uva.nl>
 ;; Maintainer: auctex-devel@gnu.org
@@ -184,8 +184,8 @@ No active TAGS table is required."
                                       default))))
     (if (string= from "") (setq from default))
     (unless to
-      (setq to (read-string (format "Replace label %s with: "
-                                    from))))
+      (setq to (read-string (format "Replace label %s with: " from)
+                            nil nil from)))
     (reftex-query-replace-document
      (concat "{" (regexp-quote from) "}")
      (format "{%s}" to))))

@@ -1,6 +1,6 @@
 ;;; face-remap.el --- Functions for managing `face-remapping-alist'  -*- lexical-binding: t -*-
 ;;
-;; Copyright (C) 2008-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2008-2022 Free Software Foundation, Inc.
 ;;
 ;; Author: Miles Bader <miles@gnu.org>
 ;; Keywords: faces, face remapping, display, user commands
@@ -70,9 +70,28 @@
    :foreground :background :stipple :overline :strike-through :box
    :font :inherit :fontset :distant-foreground :extend :vector])
 
+(defun face-remap--copy-face (val)
+  "Return a copy of the `face' property value VAL."
+  ;; A `face' property can be either a face name (a symbol), or a face
+  ;; property list like (:foreground "red" :inherit default),
+  ;; or a list of such things.
+  ;; FIXME: This should probably be shared to some extent with
+  ;; `add-face-text-property'.
+  (if (or (not (listp val)) (keywordp (car val)))
+      val
+    (copy-sequence val)))
+
+(defun face-attrs--make-indirect-safe ()
+  "Deep-copy the buffer's `face-remapping-alist' upon cloning the buffer."
+  (setq-local face-remapping-alist
+              (mapcar #'face-remap--copy-face face-remapping-alist)))
+
+(add-hook 'clone-indirect-buffer-hook #'face-attrs--make-indirect-safe)
+
 (defun face-attrs-more-relative-p (attrs1 attrs2)
-  "Return true if ATTRS1 contains a greater number of relative
-face-attributes than ATTRS2.  A face attribute is considered
+  "Return non-nil if ATTRS1 is \"more relative\" than ATTRS2.
+We define this as meaning that ATTRS1 contains a greater number of
+relative face-attributes than ATTRS2.  A face attribute is considered
 relative if `face-attribute-relative-p' returns non-nil.
 
 ATTRS1 and ATTRS2 may be any value suitable for a `face' text
@@ -99,7 +118,7 @@ face lists so that more specific faces are located near the end."
   "Order ENTRY so that more relative face specs are near the beginning.
 The list structure of ENTRY may be destructively modified."
   (setq entry (nreverse entry))
-  (setcdr entry (sort (cdr entry) 'face-attrs-more-relative-p))
+  (setcdr entry (sort (cdr entry) #'face-attrs-more-relative-p))
   (nreverse entry))
 
 ;;;###autoload
@@ -188,10 +207,12 @@ If SPECS is empty or a single face `eq' to FACE, call `face-remap-reset-base'
 to use the normal definition of FACE as the base remapping; note that
 this is different from SPECS containing a single value nil, which means
 not to inherit from the global definition of FACE at all."
+  ;; Simplify the specs in the case where it's just a single face (and
+  ;; it's not a list with just a nil).
   (while (and (consp specs) (not (null (car specs))) (null (cdr specs)))
     (setq specs (car specs)))
   (if (or (null specs)
-	  (and (eq (car specs) face) (null (cdr specs)))) ; default
+	  (eq specs face)) ; default
       ;; Set entry back to default
       (face-remap-reset-base face)
     ;; Set the base remapping
@@ -388,7 +409,36 @@ a top-level keymap, `text-scale-increase' or
            (dolist (key '(?- ?+ ?= ?0)) ;; = is often unshifted +.
              (define-key map (vector (append mods (list key)))
                (lambda () (interactive) (text-scale-adjust (abs inc))))))
-         map))))) ;; )
+         map)
+       nil
+       ;; Clear the prompt after exiting.
+       (lambda ()
+         (message ""))))))
+
+(defvar-local text-scale--pinch-start-scale 0
+  "The text scale at the start of a pinch sequence.")
+
+;;;###autoload (define-key global-map [pinch] 'text-scale-pinch)
+;;;###autoload
+(defun text-scale-pinch (event)
+  "Adjust the height of the default face by the scale in the pinch event EVENT."
+  (interactive "e")
+  (when (not (eq (event-basic-type event) 'pinch))
+    (error "`text-scale-pinch' bound to bad event type"))
+  (let ((window (posn-window (nth 1 event)))
+        (scale (nth 4 event))
+        (dx (nth 2 event))
+        (dy (nth 3 event))
+        (angle (nth 5 event)))
+    (with-selected-window window
+      (when (and (zerop dx)
+                 (zerop dy)
+                 (zerop angle))
+        (setq text-scale--pinch-start-scale
+              (if text-scale-mode text-scale-mode-amount 0)))
+      (text-scale-set
+       (+ text-scale--pinch-start-scale
+          (round (log scale text-scale-mode-step)))))))
 
 
 ;; ----------------------------------------------------------------

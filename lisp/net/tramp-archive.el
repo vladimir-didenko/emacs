@@ -1,6 +1,6 @@
 ;;; tramp-archive.el --- Tramp archive manager  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2017-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2017-2022 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 ;; Keywords: comm, processes
@@ -190,6 +190,8 @@ It must be supported by libarchive(3).")
     "\\)" ;; \1
     "\\(" "/" ".*" "\\)" "\\'"))) ;; \2
 
+(put #'tramp-archive-autoload-file-name-regexp 'tramp-autoload t)
+
 ;; In older Emacsen (prior 27.1), `tramp-archive-autoload-file-name-regexp'
 ;; is not autoloaded.  So we cannot expect it to be known in
 ;; tramp-loaddefs.el.  But it exists, when tramp-archive.el is loaded.
@@ -366,6 +368,8 @@ arguments to pass to the OPERATION."
           (tramp-archive-autoload t))
       (apply #'tramp-autoload-file-name-handler operation args)))))
 
+(put #'tramp-archive-autoload-file-name-handler 'tramp-autoload t)
+
 ;;;###autoload
 (progn (defun tramp-register-archive-file-name-handler ()
   "Add archive file name handler to `file-name-handler-alist'."
@@ -374,6 +378,8 @@ arguments to pass to the OPERATION."
 	         (cons (tramp-archive-autoload-file-name-regexp)
 		       #'tramp-archive-autoload-file-name-handler))
     (put #'tramp-archive-autoload-file-name-handler 'safe-magic t))))
+
+(put #'tramp-register-archive-file-name-handler 'tramp-autoload t)
 
 ;;;###autoload
 (progn
@@ -457,7 +463,7 @@ name is kept in slot `hop'"
        ((tramp-archive-file-name-p archive)
 	(let ((archive
 	       (tramp-make-tramp-file-name
-		(tramp-archive-dissect-file-name archive) nil 'noarchive)))
+                (tramp-archive-dissect-file-name archive))))
 	  (setf (tramp-file-name-host vec) (tramp-archive-gvfs-host archive)))
 	(puthash archive (list vec) tramp-archive-hash))
 
@@ -560,8 +566,7 @@ offered."
 
 (defun tramp-archive-gvfs-file-name (name)
   "Return NAME in GVFS syntax."
-  (tramp-make-tramp-file-name
-   (tramp-archive-dissect-file-name name) nil 'nohop))
+  (tramp-make-tramp-file-name (tramp-archive-dissect-file-name name)))
 
 
 ;; File name primitives.

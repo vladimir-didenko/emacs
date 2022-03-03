@@ -1,5 +1,5 @@
 /* Haiku window system support
-   Copyright (C) 2021 Free Software Foundation, Inc.
+   Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -32,12 +32,6 @@ static Lisp_Object *volatile menu_item_selection;
 
 int popup_activated_p = 0;
 
-struct submenu_stack_cell
-{
-  void *parent_menu;
-  void *pane;
-};
-
 static void
 digest_menu_items (void *first_menu, int start, int menu_items_used,
 		   int mbar_p)
@@ -59,10 +53,17 @@ digest_menu_items (void *first_menu, int start, int menu_items_used,
   menus[0] = first_menu;
 
   void *window = NULL;
+  void *view = NULL;
   if (FRAMEP (Vmenu_updating_frame) &&
       FRAME_LIVE_P (XFRAME (Vmenu_updating_frame)) &&
       FRAME_HAIKU_P (XFRAME (Vmenu_updating_frame)))
-    window = FRAME_HAIKU_WINDOW (XFRAME (Vmenu_updating_frame));
+    {
+      window = FRAME_HAIKU_WINDOW (XFRAME (Vmenu_updating_frame));
+      view = FRAME_HAIKU_VIEW (XFRAME (Vmenu_updating_frame));
+    }
+
+  if (view)
+    BView_draw_lock (view, false, 0, 0, 0, 0);
 
   while (i < menu_items_used)
     {
@@ -135,10 +136,7 @@ digest_menu_items (void *first_menu, int start, int menu_items_used,
 	    }
 
 	  if (STRINGP (help) && STRING_MULTIBYTE (help))
-	    {
-	      help = ENCODE_UTF_8 (help);
-	      ASET (menu_items, i + MENU_ITEMS_ITEM_HELP, help);
-	    }
+	    help = ENCODE_UTF_8 (help);
 
 	  if (i + MENU_ITEMS_ITEM_LENGTH < menu_items_used &&
 	      NILP (AREF (menu_items, i + MENU_ITEMS_ITEM_LENGTH)))
@@ -146,11 +144,26 @@ digest_menu_items (void *first_menu, int start, int menu_items_used,
 	  else if (NILP (def) && menu_separator_name_p (SSDATA (item_name)))
 	    BMenu_add_separator (menu);
 	  else if (!mbar_p)
+	    {
+	      if (!use_system_tooltips || NILP (Fsymbol_value (Qtooltip_mode)))
+		BMenu_add_item (menu, SSDATA (item_name),
+				!NILP (def) ? aref_addr (menu_items, i) : NULL,
+				!NILP (enable), !NILP (selected), 0, window,
+				!NILP (descrip) ? SSDATA (descrip) : NULL,
+				NULL);
+	      else
+		BMenu_add_item (menu, SSDATA (item_name),
+				!NILP (def) ? aref_addr (menu_items, i) : NULL,
+				!NILP (enable), !NILP (selected), 0, window,
+				!NILP (descrip) ? SSDATA (descrip) : NULL,
+				STRINGP (help) ? SSDATA (help) : NULL);
+	    }
+	  else if (!use_system_tooltips || NILP (Fsymbol_value (Qtooltip_mode)))
 	    BMenu_add_item (menu, SSDATA (item_name),
-			    !NILP (def) ? aref_addr (menu_items, i) : NULL,
-			    !NILP (enable), !NILP (selected), 0, window,
+			    !NILP (def) ? (void *) (intptr_t) i : NULL,
+			    !NILP (enable), !NILP (selected), 1, window,
 			    !NILP (descrip) ? SSDATA (descrip) : NULL,
-			    STRINGP (help) ? SSDATA (help) : NULL);
+			    NULL);
 	  else
 	    BMenu_add_item (menu, SSDATA (item_name),
 			    !NILP (def) ? (void *) (intptr_t) i : NULL,
@@ -161,6 +174,9 @@ digest_menu_items (void *first_menu, int start, int menu_items_used,
 	  i += MENU_ITEMS_ITEM_LENGTH;
 	}
     }
+
+  if (view)
+    BView_draw_unlock (view);
 }
 
 static Lisp_Object
@@ -168,6 +184,11 @@ haiku_dialog_show (struct frame *f, Lisp_Object title,
 		   Lisp_Object header, const char **error_name)
 {
   int i, nb_buttons = 0;
+  bool boundary_seen = false;
+  Lisp_Object pane_name, vals[10];
+  void *alert, *button;
+  bool enabled_item_seen_p = false;
+  int32 val;
 
   *error_name = NULL;
 
@@ -177,17 +198,15 @@ haiku_dialog_show (struct frame *f, Lisp_Object title,
       return Qnil;
     }
 
-  Lisp_Object pane_name = AREF (menu_items, MENU_ITEMS_PANE_NAME);
+  pane_name = AREF (menu_items, MENU_ITEMS_PANE_NAME);
   i = MENU_ITEMS_PANE_LENGTH;
 
   if (STRING_MULTIBYTE (pane_name))
     pane_name = ENCODE_UTF_8 (pane_name);
 
   block_input ();
-  void *alert = BAlert_new (SSDATA (pane_name), NILP (header) ? HAIKU_INFO_ALERT :
-			    HAIKU_IDEA_ALERT);
-
-  Lisp_Object vals[10];
+  alert = BAlert_new (SSDATA (pane_name), NILP (header) ? HAIKU_INFO_ALERT :
+		      HAIKU_IDEA_ALERT);
 
   while (i < menu_items_used)
     {
@@ -207,7 +226,11 @@ haiku_dialog_show (struct frame *f, Lisp_Object title,
 
       if (EQ (item_name, Qquote))
 	{
+	  if (nb_buttons)
+	    boundary_seen = true;
+
 	  i++;
+	  continue;
 	}
 
       if (nb_buttons >= 9)
@@ -223,9 +246,11 @@ haiku_dialog_show (struct frame *f, Lisp_Object title,
       if (!NILP (descrip) && STRING_MULTIBYTE (descrip))
 	descrip = ENCODE_UTF_8 (descrip);
 
-      void *button = BAlert_add_button (alert, SSDATA (item_name));
+      button = BAlert_add_button (alert, SSDATA (item_name));
 
       BButton_set_enabled (button, !NILP (enable));
+      enabled_item_seen_p |= !NILP (enable);
+
       if (!NILP (descrip))
 	BView_set_tooltip (button, SSDATA (descrip));
 
@@ -234,15 +259,39 @@ haiku_dialog_show (struct frame *f, Lisp_Object title,
       i += MENU_ITEMS_ITEM_LENGTH;
     }
 
-  int32_t val = BAlert_go (alert);
+  /* Haiku only lets us specify a single button to place on the
+     left.  */
+  if (boundary_seen)
+    BAlert_set_offset_spacing (alert);
+
+  /* If there isn't a single enabled item, add an "Ok" button so the
+     popup can be dismissed.  */
+  if (!enabled_item_seen_p)
+    BAlert_add_button (alert, "Ok");
   unblock_input ();
+
+  unrequest_sigio ();
+  ++popup_activated_p;
+  val = BAlert_go (alert, block_input, unblock_input,
+		   process_pending_signals);
+  --popup_activated_p;
+  request_sigio ();
 
   if (val < 0)
     quit ();
-  else
+  else if (val < nb_buttons)
     return vals[val];
 
-  return Qnil;
+  /* The dialog was dismissed via the button appended to dismiss popup
+     dialogs without a single enabled item.  */
+  if (nb_buttons)
+    quit ();
+  /* Otherwise, the Ok button was added because no buttons were seen
+     at all.  */
+  else
+    return Qt;
+
+  emacs_abort ();
 }
 
 Lisp_Object
@@ -251,7 +300,7 @@ haiku_popup_dialog (struct frame *f, Lisp_Object header, Lisp_Object contents)
   Lisp_Object title;
   const char *error_name = NULL;
   Lisp_Object selection;
-  ptrdiff_t specpdl_count = SPECPDL_INDEX ();
+  specpdl_ref specpdl_count = SPECPDL_INDEX ();
 
   check_window_system (f);
 
@@ -269,9 +318,7 @@ haiku_popup_dialog (struct frame *f, Lisp_Object header, Lisp_Object contents)
   list_of_panes (list1 (contents));
 
   /* Display them in a dialog box.  */
-  block_input ();
   selection = haiku_dialog_show (f, title, header, &error_name);
-  unblock_input ();
 
   unbind_to (specpdl_count, Qnil);
   discard_menu_items ();
@@ -279,6 +326,27 @@ haiku_popup_dialog (struct frame *f, Lisp_Object header, Lisp_Object contents)
   if (error_name)
     error ("%s", error_name);
   return selection;
+}
+
+static void
+haiku_menu_show_help (void *help, void *data)
+{
+  Lisp_Object *id = (Lisp_Object *) help;
+
+  if (help)
+    show_help_echo (id[MENU_ITEMS_ITEM_HELP],
+		    Qnil, Qnil, Qnil);
+  else
+    show_help_echo (Qnil, Qnil, Qnil, Qnil);
+}
+
+static void
+haiku_process_pending_signals_for_menu (void)
+{
+  process_pending_signals ();
+
+  input_pending = false;
+  detect_input_pending_run_timers (true);
 }
 
 Lisp_Object
@@ -316,7 +384,11 @@ haiku_menu_show (struct frame *f, int x, int y, int menuflags,
   BView_convert_to_screen (view, &x, &y);
   unblock_input ();
 
-  menu_item_selection = BMenu_run (menu, x, y);
+  popup_activated_p++;
+  menu_item_selection = BMenu_run (menu, x, y,  haiku_menu_show_help,
+				   block_input, unblock_input,
+				   haiku_process_pending_signals_for_menu, NULL);
+  popup_activated_p--;
 
   FRAME_DISPLAY_INFO (f)->grabbed = 0;
 
@@ -366,7 +438,9 @@ haiku_menu_show (struct frame *f, int x, int y, int menuflags,
 			if (!NILP (subprefix_stack[j]))
 			  entry = Fcons (subprefix_stack[j], entry);
 		    }
+		  block_input ();
 		  BPopUpMenu_delete (menu);
+		  unblock_input ();
 		  return entry;
 		}
 	      i += MENU_ITEMS_ITEM_LENGTH;
@@ -375,10 +449,14 @@ haiku_menu_show (struct frame *f, int x, int y, int menuflags,
     }
   else if (!(menuflags & MENU_FOR_CLICK))
     {
+      block_input ();
       BPopUpMenu_delete (menu);
+      unblock_input ();
       quit ();
     }
+  block_input ();
   BPopUpMenu_delete (menu);
+  unblock_input ();
   return Qnil;
 }
 
@@ -427,7 +505,7 @@ set_frame_menubar (struct frame *f, bool deep_p)
   Lisp_Object items;
   struct buffer *prev = current_buffer;
   Lisp_Object buffer;
-  ptrdiff_t specpdl_count = SPECPDL_INDEX ();
+  specpdl_ref specpdl_count = SPECPDL_INDEX ();
   int previous_menu_items_used = f->menu_bar_items_used;
   Lisp_Object *previous_items
     = alloca (previous_menu_items_used * sizeof *previous_items);
@@ -598,7 +676,7 @@ run_menu_bar_help_event (struct frame *f, int mb_idx)
     }
 
   vec = f->menu_bar_vector;
-  if (mb_idx >= ASIZE (vec))
+  if ((mb_idx + MENU_ITEMS_ITEM_HELP) >= ASIZE (vec))
     emacs_abort ();
 
   help = AREF (vec, mb_idx + MENU_ITEMS_ITEM_HELP);
@@ -615,30 +693,28 @@ DEFUN ("menu-or-popup-active-p", Fmenu_or_popup_active_p, Smenu_or_popup_active_
 }
 
 DEFUN ("haiku-menu-bar-open", Fhaiku_menu_bar_open, Shaiku_menu_bar_open, 0, 1, "i",
-       doc: /* Show the menu bar in FRAME.
-
-Move the mouse pointer onto the first element of FRAME's menu bar, and
-cause it to be opened.  If FRAME is nil or not given, use the selected
-frame.  If FRAME has no menu bar, a pop-up is displayed at the position
-of the last non-menu event instead.  */)
+       doc: /* Show and start key navigation of the menu bar in FRAME.
+This initially opens the first menu bar item and you can then navigate
+with the arrow keys, select a menu entry with the return key, or
+cancel with the escape key.  If FRAME is nil or not given, use the
+selected frame.  If FRAME has no menu bar, a pop-up is displayed at
+the position of the last non-menu event instead.  */)
   (Lisp_Object frame)
 {
   struct frame *f = decode_window_system_frame (frame);
 
   if (FRAME_EXTERNAL_MENU_BAR (f))
     {
-      if (!FRAME_OUTPUT_DATA (f)->menu_up_to_date_p)
-	set_frame_menubar (f, 1);
+      block_input ();
+      set_frame_menubar (f, 1);
+      BMenuBar_start_tracking (FRAME_HAIKU_MENU_BAR (f));
+      unblock_input ();
     }
   else
     {
       return call2 (Qpopup_menu, call0 (Qmouse_menu_bar_map),
 		    last_nonmenu_event);
     }
-
-  block_input ();
-  BMenuBar_start_tracking (FRAME_HAIKU_MENU_BAR (f));
-  unblock_input ();
 
   return Qnil;
 }
@@ -649,6 +725,7 @@ syms_of_haikumenu (void)
   DEFSYM (Qdebug_on_next_call, "debug-on-next-call");
   DEFSYM (Qpopup_menu, "popup-menu");
   DEFSYM (Qmouse_menu_bar_map, "mouse-menu-bar-map");
+  DEFSYM (Qtooltip_mode, "tooltip-mode");
 
   defsubr (&Smenu_or_popup_active_p);
   defsubr (&Shaiku_menu_bar_open);

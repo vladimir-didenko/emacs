@@ -1,6 +1,6 @@
 ;;; nxml-mode.el --- a new XML mode  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2003-2004, 2007-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2003-2004, 2007-2022 Free Software Foundation, Inc.
 
 ;; Author: James Clark
 ;; Keywords: wp, hypermedia, languages, XML
@@ -566,7 +566,8 @@ Many aspects this mode can be customized using
           (font-lock-syntactic-face-function
            . sgml-font-lock-syntactic-face)))
 
-  (with-demoted-errors (rng-nxml-mode-init)))
+  (with-demoted-errors "RNG NXML error: %S"
+    (rng-nxml-mode-init)))
 
 (defun nxml--buffer-substring-filter (string)
   ;; The `rng-state' property is huge, so don't copy it to the kill ring.

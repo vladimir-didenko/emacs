@@ -1,5 +1,5 @@
 /* Definitions and headers for communication with pure Gtk+3.
-   Copyright (C) 1989, 1993, 2005, 2008-2020 Free Software Foundation,
+   Copyright (C) 1989, 1993, 2005, 2008-2022 Free Software Foundation,
    Inc.
 
 This file is part of GNU Emacs.
@@ -17,6 +17,8 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
+#ifndef _PGTKTERM_H_
+#define _PGTKTERM_H_
 
 #include "dispextern.h"
 #include "frame.h"
@@ -589,12 +591,9 @@ extern void x_set_z_group (struct frame *f, Lisp_Object new_value,
 extern void pgtk_cr_update_surface_desired_size (struct frame *, int, int, bool);
 extern cairo_t *pgtk_begin_cr_clip (struct frame *f);
 extern void pgtk_end_cr_clip (struct frame *f);
-extern void pgtk_set_cr_source_with_gc_foreground (struct frame *f,
-						   Emacs_GC * gc);
-extern void pgtk_set_cr_source_with_gc_background (struct frame *f,
-						   Emacs_GC * gc);
-extern void pgtk_set_cr_source_with_color (struct frame *f,
-					   unsigned long color);
+extern void pgtk_set_cr_source_with_gc_foreground (struct frame *, Emacs_GC *, bool);
+extern void pgtk_set_cr_source_with_gc_background (struct frame *, Emacs_GC *, bool);
+extern void pgtk_set_cr_source_with_color (struct frame *, unsigned long, bool);
 extern void pgtk_cr_draw_frame (cairo_t * cr, struct frame *f);
 extern void pgtk_cr_destroy_frame_context (struct frame *f);
 extern Lisp_Object pgtk_cr_export_frames (Lisp_Object frames, cairo_surface_type_t surface_type);
@@ -660,5 +659,7 @@ extern bool xg_set_icon_from_xpm_data (struct frame *f, const char **data);
 extern bool pgtk_text_icon (struct frame *f, const char *icon_name);
 
 extern double pgtk_frame_scale_factor (struct frame *);
+extern int pgtk_emacs_to_gtk_modifiers (struct pgtk_display_info *, int);
 
 #endif /* HAVE_PGTK */
+#endif /* _PGTKTERM_H_ */

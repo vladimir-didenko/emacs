@@ -1,6 +1,6 @@
 ;;; pixel-scroll.el --- Scroll a line smoothly  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2017-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2017-2022 Free Software Foundation, Inc.
 ;; Author: Tak Kunihiro <tkk@misasa.okayama-u.ac.jp>
 ;; Keywords: mouse
 ;; Package: emacs
@@ -32,8 +32,10 @@
 
 ;;; Commentary:
 
-;; This package offers a global minor mode which makes mouse-wheel
-;; scroll a line smoothly.
+;; This file contains two somewhat related features.
+
+;; The first is a global minor mode which makes Emacs try to scroll
+;; each line smoothly.
 ;;
 ;; Scrolling a line up by `set-window-vscroll' and that by `scroll-up'
 ;; give similar display as shown below.
@@ -57,6 +59,25 @@
 ;;  (dolist (vs (number-sequence 1 (1- (frame-char-height))))
 ;;    (set-window-vscroll nil vs t) (sit-for 0))
 ;;  (scroll-up 1)
+
+;; The second is another global minor mode that redefines `wheel-up'
+;; and `wheel-down' to a command that tries to scroll the display
+;; according to the precise movement of a trackpad or mouse.
+
+;; But it operates in a much more intelligent manner than simply
+;; setting the vscroll.  It will set window start to the position
+;; closest to the position at the top-left corner of the window if
+;; vscroll were set accordingly, in a smart and fast manner, and only
+;; set vscroll the rest of the way.  There is no visible difference,
+;; but it is much faster, and doesn't move the display by a huge
+;; portion if vscroll is reset for some reason.
+
+;; It also tries to move point out of the way, so redisplay will not
+;; recenter the display as it scrolls.  This works well almost all of
+;; the time, but is impossible to get right with images larger than
+;; the window they're displayed in.  A feature that will allow
+;; redisplay to skip recentering is in the works, and will completely
+;; resolve this problem.
 
 ;;; Todo:
 ;;
@@ -96,9 +117,35 @@ is always with pixel resolution.")
 
 (defvar pixel-scroll-precision-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [wheel-down] #'pixel-scroll-precision)
-    (define-key map [wheel-up] #'pixel-scroll-precision)
-    (define-key map [touch-end] #'pixel-scroll-start-momentum)
+    (define-key map [wheel-down] 'pixel-scroll-precision)
+    (define-key map [wheel-up] 'pixel-scroll-precision)
+    (define-key map [touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [mode-line wheel-down] 'pixel-scroll-precision)
+    (define-key map [mode-line wheel-up] 'pixel-scroll-precision)
+    (define-key map [mode-line touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [header-line wheel-down] 'pixel-scroll-precision)
+    (define-key map [header-line wheel-up] 'pixel-scroll-precision)
+    (define-key map [header-line touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [vertical-scroll-bar wheel-down] 'pixel-scroll-precision)
+    (define-key map [vertical-scroll-bar wheel-up] 'pixel-scroll-precision)
+    (define-key map [vertical-scroll-bar touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [tool-bar wheel-down] 'pixel-scroll-precision)
+    (define-key map [tool-bar wheel-up] 'pixel-scroll-precision)
+    (define-key map [tool-bar touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [left-margin wheel-down] 'pixel-scroll-precision)
+    (define-key map [left-margin wheel-up] 'pixel-scroll-precision)
+    (define-key map [left-margin touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [right-margin wheel-down] 'pixel-scroll-precision)
+    (define-key map [right-margin wheel-up] 'pixel-scroll-precision)
+    (define-key map [right-margin touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [left-fringe wheel-down] 'pixel-scroll-precision)
+    (define-key map [left-fringe wheel-up] 'pixel-scroll-precision)
+    (define-key map [left-fringe touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [right-fringe wheel-down] 'pixel-scroll-precision)
+    (define-key map [right-fringe wheel-up] 'pixel-scroll-precision)
+    (define-key map [right-fringe touch-end] 'pixel-scroll-start-momentum)
+    (define-key map [next] 'pixel-scroll-interpolate-down)
+    (define-key map [prior] 'pixel-scroll-interpolate-up)
     map)
   "The key map used by `pixel-scroll-precision-mode'.")
 
@@ -127,7 +174,7 @@ This is only effective if supported by your mouse or touchpad."
   :type 'float
   :version "29.1")
 
-(defcustom pixel-scroll-precision-initial-velocity-factor 0.25
+(defcustom pixel-scroll-precision-initial-velocity-factor (/ 0.0335 4)
   "Factor applied to the initial velocity before momentum scrolling begins."
   :group 'mouse
   :type 'float
@@ -157,6 +204,13 @@ Nil means to not interpolate such scrolls."
   "The number of seconds between each step of an interpolated scroll."
   :group 'mouse
   :type 'float
+  :version "29.1")
+
+(defcustom pixel-scroll-precision-interpolate-page nil
+  "Whether or not to interpolate scrolling via the Page Down and Page Up keys.
+This is only effective when `pixel-scroll-precision-mode' is enabled."
+  :group 'scrolling
+  :type 'boolean
   :version "29.1")
 
 (defun pixel-scroll-in-rush-p ()
@@ -459,7 +513,13 @@ the height of the current window."
          (next-pos (save-excursion
                      (goto-char desired-start)
                      (when (zerop (vertical-motion (1+ scroll-margin)))
+                       (set-window-start nil desired-start)
                        (signal 'end-of-buffer nil))
+                     (while (when-let ((posn (posn-at-point)))
+                              (< (cdr (posn-x-y posn)) delta))
+                       (when (zerop (vertical-motion 1))
+                         (set-window-start nil desired-start)
+                         (signal 'end-of-buffer nil)))
                      (point)))
          (scroll-preserve-screen-position nil)
          (auto-window-vscroll nil))
@@ -516,27 +576,30 @@ the height of the current window."
                        usable-height))))
         (goto-char up-point)))
     (let ((current-vscroll (window-vscroll nil t)))
-      (if (<= delta current-vscroll)
-          (set-window-vscroll nil (- current-vscroll delta) t)
-        (setq delta (- delta current-vscroll))
-        (set-window-vscroll nil 0 t)
-        (while (> delta 0)
-          (let ((position (pixel-point-and-height-at-unseen-line)))
-            (unless (cdr position)
-              (signal 'beginning-of-buffer nil))
-            (set-window-start nil (car position) t)
-            ;; If the line above is taller than the window height (i.e. there's
-            ;; a very tall image), keep point on it.
-            (when (> (cdr position) usable-height)
-              (goto-char (car position)))
-            (setq delta (- delta (cdr position)))))
-        (when (< delta 0)
-          (set-window-vscroll nil (- delta) t))))))
+      (setq delta (- delta current-vscroll))
+      (set-window-vscroll nil 0 t)
+      (when (> delta 0)
+        (let* ((start (window-start))
+               (dims (window-text-pixel-size nil (cons start (- delta))
+                                             start nil nil nil t))
+               (height (nth 1 dims))
+               (position (nth 2 dims)))
+          (set-window-start nil position t)
+          ;; If the line above is taller than the window height (i.e. there's
+          ;; a very tall image), keep point on it.
+          (when (> height usable-height)
+            (goto-char position))
+          (when (or (not position) (eq position start))
+            (signal 'beginning-of-buffer nil))
+          (setq delta (- delta height))))
+      (when (< delta 0)
+        (set-window-vscroll nil (- delta) t)))))
 
-(defun pixel-scroll-precision-interpolate (delta)
+(defun pixel-scroll-precision-interpolate (delta &optional old-window)
   "Interpolate a scroll of DELTA pixels.
-This results in the window being scrolled by DELTA pixels with an
-animation."
+OLD-WINDOW is the window which will be selected when redisplay
+takes place, or nil for the current window.  This results in the
+window being scrolled by DELTA pixels with an animation."
   (let ((percentage 0)
         (total-time pixel-scroll-precision-interpolation-total-time)
         (factor pixel-scroll-precision-interpolation-factor)
@@ -554,7 +617,9 @@ animation."
         (while-no-input
           (unwind-protect
               (while (< percentage 1)
-                (redisplay t)
+                (with-selected-window (or old-window
+                                          (selected-window))
+                  (redisplay t))
                 (sleep-for between-scroll)
                 (setq time-elapsed (+ time-elapsed
                                       (- (float-time) last-time))
@@ -605,7 +670,10 @@ Move the display up or down by the pixel deltas in EVENT to
 scroll the display according to the user's turning the mouse
 wheel."
   (interactive "e")
-  (let ((window (mwheel-event-window event)))
+  (let ((window (mwheel-event-window event))
+        (current-window (selected-window)))
+    (when (framep window)
+      (setq window (frame-selected-window window)))
     (if (and (nth 4 event))
         (let ((delta (round (cdr (nth 4 event)))))
           (unless (zerop delta)
@@ -624,9 +692,9 @@ wheel."
                                     (ring-empty-p ring)))))
                     (progn
                       (let ((kin-state (pixel-scroll-kinetic-state)))
-                        (aset kin-state 0 (make-ring 10))
+                        (aset kin-state 0 (make-ring 30))
                         (aset kin-state 1 nil))
-                      (pixel-scroll-precision-interpolate delta))
+                      (pixel-scroll-precision-interpolate delta current-window))
                   (condition-case nil
                       (progn
                         (if (< delta 0)
@@ -640,12 +708,13 @@ wheel."
                      (message (error-message-string '(end-of-buffer))))))))))
       (mwheel-scroll event nil))))
 
-(defun pixel-scroll-kinetic-state ()
-  "Return the kinetic scroll state of the current window.
-It is a vector of the form [ VELOCITY TIME ]."
-  (or (window-parameter nil 'kinetic-state)
-      (set-window-parameter nil 'kinetic-state
-                            (vector (make-ring 10) nil))))
+(defun pixel-scroll-kinetic-state (&optional window)
+  "Return the kinetic scroll state of WINDOW.
+If WINDOW is nil, return the state of the current window.
+It is a vector of the form [ VELOCITY TIME SIGN ]."
+  (or (window-parameter window 'kinetic-state)
+      (set-window-parameter window 'kinetic-state
+                            (vector (make-ring 30) nil nil))))
 
 (defun pixel-scroll-accumulate-velocity (delta)
   "Accumulate DELTA into the current window's kinetic scroll state."
@@ -655,9 +724,9 @@ It is a vector of the form [ VELOCITY TIME ]."
     (when (or (and time (> (- (float-time) time) 0.5))
               (and (not (ring-empty-p ring))
                    (not (eq (< delta 0)
-                            (< (cdr (ring-ref ring 0))
-                               0)))))
-      (aset state 0 (make-ring 10)))
+                            (aref state 2)))))
+      (aset state 0 (make-ring 30)))
+    (aset state 2 (< delta 0))
     (ring-insert (aref state 0)
                  (cons (aset state 1 (float-time))
                        delta))))
@@ -669,8 +738,8 @@ It is a vector of the form [ VELOCITY TIME ]."
          (total 0))
     (dolist (tem elts)
       (setq total (+ total (cdr tem))))
-    (/ total (* (- (float-time) (caar elts))
-                100))))
+    (* (/ total (- (float-time) (caar (last elts))))
+       pixel-scroll-precision-initial-velocity-factor)))
 
 (defun pixel-scroll-start-momentum (event)
   "Start kinetic scrolling for the touch event EVENT."
@@ -678,49 +747,70 @@ It is a vector of the form [ VELOCITY TIME ]."
   (when pixel-scroll-precision-use-momentum
     (let ((window (mwheel-event-window event))
           (state nil))
-      (with-selected-window window
-        (setq state (pixel-scroll-kinetic-state))
-        (when (and (aref state 1)
-                   (listp (aref state 0)))
-          (while-no-input
-            (unwind-protect (progn
-                              (aset state 0 (pixel-scroll-calculate-velocity state))
-                              (when (> (abs (aref state 0))
-                                       pixel-scroll-precision-momentum-min-velocity)
-                                (let* ((velocity (* (aref state 0)
-                                                    pixel-scroll-precision-initial-velocity-factor))
-                                       (original-velocity velocity)
-                                       (time-spent 0))
-                                  (if (> velocity 0)
-                                      (while (and (> velocity 0)
-                                                  (<= time-spent
-                                                      pixel-scroll-precision-momentum-seconds))
-                                        (when (> (round velocity) 0)
-                                          (pixel-scroll-precision-scroll-up (round velocity)))
-                                        (setq velocity (- velocity
-                                                          (/ original-velocity
-                                                             (/ pixel-scroll-precision-momentum-seconds
-                                                                pixel-scroll-precision-momentum-tick))))
-                                        (redisplay t)
-                                        (sit-for pixel-scroll-precision-momentum-tick)
-                                        (setq time-spent (+ time-spent
-                                                            pixel-scroll-precision-momentum-tick))))
-                                  (while (and (< velocity 0)
-                                              (<= time-spent
-                                                  pixel-scroll-precision-momentum-seconds))
-                                    (when (> (round (abs velocity)) 0)
-                                      (pixel-scroll-precision-scroll-down (round
-                                                                           (abs velocity))))
-                                    (setq velocity (+ velocity
-                                                      (/ (abs original-velocity)
-                                                         (/ pixel-scroll-precision-momentum-seconds
-                                                            pixel-scroll-precision-momentum-tick))))
-                                    (redisplay t)
-                                    (sit-for pixel-scroll-precision-momentum-tick)
-                                    (setq time-spent (+ time-spent
-                                                        pixel-scroll-precision-momentum-tick))))))
-              (aset state 0 (make-ring 10))
-              (aset state 1 nil))))))))
+      (when (framep window)
+        (setq window (frame-selected-window window)))
+      (setq state (pixel-scroll-kinetic-state window))
+      (when (and (aref state 1)
+                 (listp (aref state 0)))
+        (condition-case nil
+            (while-no-input
+              (unwind-protect (progn
+                                (aset state 0 (pixel-scroll-calculate-velocity state))
+                                (when (> (abs (aref state 0))
+                                         pixel-scroll-precision-momentum-min-velocity)
+                                  (let* ((velocity (aref state 0))
+                                         (original-velocity velocity)
+                                         (time-spent 0))
+                                    (if (> velocity 0)
+                                        (while (and (> velocity 0)
+                                                    (<= time-spent
+                                                        pixel-scroll-precision-momentum-seconds))
+                                          (when (> (round velocity) 0)
+                                            (with-selected-window window
+                                              (pixel-scroll-precision-scroll-up (round velocity))))
+                                          (setq velocity (- velocity
+                                                            (/ original-velocity
+                                                               (/ pixel-scroll-precision-momentum-seconds
+                                                                  pixel-scroll-precision-momentum-tick))))
+                                          (redisplay t)
+                                          (sit-for pixel-scroll-precision-momentum-tick)
+                                          (setq time-spent (+ time-spent
+                                                              pixel-scroll-precision-momentum-tick))))
+                                    (while (and (< velocity 0)
+                                                (<= time-spent
+                                                    pixel-scroll-precision-momentum-seconds))
+                                      (when (> (round (abs velocity)) 0)
+                                        (with-selected-window window
+                                          (pixel-scroll-precision-scroll-down (round
+                                                                               (abs velocity)))))
+                                      (setq velocity (+ velocity
+                                                        (/ (abs original-velocity)
+                                                           (/ pixel-scroll-precision-momentum-seconds
+                                                              pixel-scroll-precision-momentum-tick))))
+                                      (redisplay t)
+                                      (sit-for pixel-scroll-precision-momentum-tick)
+                                      (setq time-spent (+ time-spent
+                                                          pixel-scroll-precision-momentum-tick))))))
+                (aset state 0 (make-ring 30))
+                (aset state 1 nil)))
+          (beginning-of-buffer
+           (message (error-message-string '(beginning-of-buffer))))
+          (end-of-buffer
+           (message (error-message-string '(end-of-buffer)))))))))
+
+(defun pixel-scroll-interpolate-down ()
+  "Interpolate a scroll downwards by one page."
+  (interactive)
+  (if pixel-scroll-precision-interpolate-page
+      (pixel-scroll-precision-interpolate (- (window-text-height nil t)))
+    (scroll-up)))
+
+(defun pixel-scroll-interpolate-up ()
+  "Interpolate a scroll upwards by one page."
+  (interactive)
+  (if pixel-scroll-precision-interpolate-page
+      (pixel-scroll-precision-interpolate (window-text-height nil t))
+    (scroll-down)))
 
 ;;;###autoload
 (define-minor-mode pixel-scroll-precision-mode

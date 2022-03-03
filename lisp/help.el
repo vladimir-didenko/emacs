@@ -1,6 +1,6 @@
 ;;; help.el --- help commands for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1993-1994, 1998-2021 Free Software
+;; Copyright (C) 1985-1986, 1993-1994, 1998-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -650,15 +650,21 @@ If INSERT (the prefix arg) is non-nil, insert the message in the buffer."
 	      (if insert
 		  (if (> (length keys) 0)
 		      (if remapped
-			  (format "%s (%s) (remapped from %s)"
-				  keys remapped symbol)
-			(format "%s (%s)" keys symbol))
+			  (format "%s, remapped to %s (%s)"
+                                  symbol remapped keys)
+			(format "%s (%s)" symbol keys))
 		    (format "M-x %s RET" symbol))
 		(if (> (length keys) 0)
 		    (if remapped
-			(format "%s is remapped to %s which is on %s"
-				symbol remapped keys)
-		      (format "%s is on %s" symbol keys))
+			(if (eq symbol (symbol-function definition))
+			    (format
+                             "%s, which is remapped to %s, which is on %s"
+			     symbol remapped keys)
+			  (format "%s is remapped to %s, which is on %s"
+				  symbol remapped keys))
+		      (if (eq symbol (symbol-function definition))
+			  (format "%s, which is on %s" symbol keys)
+			(format "%s is on %s" symbol keys)))
 		  ;; If this is the command the user asked about,
 		  ;; and it is not on any key, say so.
 		  ;; For other symbols, its aliases, say nothing
@@ -667,7 +673,9 @@ If INSERT (the prefix arg) is non-nil, insert the message in the buffer."
 		      (format "%s is not on any key" symbol)))))
 	(when string
 	  (unless (eq symbol definition)
-	    (princ ";\n its alias "))
+	    (if (eq definition (symbol-function symbol))
+		(princ ";\n its alias ")
+	      (princ ";\n it's an alias for ")))
 	  (princ string)))))
   nil)
 
@@ -898,6 +906,12 @@ a key-sequence and RAW-SEQ is its untranslated form.
 While reading KEY-LIST interactively, this command temporarily enables
 menu items or tool-bar buttons that are disabled to allow getting help
 on them.
+
+Interactively, this command can't describe prefix commands, but
+will always wait for the user to type the complete key sequence.
+For instance, entering \"C-x\" will wait until the command has
+been completed, but `M-: (describe-key (kbd \"C-x\")) RET' will
+tell you what this prefix command is bound to.
 
 BUFFER is the buffer in which to lookup those keys; it defaults to the
 current buffer."
@@ -1915,8 +1929,8 @@ Return VALUE."
 ;;     window to an arbitrary buffer position.
 (defmacro with-help-window (buffer-or-name &rest body)
   "Evaluate BODY, send output to BUFFER-OR-NAME and show in a help window.
-This construct is like `with-temp-buffer-window' but unlike that
-puts the buffer specified by BUFFER-OR-NAME in `help-mode' and
+This construct is like `with-temp-buffer-window', which see, but unlike
+that, it puts the buffer specified by BUFFER-OR-NAME in `help-mode' and
 displays a message about how to delete the help window when it's no
 longer needed.  The help window will be selected if
 `help-window-select' is non-nil.
@@ -2069,7 +2083,7 @@ the same names as used in the original source code, when possible."
                    ((symbolp arg)
 		    (let ((name (symbol-name arg)))
 		      (cond
-                       ((string-match "\\`&" name) arg)
+                       ((string-match "\\`&" name) (bare-symbol arg))
                        ((string-match "\\`_." name)
                         (intern (upcase (substring name 1))))
                        (t (intern (upcase name))))))

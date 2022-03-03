@@ -1,6 +1,6 @@
 ;;; tramp-gvfs.el --- Tramp access functions for GVFS daemon  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2009-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2009-2022 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 ;; Keywords: comm, processes
@@ -916,8 +916,6 @@ or `dbus-call-method-asynchronously'."
      ;; when loading.
      (dbus-ignore-errors (tramp-dbus-function ,vec func args))))
 
-(font-lock-add-keywords 'emacs-lisp-mode '("\\<with-tramp-dbus-call-method\\>"))
-
 (defmacro with-tramp-dbus-get-all-properties
   (vec bus service path interface)
   "Return all properties of INTERFACE.
@@ -931,8 +929,6 @@ The call will be traced by Tramp with trace level 6."
 	   (list ,bus ,service ,path)))
      (tramp-dbus-function
       ,vec #'dbus-get-all-properties (list ,bus ,service ,path ,interface))))
-
-(font-lock-add-keywords 'emacs-lisp-mode '("\\<with-tramp-dbus-get-all-properties\\>"))
 
 (defvar tramp-gvfs-dbus-event-vector nil
   "Current Tramp file name to be used, as vector.
@@ -1155,6 +1151,10 @@ file names."
 		(replace-match
 		 (tramp-get-connection-property v "default-location" "~")
 		 nil t localname 1))))
+      ;; Tilde expansion is not possible.
+      (when (and (not tramp-tolerate-tilde)
+		 (string-match-p "\\`\\(~[^/]*\\)\\(.*\\)\\'" localname))
+	(tramp-error v 'file-error "Cannot expand tilde in file `%s'" name))
       (unless (tramp-run-real-handler #'file-name-absolute-p (list localname))
 	(setq localname (concat "/" localname)))
       ;; We do not pass "/..".
@@ -1172,7 +1172,7 @@ file names."
       ;; Do normal `expand-file-name' (this does "/./" and "/../"),
       ;; unless there are tilde characters in file name.
       (tramp-make-tramp-file-name
-       v (if (string-match-p "\\`~" localname)
+       v (if (string-match-p "\\`\\(~[^/]*\\)\\(.*\\)\\'" localname)
 	     localname
 	   (tramp-run-real-handler #'expand-file-name (list localname)))))))
 
@@ -1389,7 +1389,8 @@ If FILE-SYSTEM is non-nil, return file system attributes."
   "Like `file-executable-p' for Tramp files."
   (with-parsed-tramp-file-name filename nil
     (with-tramp-file-property v localname "file-executable-p"
-      (tramp-check-cached-permissions v ?x))))
+      (or (tramp-check-cached-permissions v ?x)
+	  (tramp-check-cached-permissions v ?s)))))
 
 (defun tramp-gvfs-handle-file-name-all-completions (filename directory)
   "Like `file-name-all-completions' for Tramp files."
@@ -1524,8 +1525,10 @@ If FILE-SYSTEM is non-nil, return file system attributes."
       (when (or size free)
 	(list (and size (string-to-number size))
 	      (and free (string-to-number free))
-	      (and size used
-		   (- (string-to-number size) (string-to-number used))))))))
+	      ;; "mtp" connections do not return "filesystem::used".
+	      (or (and size used
+		       (- (string-to-number size) (string-to-number used)))
+		  (and free (string-to-number free))))))))
 
 (defun tramp-gvfs-handle-make-directory (dir &optional parents)
   "Like `make-directory' for Tramp files."
@@ -1605,8 +1608,7 @@ ID-FORMAT valid values are `string' and `integer'."
       (tramp-file-name-user vec)
     (when-let ((localname
 		(tramp-get-connection-property
-		 (tramp-get-process vec) "share"
-		 (tramp-get-connection-property vec "default-location" nil))))
+		 (tramp-get-process vec) "share" nil)))
       (file-attribute-user-id
        (file-attributes (tramp-make-tramp-file-name vec localname) id-format)))))
 
@@ -1615,8 +1617,7 @@ ID-FORMAT valid values are `string' and `integer'."
 ID-FORMAT valid values are `string' and `integer'."
   (when-let ((localname
 	      (tramp-get-connection-property
-	       (tramp-get-process vec) "share"
-	       (tramp-get-connection-property vec "default-location" nil))))
+	       (tramp-get-process vec) "share" nil)))
     (file-attribute-group-id
      (file-attributes (tramp-make-tramp-file-name vec localname) id-format))))
 
@@ -2244,13 +2245,7 @@ connection if a previous connection has died for some reason."
 COMMAND is a command from the gvfs-* utilities.  It is replaced
 by the corresponding gio tool call if available.  `call-process'
 is applied, and it returns t if the return code is zero."
-  (let* ((locale (tramp-get-local-locale vec))
-	 (process-environment
-	  (append
-	   `(,(format "LANG=%s" locale)
-	     ,(format "LANGUAGE=%s" locale)
-	     ,(format "LC_ALL=%s" locale))
-	   process-environment)))
+  (let ((locale (tramp-get-local-locale vec)))
     (when (tramp-gvfs-gio-tool-p vec)
       ;; Use gio tool.
       (setq args (cons (cdr (assoc command tramp-gvfs-gio-mapping))
@@ -2260,7 +2255,14 @@ is applied, and it returns t if the return code is zero."
     (with-current-buffer (tramp-get-connection-buffer vec)
       (tramp-gvfs-maybe-open-connection vec)
       (erase-buffer)
-      (or (zerop (apply #'tramp-call-process vec command nil t nil args))
+      (or (zerop
+	   (apply
+	    #'tramp-call-process vec "env" nil t nil
+	    (append `(,(format "LANG=%s" locale)
+		      ,(format "LANGUAGE=%s" locale)
+		      ,(format "LC_ALL=%s" locale)
+		      ,command)
+		    args)))
 	  ;; Remove information about mounted connection.
 	  (and (tramp-flush-file-properties vec "/") nil)))))
 

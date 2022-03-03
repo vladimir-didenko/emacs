@@ -1,6 +1,6 @@
 ;;; files-tests.el --- tests for files.el.  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2012-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2022 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -1411,7 +1411,10 @@ See <https://debbugs.gnu.org/35241>."
        (equal tmpfile
               (executable-find (file-name-nondirectory tmpfile)))))))
 
-(ert-deftest files-tests-dont-rewrite-precious-files ()
+;; Note: we call this test "...-zzdont..." so that it runs near the
+;; end, because otherwise the advice it adds to write-region doesn't
+;; get removed(??) and breaks the revert-file tests on MS-Windows.
+(ert-deftest files-tests-zzdont-rewrite-precious-files ()
   "Test that `file-precious-flag' forces files to be saved by
 renaming only, rather than modified in-place."
   (ert-with-temp-file temp-file-name
@@ -1457,7 +1460,7 @@ renaming only, rather than modified in-place."
   (should (equal (file-size-human-readable-iec 0) "0 B"))
   (should (equal (file-size-human-readable-iec 1) "1 B"))
   (should (equal (file-size-human-readable-iec 9621) "9.4 KiB"))
-  (should (equal (file-size-human-readable-iec 72528034765) "67.5 GiB")))
+  (should (equal (file-size-human-readable-iec 72528034765) "68 GiB")))
 
 (ert-deftest files-test-magic-mode-alist-re-baseline ()
   "Test magic-mode-alist with RE, expected behavior for match."
@@ -1540,13 +1543,10 @@ The door of all subtleties!
   (ert-with-temp-file temp-file-name
     (with-temp-buffer
       (insert files-tests-lao)
-      ;; Disable lock files, since that barfs in
-      ;; userlock--check-content-unchanged on MS-Windows.
-      (let (create-lockfiles)
-        (write-file temp-file-name)
-        (erase-buffer)
-        (insert files-tests-tzu)
-        (revert-buffer t t t))
+      (write-file temp-file-name)
+      (erase-buffer)
+      (insert files-tests-tzu)
+      (revert-buffer t t t)
       (should (compare-strings files-tests-lao nil nil
                                (buffer-substring (point-min) (point-max))
                                nil nil)))))
@@ -1556,13 +1556,10 @@ The door of all subtleties!
   (ert-with-temp-file temp-file-name
     (with-temp-buffer
       (insert files-tests-lao)
-      ;; Disable lock files, since that barfs in
-      ;; userlock--check-content-unchanged on MS-Windows.
-      (let (create-lockfiles)
-        (write-file temp-file-name)
-        (erase-buffer)
-        (insert files-tests-tzu)
-        (should (revert-buffer-with-fine-grain t t)))
+      (write-file temp-file-name)
+      (erase-buffer)
+      (insert files-tests-tzu)
+      (should (revert-buffer-with-fine-grain t t))
       (should (compare-strings files-tests-lao nil nil
                                (buffer-substring (point-min) (point-max))
                                nil nil)))))
@@ -1679,7 +1676,7 @@ PRED is nil."
     (pcase-dolist (`(,pred ,def-pred-bind ,exp-1 ,exp-2) args-results)
       (files-tests--save-some-buffers pred def-pred-bind exp-1 exp-2))))
 
-(defmacro files-tests--with-buffer-offer-save (buffers-offer fn-test fn-binders args-results)
+(defun files-tests--with-buffer-offer-save (buffers-offer fn-test args-results)
   "Helper macro to test `save-some-buffers' and `save-buffers-kill-emacs'.
 
 This macro creates several non-file-visiting buffers in different
@@ -1693,52 +1690,52 @@ FN-TEST is the function to test: either `save-some-buffers' or
 `save-some-buffers-default-predicate' let-bound to a value
 specified inside ARGS-RESULTS.
 
-FN-BINDERS is a list of elements (FUNCTION . BINDING), where FUNCTION
-is a function symbol that this macro temporary binds to BINDING during
-the FN-TEST call.
+During the call to FN-TEST,`read-event' is overridden with a function that
+just returns `n' and `kill-emacs' is overriden to do nothing.
 
 ARGS-RESULTS is a list of elements (FN-ARGS CALLERS-DIR EXPECTED), where
 FN-ARGS are the arguments for FN-TEST;
 CALLERS-DIR specifies the value to let-bind
 \`save-some-buffers-default-predicate';
  EXPECTED is the expected result of the test."
-  (declare (debug (form symbol form form)))
-  (let ((dir (gensym "dir"))
-        (buffers (gensym "buffers")))
-    `(let* ((,dir (make-temp-file "testdir" 'dir))
-            (inhibit-message t)
-            (use-dialog-box nil)
-            ,buffers)
-       (pcase-dolist (`(,bufsym ,offer-save) ,buffers-offer)
-         (let* ((buf (generate-new-buffer (symbol-name bufsym)))
-                (subdir (expand-file-name
-                         (format "subdir-%s" (buffer-name buf))
-                         ,dir)))
-           (make-directory subdir 'parens)
-           (push buf ,buffers)
-           (with-current-buffer buf
-             (cd subdir)
-             (setq buffer-offer-save offer-save)
-             (insert "foobar\n"))))
-       (setq ,buffers (nreverse ,buffers))
-       (let ((nb-saved-buffers 0))
-         (unwind-protect
-             (pcase-dolist (`(,fn-test-args ,callers-dir ,expected)
-                            ,args-results)
-               (setq nb-saved-buffers 0)
-               (with-current-buffer (car ,buffers)
-                 (cl-letf
-                     (,@(mapcar (lambda (pair) `((symbol-function ,(car pair)) ,(cdr pair)))
-                                fn-binders)
-                      (save-some-buffers-default-predicate callers-dir))
-                   (apply #',fn-test fn-test-args)
-                   (should (equal nb-saved-buffers expected)))))
-           ;; Clean up.
-           (dolist (buf ,buffers)
-             (with-current-buffer buf
-               (set-buffer-modified-p nil)
-               (kill-buffer buf)))
-           (delete-directory ,dir 'recursive))))))
+  (let* ((dir (make-temp-file "testdir" 'dir))
+         (inhibit-message t)
+         (use-dialog-box nil)
+         buffers)
+    (pcase-dolist (`(,bufsym ,offer-save) buffers-offer)
+      (let* ((buf (generate-new-buffer (symbol-name bufsym)))
+             (subdir (expand-file-name
+                      (format "subdir-%s" (buffer-name buf))
+                      dir)))
+        (make-directory subdir 'parens)
+        (push buf buffers)
+        (with-current-buffer buf
+          (cd subdir)
+          (setq buffer-offer-save offer-save)
+          (insert "foobar\n"))))
+    (setq buffers (nreverse buffers))
+    (let ((nb-saved-buffers 0))
+      (unwind-protect
+          (pcase-dolist (`(,fn-test-args ,callers-dir ,expected)
+                         args-results)
+            (setq nb-saved-buffers 0)
+            (with-current-buffer (car buffers)
+              (cl-letf
+                  (((symbol-function 'read-event)
+                    ;; Increase counter and answer 'n' when prompted
+                    ;; to save a buffer.
+                    (lambda (&rest _) (cl-incf nb-saved-buffers) ?n))
+                   ;; Do not kill Emacs.
+                   ((symbol-function 'kill-emacs) #'ignore)
+                   (save-some-buffers-default-predicate callers-dir))
+                (apply fn-test fn-test-args)
+                (should (equal nb-saved-buffers expected)))))
+        ;; Clean up.
+        (dolist (buf buffers)
+          (with-current-buffer buf
+            (set-buffer-modified-p nil)
+            (kill-buffer buf)))
+        (delete-directory dir 'recursive)))))
 
 (defmacro files-tests-with-all-permutations (permutation list &rest body)
   "Execute BODY forms for all permutations of LIST.
@@ -1777,7 +1774,7 @@ PRED is nil."
     (files-tests-with-all-permutations
         buffers-offer
         buffers-offer-init
-      (dolist (pred `(nil t save-some-buffers-root))
+      (dolist (pred `(nil t))
         (dolist (callers-dir `(nil save-some-buffers-root))
           (let* ((head-offer (cadar buffers-offer))
                  (res (cond ((null pred)
@@ -1790,9 +1787,7 @@ PRED is nil."
                  (args-res `(((nil ,pred) ,callers-dir ,res))))
             (files-tests--with-buffer-offer-save
              buffers-offer
-             save-some-buffers
-             ;; Increase counter and answer 'n' when prompted to save a buffer.
-             (('read-event . (lambda (&rest _) (cl-incf nb-saved-buffers) ?n)))
+             #'save-some-buffers
              args-res)))))))
 
 (ert-deftest files-tests-save-buffers-kill-emacs--asks-to-save-buffers ()
@@ -1807,10 +1802,7 @@ Prompt users for any modified buffer with `buffer-offer-save' non-nil."
         buffers-offer-init
       (files-tests--with-buffer-offer-save
        buffers-offer
-       save-buffers-kill-emacs
-       ;; Increase counter and answer 'n' when prompted to save a buffer.
-       (('read-event . (lambda (&rest _) (cl-incf nb-saved-buffers) ?n))
-        ('kill-emacs . #'ignore)) ; Do not kill Emacs.
+       #'save-buffers-kill-emacs
        `((nil nil ,nb-might-save)
          ;; `save-some-buffers-default-predicate' (i.e. the 2nd element) is ignored.
          (nil save-some-buffers-root ,nb-might-save))))))

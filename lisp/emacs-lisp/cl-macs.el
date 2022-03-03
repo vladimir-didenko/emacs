@@ -1,6 +1,6 @@
 ;;; cl-macs.el --- Common Lisp macros  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1993, 2001-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1993, 2001-2022 Free Software Foundation, Inc.
 
 ;; Author: Dave Gillespie <daveg@synaptics.com>
 ;; Old-Version: 2.02
@@ -2429,10 +2429,11 @@ by EXPANSION, and (setq NAME ...) will act like (setf EXPANSION ...).
                                                (append bindings venv))
                                          macroexpand-all-environment))))
             (if malformed-bindings
-                (macroexp-warn-and-return
-                 (format-message "Malformed `cl-symbol-macrolet' binding(s): %S"
-                                 (nreverse malformed-bindings))
-                 expansion)
+                (let ((rev-malformed-bindings (nreverse malformed-bindings)))
+                  (macroexp-warn-and-return
+                   (format-message "Malformed `cl-symbol-macrolet' binding(s): %S"
+                                   rev-malformed-bindings)
+                   expansion nil nil rev-malformed-bindings))
               expansion)))
       (unless advised
         (advice-remove 'macroexpand #'cl--sm-macroexpand)))))
@@ -3118,7 +3119,7 @@ To see the documentation for a defined struct type, use
                  (macroexp-warn-and-return
                   (format "Missing value for option `%S' of slot `%s' in struct %s!"
                           (car (last desc)) slot name)
-                  'nil)
+                  nil nil nil (car (last desc)))
                  forms)
                 (when (and (keywordp (car defaults))
                            (not (keywordp (car desc))))
@@ -3127,7 +3128,7 @@ To see the documentation for a defined struct type, use
                      (macroexp-warn-and-return
                       (format "  I'll take `%s' to be an option rather than a default value."
                               kw)
-                      'nil)
+                      nil nil nil kw)
                      forms)
                     (push kw desc)
                     (setcar defaults nil))))

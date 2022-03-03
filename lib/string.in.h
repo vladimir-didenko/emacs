@@ -1,6 +1,6 @@
 /* A GNU-like <string.h>.
 
-   Copyright (C) 1995-1996, 2001-2021 Free Software Foundation, Inc.
+   Copyright (C) 1995-1996, 2001-2022 Free Software Foundation, Inc.
 
    This file is free software: you can redistribute it and/or modify
    it under the terms of the GNU Lesser General Public License as
@@ -112,12 +112,26 @@
 
 /* The definition of _GL_WARN_ON_USE is copied here.  */
 
-/* Declare 'free' if needed for _GL_ATTRIBUTE_DEALLOC_FREE.  */
-_GL_EXTERN_C void free (void *);
+/* Make _GL_ATTRIBUTE_DEALLOC_FREE work, even though <stdlib.h> may not have
+   been included yet.  */
 #if @GNULIB_FREE_POSIX@
 # if (@REPLACE_FREE@ && !defined free \
       && !(defined __cplusplus && defined GNULIB_NAMESPACE))
-#  define free rpl_free
+/* We can't do '#define free rpl_free' here.  */
+_GL_EXTERN_C void rpl_free (void *);
+#  undef _GL_ATTRIBUTE_DEALLOC_FREE
+#  define _GL_ATTRIBUTE_DEALLOC_FREE _GL_ATTRIBUTE_DEALLOC (rpl_free, 1)
+# else
+#  if defined _MSC_VER
+_GL_EXTERN_C void __cdecl free (void *);
+#  else
+_GL_EXTERN_C void free (void *);
+#  endif
+# endif
+#else
+# if defined _MSC_VER
+_GL_EXTERN_C void __cdecl free (void *);
+# else
 _GL_EXTERN_C void free (void *);
 # endif
 #endif
@@ -549,22 +563,35 @@ _GL_WARN_ON_USE (strncat, "strncat is unportable - "
 #   undef strndup
 #   define strndup rpl_strndup
 #  endif
-_GL_FUNCDECL_RPL (strndup, char *, (char const *__s, size_t __n)
-                                   _GL_ARG_NONNULL ((1)));
+_GL_FUNCDECL_RPL (strndup, char *,
+                  (char const *__s, size_t __n)
+                  _GL_ARG_NONNULL ((1))
+                  _GL_ATTRIBUTE_MALLOC _GL_ATTRIBUTE_DEALLOC_FREE);
 _GL_CXXALIAS_RPL (strndup, char *, (char const *__s, size_t __n));
 # else
-#  if ! @HAVE_DECL_STRNDUP@
-_GL_FUNCDECL_SYS (strndup, char *, (char const *__s, size_t __n)
-                                   _GL_ARG_NONNULL ((1)));
+#  if !@HAVE_DECL_STRNDUP@ || __GNUC__ >= 11
+_GL_FUNCDECL_SYS (strndup, char *,
+                  (char const *__s, size_t __n)
+                  _GL_ARG_NONNULL ((1))
+                  _GL_ATTRIBUTE_MALLOC _GL_ATTRIBUTE_DEALLOC_FREE);
 #  endif
 _GL_CXXALIAS_SYS (strndup, char *, (char const *__s, size_t __n));
 # endif
 _GL_CXXALIASWARN (strndup);
-#elif defined GNULIB_POSIXCHECK
-# undef strndup
-# if HAVE_RAW_DECL_STRNDUP
+#else
+# if __GNUC__ >= 11
+/* For -Wmismatched-dealloc: Associate strndup with free or rpl_free.  */
+_GL_FUNCDECL_SYS (strndup, char *,
+                  (char const *__s, size_t __n)
+                  _GL_ARG_NONNULL ((1))
+                  _GL_ATTRIBUTE_MALLOC _GL_ATTRIBUTE_DEALLOC_FREE);
+# endif
+# if defined GNULIB_POSIXCHECK
+#  undef strndup
+#  if HAVE_RAW_DECL_STRNDUP
 _GL_WARN_ON_USE (strndup, "strndup is unportable - "
                  "use gnulib module strndup for portability");
+#  endif
 # endif
 #endif
 

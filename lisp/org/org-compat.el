@@ -1,6 +1,6 @@
 ;;; org-compat.el --- Compatibility Code for Older Emacsen -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2004-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2004-2022 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <carsten.dominik@gmail.com>
 ;; Keywords: outlines, hypermedia, calendar, wp
@@ -1048,9 +1048,9 @@ ELEMENT is the element at point."
     (cl-case (org-element-type object)
       ;; Prevent checks in links due to keybinding conflict with
       ;; Flyspell.
-      ((code entity export-snippet inline-babel-call
-	     inline-src-block line-break latex-fragment link macro
-	     statistics-cookie target timestamp verbatim)
+      ((citation citation-reference code entity export-snippet inline-babel-call
+	         inline-src-block line-break latex-fragment link macro
+	         statistics-cookie target timestamp verbatim)
        nil)
       (footnote-reference
        ;; Only in inline footnotes, within the definition.

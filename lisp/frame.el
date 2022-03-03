@@ -1,6 +1,6 @@
 ;;; frame.el --- multi-frame management independent of window systems  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1993-1994, 1996-1997, 2000-2021 Free Software
+;; Copyright (C) 1993-1994, 1996-1997, 2000-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -702,7 +702,9 @@ Return nil if we don't know how to interpret DISPLAY."
 The optional argument PARAMETERS specifies additional frame parameters."
   (interactive (if (fboundp 'x-display-list)
                    (list (completing-read "Make frame on display: "
-                                          (x-display-list)))
+                                          (x-display-list) nil
+                                          nil (car (x-display-list))
+                                          nil (car (x-display-list))))
                  (user-error "This Emacs build does not support X displays")))
   (make-frame (cons (cons 'display display) parameters)))
 
@@ -798,8 +800,9 @@ also select the new frame."
          (windows (unless no-windows
                     (window-state-get (frame-root-window frame))))
          (default-frame-alist
-           (seq-remove (lambda (elem) (eq (car elem) 'name))
-                       (frame-parameters frame)))
+          (seq-remove (lambda (elem)
+                        (memq (car elem) frame-internal-parameters))
+                      (frame-parameters frame)))
          (new-frame (make-frame)))
     (when windows
       (window-state-put windows (frame-root-window new-frame) 'safe))
@@ -882,7 +885,6 @@ the new frame according to its own rules."
                   (error "Don't know how to interpret display %S"
                          display)))
              (t window-system)))
-	 (oldframe (selected-frame))
 	 (params parameters)
 	 frame child-frame)
 
@@ -900,8 +902,12 @@ the new frame according to its own rules."
     (dolist (p default-frame-alist)
       (unless (assq (car p) params)
 	(push p params)))
-
-;;     (setq frame-size-history '(1000))
+    ;; Add parameters from `frame-inherited-parameters' unless they are
+    ;; overridden by explicit parameters.
+    (dolist (param frame-inherited-parameters)
+      (unless (assq param parameters)
+        (let ((val (frame-parameter nil param)))
+          (when val (push (cons param val) params)))))
 
     (when (eq (cdr (or (assq 'minibuffer params) '(minibuffer . t)))
               'child-frame)
@@ -934,12 +940,6 @@ the new frame according to its own rules."
          frame 'minibuffer (frame-root-window child-frame))))
 
     (normal-erase-is-backspace-setup-frame frame)
-    ;; Inherit original frame's parameters unless they are overridden
-    ;; by explicit parameters.
-    (dolist (param frame-inherited-parameters)
-      (unless (assq param parameters)
-        (let ((val (frame-parameter oldframe param)))
-          (when val (set-frame-parameter frame param val)))))
 
     ;; We can run `window-configuration-change-hook' for this frame now.
     (frame-after-make-frame frame t)
@@ -1589,6 +1589,11 @@ acquires focus to be automatically raised.
 Note that this minor mode controls Emacs's own auto-raise
 feature.  Window managers that switch focus on mouse movement
 often have their own auto-raise feature."
+  ;; This isn't really a global minor mode; rather, it's local to the
+  ;; selected frame, but declaring it as global prevents a misleading
+  ;; "Auto-Raise mode enabled in current buffer" message from being
+  ;; displayed when it is turned on.
+  :global t
   :variable (frame-parameter nil 'auto-raise)
   (if (frame-parameter nil 'auto-raise)
       (raise-frame)))
@@ -2019,6 +2024,7 @@ Return nil if DISPLAY contains no Emacs frame."
 (declare-function w32-frame-restack "w32fns.c" (frame1 frame2 &optional above))
 (declare-function ns-frame-restack "nsfns.m" (frame1 frame2 &optional above))
 (declare-function pgtk-frame-restack "pgtkfns.c" (frame1 frame2 &optional above))
+(declare-function haiku-frame-restack "haikufns.c" (frame1 frame2 &optional above))
 
 (defun frame-restack (frame1 frame2 &optional above)
   "Restack FRAME1 below FRAME2.
@@ -2049,6 +2055,8 @@ Some window managers may refuse to restack windows."
           (w32-frame-restack frame1 frame2 above))
          ((eq frame-type 'ns)
           (ns-frame-restack frame1 frame2 above))
+         ((eq frame-type 'haiku)
+          (haiku-frame-restack frame1 frame2 above))
          ((eq frame-type 'pgtk)
           (pgtk-frame-restack frame1 frame2 above))))
     (error "Cannot restack frames")))
@@ -2526,6 +2534,77 @@ deleting them."
         (if iconify (iconify-frame this) (delete-frame this)))
       (setq this next))))
 
+(defvar undelete-frame--deleted-frames nil
+  "Internal variable used by `undelete-frame--save-deleted-frame'.")
+
+(defun undelete-frame--save-deleted-frame (frame)
+  "Save the configuration of frames deleted with `delete-frame'.
+Only the 16 most recently deleted frames are saved."
+  (when (and after-init-time (frame-live-p frame))
+    (setq undelete-frame--deleted-frames
+          (cons
+           (list
+            (display-graphic-p)
+            (seq-remove
+             (lambda (elem)
+               (or (memq (car elem) frame-internal-parameters)
+                   ;; When the daemon is started from a graphical
+                   ;; environment, TTY frames have a 'display' parameter set
+                   ;; to the value of $DISPLAY (see the note in
+                   ;; `server--on-display-p').  Do not store that parameter
+                   ;; in the frame data, otherwise `undelete-frame' attempts
+                   ;; to restore a graphical frame.
+                   (and (eq (car elem) 'display) (not (display-graphic-p)))))
+             (frame-parameters frame))
+            (window-state-get (frame-root-window frame)))
+           undelete-frame--deleted-frames))
+    (if (> (length undelete-frame--deleted-frames) 16)
+        (setq undelete-frame--deleted-frames
+              (butlast undelete-frame--deleted-frames)))))
+
+(define-minor-mode undelete-frame-mode
+  "Enable the `undelete-frame' command."
+  :group 'frames
+  :global t
+  (if undelete-frame-mode
+      (add-hook 'delete-frame-functions
+                #'undelete-frame--save-deleted-frame -75)
+    (remove-hook 'delete-frame-functions
+                 #'undelete-frame--save-deleted-frame)
+    (setq undelete-frame--deleted-frames nil)))
+
+(defun undelete-frame (&optional arg)
+  "Undelete a frame deleted with `delete-frame'.
+Without a prefix argument, undelete the most recently deleted
+frame.
+With a numerical prefix argument ARG between 1 and 16, where 1 is
+most recently deleted frame, undelete the ARGth deleted frame.
+When called from Lisp, returns the new frame."
+  (interactive "P")
+  (if (not undelete-frame-mode)
+      (user-error "Undelete-Frame mode is disabled")
+    (if (consp arg)
+        (user-error "Missing deleted frame number argument")
+      (let* ((number (pcase arg ('nil 1) ('- -1) (_ arg)))
+             (frame-data (nth (1- number) undelete-frame--deleted-frames))
+             (graphic (display-graphic-p)))
+        (if (not (<= 1 number 16))
+            (user-error "%d is not a valid deleted frame number argument"
+                        number)
+          (if (not frame-data)
+              (user-error "No deleted frame with number %d" number)
+            (if (not (eq graphic (nth 0 frame-data)))
+                (user-error
+                 "Cannot undelete a %s display frame on a %s display"
+                 (if graphic "non-graphic" "graphic")
+                 (if graphic "graphic" "non-graphic"))
+              (setq undelete-frame--deleted-frames
+                    (delq frame-data undelete-frame--deleted-frames))
+              (let* ((default-frame-alist (nth 1 frame-data))
+                     (frame (make-frame)))
+                (window-state-put (nth 2 frame-data) (frame-root-window frame) 'safe)
+                (select-frame-set-input-focus frame)
+                frame))))))))
 
 ;;; Window dividers.
 (defgroup window-divider nil
@@ -2870,6 +2949,7 @@ See also `toggle-frame-maximized'."
 (define-key ctl-x-5-map "o" #'other-frame)
 (define-key ctl-x-5-map "5" #'other-frame-prefix)
 (define-key ctl-x-5-map "c" #'clone-frame)
+(define-key ctl-x-5-map "u" #'undelete-frame)
 (define-key global-map [f11] #'toggle-frame-fullscreen)
 (define-key global-map [(meta f10)] #'toggle-frame-maximized)
 (define-key esc-map    [f10]        #'toggle-frame-maximized)

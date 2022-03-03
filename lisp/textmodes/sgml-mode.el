@@ -1,6 +1,6 @@
 ;;; sgml-mode.el --- SGML- and HTML-editing modes -*- lexical-binding:t -*-
 
-;; Copyright (C) 1992, 1995-1996, 1998, 2001-2021 Free Software
+;; Copyright (C) 1992, 1995-1996, 1998, 2001-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Author: James Clark <jjc@jclark.com>
@@ -419,11 +419,11 @@ These have to be run via `sgml-syntax-propertize'"))
 (defun sgml-syntax-propertize (start end &optional rules-function)
   "Syntactic keywords for `sgml-mode'."
   (setq sgml--syntax-propertize-ppss (cons start (syntax-ppss start)))
-  (cl-assert (>= (cadr sgml--syntax-propertize-ppss) 0))
-  (sgml-syntax-propertize-inside end)
-  (funcall (or rules-function sgml--syntax-propertize) (point) end)
-  ;; Catch any '>' after the last quote.
-  (sgml--syntax-propertize-ppss end))
+  (when (>= (cadr sgml--syntax-propertize-ppss) 0)
+    (sgml-syntax-propertize-inside end)
+    (funcall (or rules-function sgml--syntax-propertize) (point) end)
+    ;; Catch any '>' after the last quote.
+    (sgml--syntax-propertize-ppss end)))
 
 (defun sgml-syntax-propertize-inside (end)
   (let ((ppss (syntax-ppss)))
@@ -624,6 +624,7 @@ Do \\[describe-key] on the following bindings to discover what they do.
   (setq-local comment-indent-function 'sgml-comment-indent)
   (setq-local comment-line-break-function 'sgml-comment-indent-new-line)
   (setq-local skeleton-further-elements '((completion-ignore-case t)))
+  (setq-local skeleton-end-newline nil)
   (setq-local skeleton-end-hook
 	      (lambda ()
 		(or (eolp)

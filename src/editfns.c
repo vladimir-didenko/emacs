@@ -1,6 +1,6 @@
 /* Lisp functions pertaining to editing.                 -*- coding: utf-8 -*-
 
-Copyright (C) 1985-1987, 1989, 1993-2021 Free Software Foundation, Inc.
+Copyright (C) 1985-1987, 1989, 1993-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -847,7 +847,7 @@ usage: (save-excursion &rest BODY)  */)
   (Lisp_Object args)
 {
   register Lisp_Object val;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   record_unwind_protect_excursion ();
 
@@ -861,7 +861,7 @@ BODY is executed just like `progn'.
 usage: (save-current-buffer &rest BODY)  */)
   (Lisp_Object args)
 {
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   record_unwind_current_buffer ();
   return unbind_to (count, Fprogn (args));
@@ -1233,7 +1233,11 @@ return "unknown".
 If optional argument UID is an integer, return the full name
 of the user with that uid, or nil if there is no such user.
 If UID is a string, return the full name of the user with that login
-name, or nil if there is no such user.  */)
+name, or nil if there is no such user.
+
+If the full name includes commas, remove everything starting with
+the first comma, because the \\='gecos\\=' field of the \\='/etc/passwd\\=' file
+is in general a comma-separated list.  */)
   (Lisp_Object uid)
 {
   struct passwd *pw;
@@ -1263,7 +1267,8 @@ name, or nil if there is no such user.  */)
     return Qnil;
 
   p = USER_FULL_NAME;
-  /* Chop off everything after the first comma. */
+  /* Chop off everything after the first comma, since 'pw_gecos' is a
+     comma-separated list. */
   q = strchr (p, ',');
   full = make_string (p, q ? q - p : strlen (p));
 
@@ -2017,7 +2022,7 @@ nil.  */)
       return Qt;
     }
 
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
 
   ptrdiff_t diags = size_a + size_b + 3;
@@ -2242,7 +2247,7 @@ Both characters must have the same length of multi-byte form.  */)
   ptrdiff_t changed = 0;
   unsigned char fromstr[MAX_MULTIBYTE_LENGTH], tostr[MAX_MULTIBYTE_LENGTH];
   unsigned char *p;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 #define COMBINING_NO	 0
 #define COMBINING_BEFORE 1
 #define COMBINING_AFTER  2
@@ -2815,7 +2820,7 @@ usage: (save-restriction &rest BODY)  */)
   (Lisp_Object body)
 {
   register Lisp_Object val;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   record_unwind_protect (save_restriction_restore, save_restriction_save ());
   val = Fprogn (body);
@@ -3107,7 +3112,7 @@ styled_format (ptrdiff_t nargs, Lisp_Object *args, bool message)
   ptrdiff_t bufsize = sizeof initial_buffer;
   ptrdiff_t max_bufsize = STRING_BYTES_BOUND + 1;
   char *p;
-  ptrdiff_t buf_save_value_index UNINIT;
+  specpdl_ref buf_save_value_index UNINIT;
   char *format, *end;
   ptrdiff_t nchars;
   /* When we make a multibyte string, we must pay attention to the

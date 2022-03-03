@@ -1,6 +1,6 @@
 ;;; ffap-tests.el --- Test suite for ffap.el -*- lexical-binding: t -*-
 
-;; Copyright (C) 2016-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2016-2022 Free Software Foundation, Inc.
 
 ;; Author: Tino Calancha <tino.calancha@gmail.com>
 
@@ -140,6 +140,23 @@ left alone when opening a URL in an external browser."
         (save-excursion (insert "ffap-tests.el"))
         (let (kill-buffer-query-functions)
           (kill-buffer (call-interactively #'find-file-at-point)))))))
+
+(ert-deftest ffap-test-path ()
+  (skip-unless (file-exists-p "/bin"))
+  (skip-unless (file-exists-p "/usr/bin"))
+  (with-temp-buffer
+    (insert "/usr/bin:/bin")
+    (goto-char (point-min))
+    (should (equal (ffap-file-at-point) "/usr/bin")))
+  (with-temp-buffer
+    (insert "/usr/bin:/bin")
+    (goto-char (point-min))
+    (search-forward ":")
+    (should (equal (ffap-file-at-point) "/bin")))
+  (with-temp-buffer
+    (insert ":/bin")
+    (goto-char (point-min))
+    (should (equal (ffap-file-at-point) nil))))
 
 (provide 'ffap-tests)
 

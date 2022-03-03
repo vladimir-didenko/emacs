@@ -1,6 +1,6 @@
 ;;; help-fns.el --- Complex help functions -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1986, 1993-1994, 1998-2021 Free Software
+;; Copyright (C) 1985-1986, 1993-1994, 1998-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'help-mode)
 (require 'radix-tree)
 (eval-when-compile (require 'subr-x))   ;For when-let.
@@ -395,7 +396,7 @@ if the variable `help-downcase-arguments' is non-nil."
 ;; `describe-face' (instead of `describe-simplify-lib-file-name').
 
 ;;;###autoload
-(defun find-lisp-object-file-name (object type)
+(defun find-lisp-object-file-name (object type &optional also-c-source)
   "Guess the file that defined the Lisp object OBJECT, of type TYPE.
 OBJECT should be a symbol associated with a function, variable, or face;
   alternatively, it can be a function definition.
@@ -406,8 +407,13 @@ If TYPE is not a symbol, search for a function definition.
 The return value is the absolute name of a readable file where OBJECT is
 defined.  If several such files exist, preference is given to a file
 found via `load-path'.  The return value can also be `C-source', which
-means that OBJECT is a function or variable defined in C.  If no
-suitable file is found, return nil."
+means that OBJECT is a function or variable defined in C, but
+it's currently unknown where.  If no suitable file is found,
+return nil.
+
+If ALSO-C-SOURCE is non-nil, instead of returning `C-source',
+this function will attempt to locate the definition of OBJECT in
+the C sources, too."
   (let* ((autoloaded (autoloadp type))
 	 (file-name (or (and autoloaded (nth 1 type))
 			(symbol-file
@@ -444,14 +450,18 @@ suitable file is found, return nil."
     (cond
      ((and (not file-name) (subrp type))
       ;; A built-in function.  The form is from `describe-function-1'.
-      (if (get-buffer " *DOC*")
+      (if (or (get-buffer " *DOC*")
+              (and also-c-source
+                   (get-buffer-create " *DOC*")))
 	  (help-C-file-name type 'subr)
 	'C-source))
      ((and (not file-name) (symbolp object)
            (eq type 'defvar)
 	   (integerp (get object 'variable-documentation)))
       ;; A variable defined in C.  The form is from `describe-variable'.
-      (if (get-buffer " *DOC*")
+      (if (or (get-buffer " *DOC*")
+              (and also-c-source
+                   (get-buffer-create " *DOC*")))
 	  (help-C-file-name object 'var)
 	'C-source))
      ((not (stringp file-name))
@@ -496,9 +506,16 @@ suitable file is found, return nil."
     (let ((pt2 (with-current-buffer standard-output (point)))
           (remapped (command-remapping function)))
       (unless (memq remapped '(ignore undefined))
-        (let ((keys (where-is-internal
-                     (or remapped function) overriding-local-map nil nil))
-              non-modified-keys)
+        (let* ((all-keys (where-is-internal
+                          (or remapped function) overriding-local-map nil nil))
+               (seps (seq-group-by
+                      (lambda (key)
+                        (and (vectorp key)
+                             (eq (elt key 0) 'menu-bar)))
+                      all-keys))
+               (keys (cdr (assq nil seps)))
+               (menus (cdr (assq t seps)))
+               non-modified-keys)
           (if (and (eq function 'self-insert-command)
                    (vectorp (car-safe keys))
                    (consp (aref (car keys) 0)))
@@ -522,24 +539,42 @@ suitable file is found, return nil."
               ;; don't mention them one by one.
               (if (< (length non-modified-keys) 10)
                   (with-current-buffer standard-output
-                    (insert (mapconcat #'help--key-description-fontified
-                                       keys ", ")))
+                    (help-fns--insert-bindings keys))
                 (dolist (key non-modified-keys)
                   (setq keys (delq key keys)))
                 (if keys
                     (with-current-buffer standard-output
-                      (insert (mapconcat #'help--key-description-fontified
-                                        keys ", "))
+                      (help-fns--insert-bindings keys)
                       (insert ", and many ordinary text characters"))
-                  (princ "many ordinary text characters"))))
+                  (princ "many ordinary text characters."))))
             (when (or remapped keys non-modified-keys)
               (princ ".")
-              (terpri)))))
+              (terpri)))
 
-      (with-current-buffer standard-output
-        (fill-region-as-paragraph pt2 (point))
-        (unless (looking-back "\n\n" (- (point) 2))
-          (terpri))))))
+          (with-current-buffer standard-output
+            (fill-region-as-paragraph pt2 (point))
+            (unless (bolp)
+              (insert "\n"))
+            (when menus
+              (let ((start (point)))
+                (insert (concat "It can "
+                                (and keys "also ")
+                                "be invoked from the menu: "))
+                ;; FIXME: Should insert menu names instead of key
+                ;; binding names.
+                (help-fns--insert-bindings menus)
+                (insert ".")
+                (fill-region-as-paragraph start (point))))
+            (ensure-empty-lines)))))))
+
+(defun help-fns--insert-bindings (keys)
+  (seq-do-indexed (lambda (key i)
+                    (insert
+                     (cond ((zerop i) "")
+                           ((= i (1- (length keys))) " and ")
+                           (t ", ")))
+                    (insert (help--key-description-fontified key)))
+                  keys))
 
 (defun help-fns--compiler-macro (function)
   (let ((handler (function-get function 'compiler-macro)))
@@ -653,19 +688,9 @@ suitable file is found, return nil."
     (terpri)))
 
 ;; We could use `symbol-file' but this is a wee bit more efficient.
-(defun help-fns--autoloaded-p (function file)
-  "Return non-nil if FUNCTION has previously been autoloaded.
-FILE is the file where FUNCTION was probably defined."
-  (let* ((file (file-name-sans-extension (file-truename file)))
-	 (load-hist load-history)
-	 (target (cons t function))
-	 found)
-    (while (and load-hist (not found))
-      (and (stringp (caar load-hist))
-	   (equal (file-name-sans-extension (caar load-hist)) file)
-	   (setq found (member target (cdar load-hist))))
-      (setq load-hist (cdr load-hist)))
-    found))
+(defun help-fns--autoloaded-p (function)
+  "Return non-nil if FUNCTION has previously been autoloaded."
+  (seq-some #'autoloadp (get function 'function-history)))
 
 (defun help-fns--interactive-only (function)
   "Insert some help blurb if FUNCTION should only be used interactively."
@@ -829,11 +854,7 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
                                               (symbol-name function)))))))
 	 (real-def (cond
                     ((and aliased (not (subrp def)))
-                     (let ((f real-function))
-                       (while (and (fboundp f)
-                                   (symbolp (symbol-function f)))
-                         (setq f (symbol-function f)))
-                       f))
+                     (car (function-alias-p real-function t)))
 		    ((subrp def) (intern (subr-name def)))
                     (t def))))
 
@@ -852,13 +873,13 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
   "Print a line describing FUNCTION to `standard-output'."
   (pcase-let* ((`(,_real-function ,def ,aliased ,real-def)
                 (help-fns--analyze-function function))
-               (file-name (find-lisp-object-file-name function (if aliased 'defun
-                                                                 def)))
+               (file-name (find-lisp-object-file-name
+                           function (if aliased 'defun def)))
                (beg (if (and (or (byte-code-function-p def)
                                  (keymapp def)
                                  (memq (car-safe def) '(macro lambda closure)))
                              (stringp file-name)
-                             (help-fns--autoloaded-p function file-name))
+                             (help-fns--autoloaded-p function))
                         (concat
                          "an autoloaded " (if (commandp def)
                                               "interactive "))
@@ -947,12 +968,18 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
 
 ;;;###autoload
 (defun describe-function-1 (function)
-  (let ((pt1 (with-current-buffer (help-buffer) (point))))
+  (let ((pt1 (with-current-buffer standard-output (point))))
     (help-fns-function-description-header function)
-    (with-current-buffer (help-buffer)
-      (fill-region-as-paragraph (save-excursion (goto-char pt1) (forward-line 0) (point))
-                                (point))))
-  (terpri)(terpri)
+    (with-current-buffer standard-output
+      (let ((inhibit-read-only t))
+        (fill-region-as-paragraph
+         (save-excursion
+           (goto-char pt1)
+           (forward-line 0)
+           (point))
+         (point)
+         nil t)
+        (ensure-empty-lines))))
 
   (pcase-let* ((`(,real-function ,def ,_aliased ,real-def)
                 (help-fns--analyze-function function))

@@ -1,6 +1,6 @@
 /* Functions for image support on window system.
 
-Copyright (C) 1989, 1992-2021 Free Software Foundation, Inc.
+Copyright (C) 1989, 1992-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -80,6 +80,19 @@ typedef struct x_bitmap_record Bitmap_Record;
 #endif	/* !USE_CAIRO */
 #endif /* HAVE_X_WINDOWS */
 
+#if defined(USE_CAIRO) || defined(HAVE_NS)
+#define RGB_TO_ULONG(r, g, b) (((r) << 16) | ((g) << 8) | (b))
+#ifndef HAVE_NS
+#define ARGB_TO_ULONG(a, r, g, b) (((a) << 24) | ((r) << 16) | ((g) << 8) | (b))
+#endif
+#define RED_FROM_ULONG(color)	(((color) >> 16) & 0xff)
+#define GREEN_FROM_ULONG(color)	(((color) >> 8) & 0xff)
+#define BLUE_FROM_ULONG(color)	((color) & 0xff)
+#define RED16_FROM_ULONG(color)		(RED_FROM_ULONG (color) * 0x101)
+#define GREEN16_FROM_ULONG(color)	(GREEN_FROM_ULONG (color) * 0x101)
+#define BLUE16_FROM_ULONG(color)	(BLUE_FROM_ULONG (color) * 0x101)
+#endif
+
 #ifdef USE_CAIRO
 #define GET_PIXEL image_pix_context_get_pixel
 #define PUT_PIXEL image_pix_container_put_pixel
@@ -87,15 +100,6 @@ typedef struct x_bitmap_record Bitmap_Record;
 
 #define PIX_MASK_RETAIN	0
 #define PIX_MASK_DRAW	255
-
-#define RGB_TO_ULONG(r, g, b) (((r) << 16) | ((g) << 8) | (b))
-#define ARGB_TO_ULONG(a, r, g, b) (((a) << 24) | ((r) << 16) | ((g) << 8) | (b))
-#define RED_FROM_ULONG(color)	(((color) >> 16) & 0xff)
-#define GREEN_FROM_ULONG(color)	(((color) >> 8) & 0xff)
-#define BLUE_FROM_ULONG(color)	((color) & 0xff)
-#define RED16_FROM_ULONG(color)		(RED_FROM_ULONG (color) * 0x101)
-#define GREEN16_FROM_ULONG(color)	(GREEN_FROM_ULONG (color) * 0x101)
-#define BLUE16_FROM_ULONG(color)	(BLUE_FROM_ULONG (color) * 0x101)
 
 static unsigned long image_alloc_image_color (struct frame *, struct image *,
 					      Lisp_Object, unsigned long);
@@ -539,6 +543,10 @@ image_create_bitmap_from_data (struct frame *f, char *bits,
 
 #ifdef HAVE_HAIKU
   void *bitmap = BBitmap_new (width, height, 1);
+
+  if (!bitmap)
+    return -1;
+
   BBitmap_import_mono_bits (bitmap, bits, width, height);
 #endif
 
@@ -1173,7 +1181,7 @@ parse_image_spec (Lisp_Object spec, struct image_keyword *keywords,
 	return false;
 
     maybe_done:
-      if (EQ (XCDR (plist), Qnil))
+      if (NILP (XCDR (plist)))
 	{
 	  /* Check that all mandatory fields are present.  */
 	  for (i = 0; i < nkeywords; ++i)
@@ -2624,8 +2632,8 @@ lookup_image (struct frame *f, Lisp_Object spec, int face_id)
     face_id = DEFAULT_FACE_ID;
 
   struct face *face = FACE_FROM_ID (f, face_id);
-  unsigned long foreground = FACE_COLOR_TO_PIXEL (face->foreground, f);
-  unsigned long background = FACE_COLOR_TO_PIXEL (face->background, f);
+  unsigned long foreground = face->foreground;
+  unsigned long background = face->background;
   int font_size = face->font->pixel_size;
   char *font_family = SSDATA (face->lface[LFACE_FAMILY_INDEX]);
 
@@ -2844,13 +2852,12 @@ x_create_x_image_and_pixmap (struct frame *f, int width, int height, int depth,
 {
   Display *display = FRAME_X_DISPLAY (f);
   Drawable drawable = FRAME_X_DRAWABLE (f);
-  Screen *screen = FRAME_X_SCREEN (f);
 
   eassert (input_blocked_p ());
 
   if (depth <= 0)
-    depth = DefaultDepthOfScreen (screen);
-  *ximg = XCreateImage (display, DefaultVisualOfScreen (screen),
+    depth = FRAME_DISPLAY_INFO (f)->n_planes;
+  *ximg = XCreateImage (display, FRAME_X_VISUAL (f),
 			depth, ZPixmap, 0, NULL, width, height,
 			depth > 16 ? 32 : depth > 8 ? 16 : 8, 0);
   if (*ximg == NULL)
@@ -2902,12 +2909,11 @@ x_create_xrender_picture (struct frame *f, Emacs_Pixmap pixmap, int depth)
 {
   Picture p;
   Display *display = FRAME_X_DISPLAY (f);
-  int event_basep, error_basep;
 
-  if (XRenderQueryExtension (display, &event_basep, &error_basep))
+  if (FRAME_DISPLAY_INFO (f)->xrender_supported_p)
     {
       if (depth <= 0)
-	depth = DefaultDepthOfScreen (FRAME_X_SCREEN (f));
+	depth = FRAME_DISPLAY_INFO (f)->n_planes;
       if (depth == 32 || depth == 24 || depth == 8 || depth == 4 || depth == 1)
         {
           /* FIXME: Do we need to handle all possible bit depths?
@@ -3399,7 +3405,7 @@ slurp_file (int fd, ptrdiff_t *size)
 
   if (fp)
     {
-      ptrdiff_t count = SPECPDL_INDEX ();
+      specpdl_ref count = SPECPDL_INDEX ();
       record_unwind_protect_ptr (fclose_unwind, fp);
 
       if (fstat (fileno (fp), &st) == 0
@@ -3675,6 +3681,48 @@ xbm_scan (char **s, char *end, char *sval, int *ival)
       *ival = value;
       return overflow ? XBM_TK_OVERFLOW : XBM_TK_NUMBER;
     }
+  /* Character literal.  XBM images typically contain hex escape
+     sequences and not actual characters, so we only try to handle
+     that here.  */
+  else if (c == '\'')
+    {
+      int value = 0, digit;
+      bool overflow = false;
+
+      if (*s == end)
+	return 0;
+
+      c = *(*s)++;
+
+      if (c != '\\' || *s == end)
+	return 0;
+
+      c = *(*s)++;
+
+      if (c == 'x')
+	{
+	  while (*s < end)
+	    {
+	      c = *(*s)++;
+
+	      if (c == '\'')
+		{
+		  *ival = value;
+		  return overflow ? XBM_TK_OVERFLOW : XBM_TK_NUMBER;
+		}
+
+	      digit = char_hexdigit (c);
+
+	      if (digit < 0)
+		return 0;
+
+	      overflow |= INT_MULTIPLY_WRAPV (value, 16, &value);
+	      value += digit;
+	    }
+	}
+
+      return 0;
+    }
   else if (c_isalpha (c) || c == '_')
     {
       *sval++ = c;
@@ -3798,7 +3846,7 @@ Create_Pixmap_From_Bitmap_Data (struct frame *f, struct image *img, char *data,
 				   data,
 				   img->width, img->height,
 				   fg, bg,
-				   DefaultDepthOfScreen (FRAME_X_SCREEN (f)));
+				   FRAME_DISPLAY_INFO (f)->n_planes);
 # if !defined USE_CAIRO && defined HAVE_XRENDER
   if (img->pixmap)
     img->picture = x_create_xrender_picture (f, img->pixmap, 0);
@@ -3813,6 +3861,21 @@ Create_Pixmap_From_Bitmap_Data (struct frame *f, struct image *img, char *data,
     convert_mono_to_color_image (f, img, fg, bg);
 #elif defined HAVE_NS
   img->pixmap = ns_image_from_XBM (data, img->width, img->height, fg, bg);
+#elif defined HAVE_HAIKU
+  img->pixmap = BBitmap_new (img->width, img->height, 0);
+
+  if (img->pixmap)
+    {
+      int bytes_per_line = (img->width + 7) / 8;
+
+      for (int y = 0; y < img->height; y++)
+	{
+	  for (int x = 0; x < img->width; x++)
+	    PUT_PIXEL (img->pixmap, x, y,
+		       (data[x / 8] >> (x % 8)) & 1 ? fg : bg);
+	  data += bytes_per_line;
+	}
+    }
 #endif
 }
 
@@ -3997,6 +4060,7 @@ xbm_load_image (struct frame *f, struct image *img, char *contents, char *end)
 
   rc = xbm_read_bitmap_data (f, contents, end, &img->width, &img->height,
 			     &data, 0);
+
   if (rc)
     {
       unsigned long foreground = img->face_foreground;
@@ -4629,8 +4693,10 @@ xpm_load (struct frame *f, struct image *img)
 #ifndef HAVE_NTGUI
   attrs.visual = FRAME_X_VISUAL (f);
   attrs.colormap = FRAME_X_COLORMAP (f);
+  attrs.depth = FRAME_DISPLAY_INFO (f)->n_planes;
   attrs.valuemask |= XpmVisual;
   attrs.valuemask |= XpmColormap;
+  attrs.valuemask |= XpmDepth;
 #endif /* HAVE_NTGUI */
 
 #ifdef ALLOC_XPM_COLORS
@@ -10669,11 +10735,16 @@ svg_load_image (struct frame *f, struct image *img, char *contents,
   viewbox_height = dimension_data.height;
 #endif
 
+#ifdef HAVE_NATIVE_TRANSFORMS
   compute_image_size (viewbox_width, viewbox_height, img,
                       &width, &height);
 
   width = scale_image_size (width, 1, FRAME_SCALE_FACTOR (f));
   height = scale_image_size (height, 1, FRAME_SCALE_FACTOR (f));
+#else
+  width = viewbox_width;
+  height = viewbox_height;
+#endif
 
   if (! check_image_size (f, width, height))
     {
@@ -11016,7 +11087,7 @@ gs_load (struct frame *f, struct image *img)
       block_input ();
       img->pixmap = XCreatePixmap (FRAME_X_DISPLAY (f), FRAME_X_DRAWABLE (f),
 				   img->width, img->height,
-				   DefaultDepthOfScreen (FRAME_X_SCREEN (f)));
+				   FRAME_DISPLAY_INFO (f)->n_planes);
       unblock_input ();
     }
 
@@ -11192,10 +11263,7 @@ The list of capabilities can include one or more of the following:
   || defined (HAVE_HAIKU)
       return list2 (Qscale, Qrotate90);
 # elif defined (HAVE_X_WINDOWS) && defined (HAVE_XRENDER)
-      int event_basep, error_basep;
-
-      if (XRenderQueryExtension (FRAME_X_DISPLAY (f),
-				 &event_basep, &error_basep))
+      if (FRAME_DISPLAY_INFO (f)->xrender_supported_p)
 	return list2 (Qscale, Qrotate90);
 # elif defined (HAVE_NTGUI)
       return (w32_image_rotations_p ()
@@ -11453,7 +11521,8 @@ non-numeric, there is no explicit limit on the size of images.  */);
   add_image_type (Qpng);
 #endif
 
-#if defined (HAVE_WEBP)
+#if defined (HAVE_WEBP) || (defined (HAVE_NATIVE_IMAGE_API) \
+			    && defined (HAVE_HAIKU))
   DEFSYM (Qwebp, "webp");
   add_image_type (Qwebp);
 #endif
@@ -11478,6 +11547,11 @@ non-numeric, there is no explicit limit on the size of images.  */);
   DEFSYM (Qgobject, "gobject");
 #endif /* HAVE_NTGUI  */
 #endif /* HAVE_RSVG  */
+
+#ifdef HAVE_NS
+  DEFSYM (Qheic, "heic");
+  add_image_type (Qheic);
+#endif
 
 #if HAVE_NATIVE_IMAGE_API
   DEFSYM (Qnative_image, "native-image");

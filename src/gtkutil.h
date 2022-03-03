@@ -1,6 +1,6 @@
 /* Definitions and headers for GTK widgets.
 
-Copyright (C) 2003-2021 Free Software Foundation, Inc.
+Copyright (C) 2003-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -148,7 +148,8 @@ extern void xg_set_toolkit_horizontal_scroll_bar_thumb (struct scroll_bar *bar,
 							int portion,
 							int position,
 							int whole);
-extern bool xg_event_is_for_scrollbar (struct frame *, const EVENT *);
+extern bool xg_event_is_for_scrollbar (struct frame *, const EVENT *,
+				       bool for_valuator);
 extern int xg_get_default_scrollbar_width (struct frame *f);
 extern int xg_get_default_scrollbar_height (struct frame *f);
 
@@ -215,6 +216,10 @@ extern void xg_print_frames_dialog (Lisp_Object);
 
 #if defined HAVE_GTK3 && defined HAVE_XINPUT2
 extern bool xg_is_menu_window (Display *dpy, Window);
+#endif
+
+#ifndef HAVE_PGTK
+extern bool xg_filter_key (struct frame *frame, XEvent *xkey);
 #endif
 
 /* Mark all callback data that are Lisp_object:s during GC.  */

@@ -1,5 +1,5 @@
 /* Haiku window system support
-   Copyright (C) 2021 Free Software Foundation, Inc.
+   Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -18,11 +18,6 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #ifndef _HAIKU_GUI_H_
 #define _HAIKU_GUI_H_
-
-#ifdef _cplusplus
-extern "C"
-{
-#endif
 
 typedef struct haiku_char_struct
 {
@@ -100,7 +95,4 @@ typedef haiku Drawable;
 typedef haiku Window;
 typedef int Display;
 
-#ifdef _cplusplus
-};
-#endif
 #endif /* _HAIKU_GUI_H_ */

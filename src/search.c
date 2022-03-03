@@ -1,6 +1,6 @@
 /* String search routines for GNU Emacs.
 
-Copyright (C) 1985-1987, 1993-1994, 1997-1999, 2001-2021 Free Software
+Copyright (C) 1985-1987, 1993-1994, 1997-1999, 2001-2022 Free Software
 Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -310,7 +310,7 @@ looking_at_1 (Lisp_Object string, bool posix, bool modify_data)
       s2 = 0;
     }
 
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   freeze_buffer_relocation ();
   freeze_pattern (cache_entry);
   re_match_object = Qnil;
@@ -568,7 +568,7 @@ fast_looking_at (Lisp_Object regexp, ptrdiff_t pos, ptrdiff_t pos_byte,
 
   struct regexp_cache *cache_entry =
     compile_pattern (regexp, 0, Qnil, 0, multibyte);
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   freeze_buffer_relocation ();
   freeze_pattern (cache_entry);
   re_match_object = STRINGP (string) ? string : Qnil;
@@ -1198,7 +1198,7 @@ search_buffer_re (Lisp_Object string, ptrdiff_t pos, ptrdiff_t pos_byte,
       s2 = 0;
     }
 
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   freeze_buffer_relocation ();
   freeze_pattern (cache_entry);
 
@@ -2826,6 +2826,14 @@ Element 2N is `(match-beginning N)'; element 2N + 1 is `(match-end N)'.
 All the elements are markers or nil (nil if the Nth pair didn't match)
 if the last match was on a buffer; integers or nil if a string was matched.
 Use `set-match-data' to reinstate the data in this list.
+
+Note that non-matching optional groups at the end of the regexp are
+elided instead of being represented with two `nil's each.  For instance:
+
+  (progn
+    (string-match "^\\(a\\)?\\(b\\)\\(c\\)?$" "b")
+    (match-data))
+  => (0 1 nil nil 0 1)
 
 If INTEGERS (the optional first argument) is non-nil, always use
 integers (rather than markers) to represent buffer positions.  In

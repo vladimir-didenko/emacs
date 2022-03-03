@@ -1,5 +1,5 @@
 /* NeXT/Open/GNUstep and macOS Cocoa menu and toolbar module.
-   Copyright (C) 2007-2021 Free Software Foundation, Inc.
+   Copyright (C) 2007-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -164,7 +164,7 @@ ns_update_menubar (struct frame *f, bool deep_p)
 
       struct buffer *prev = current_buffer;
       Lisp_Object buffer;
-      ptrdiff_t specpdl_count = SPECPDL_INDEX ();
+      specpdl_ref specpdl_count = SPECPDL_INDEX ();
       int previous_menu_items_used = f->menu_bar_items_used;
       Lisp_Object *previous_items
 	= alloca (previous_menu_items_used * sizeof *previous_items);
@@ -759,6 +759,32 @@ prettify_key (const char *key)
 }
 
 #ifdef NS_IMPL_GNUSTEP
+/* The code below doesn't work on Mac OS X, because it runs a nested
+   Carbon-related event loop to track menu bar movement.
+
+   But it works fine aside from that, so it will work on GNUstep if
+   they start to call `willHighlightItem'.  */
+- (void) menu: (NSMenu *) menu willHighlightItem: (NSMenuItem *) item
+{
+  NSInteger idx = [item tag];
+  struct frame *f = SELECTED_FRAME ();
+  Lisp_Object vec = f->menu_bar_vector;
+  Lisp_Object help, frame;
+
+  if (idx >= ASIZE (vec))
+    return;
+
+  XSETFRAME (frame, f);
+  help = AREF (vec, idx + MENU_ITEMS_ITEM_HELP);
+
+  if (STRINGP (help) || NILP (help))
+    kbd_buffer_store_help_event (frame, help);
+
+  raise (SIGIO);
+}
+#endif
+
+#ifdef NS_IMPL_GNUSTEP
 - (void) close
 {
     /* Close all the submenus.  This has the unfortunate side-effect of
@@ -777,6 +803,25 @@ prettify_key (const char *key)
 /* GNUstep seems to have a number of required methods in
    NSMenuDelegate that are optional in Cocoa.  */
 
+- (BOOL) menu: (NSMenu*) menu updateItem: (NSMenuItem*) item
+      atIndex: (NSInteger) index shouldCancel: (BOOL) shouldCancel
+{
+  return YES;
+}
+
+- (BOOL) menuHasKeyEquivalent: (NSMenu*) menu
+		     forEvent: (NSEvent*) event
+		       target: (id*) target
+		       action: (SEL*) action
+{
+  return NO;
+}
+
+- (NSInteger) numberOfItemsInMenu: (NSMenu*) menu
+{
+  return [super numberOfItemsInMenu: menu];
+}
+
 - (void) menuWillOpen:(NSMenu *)menu
 {
 }
@@ -789,10 +834,6 @@ prettify_key (const char *key)
                         onScreen:(NSScreen *)screen
 {
   return NSZeroRect;
-}
-
-- (void)menu:(NSMenu *)menu willHighlightItem:(NSMenuItem *)item
-{
 }
 #endif
 
@@ -813,7 +854,7 @@ ns_menu_show (struct frame *f, int x, int y, int menuflags,
   EmacsMenu *pmenu;
   NSPoint p;
   Lisp_Object tem;
-  ptrdiff_t specpdl_count = SPECPDL_INDEX ();
+  specpdl_ref specpdl_count = SPECPDL_INDEX ();
   widget_value *wv, *first_wv = 0;
   bool keymaps = (menuflags & MENU_KEYMAPS);
 
@@ -1081,9 +1122,7 @@ update_frame_tool_bar_1 (struct frame *f, EmacsToolbar *toolbar)
       struct image *img;
       Lisp_Object image;
       Lisp_Object labelObj;
-      const char *labelText;
       Lisp_Object helpObj;
-      const char *helpText;
 
       /* Check if this is a separator.  */
       if (EQ (TOOLPROP (TOOL_BAR_ITEM_TYPE), Qt))
@@ -1109,11 +1148,9 @@ update_frame_tool_bar_1 (struct frame *f, EmacsToolbar *toolbar)
           idx = -1;
         }
       labelObj = TOOLPROP (TOOL_BAR_ITEM_LABEL);
-      labelText = NILP (labelObj) ? "" : SSDATA (labelObj);
       helpObj = TOOLPROP (TOOL_BAR_ITEM_HELP);
       if (NILP (helpObj))
         helpObj = TOOLPROP (TOOL_BAR_ITEM_CAPTION);
-      helpText = NILP (helpObj) ? "" : SSDATA (helpObj);
 
       /* Ignore invalid image specifications.  */
       if (!valid_image_p (image))
@@ -1135,8 +1172,8 @@ update_frame_tool_bar_1 (struct frame *f, EmacsToolbar *toolbar)
       [toolbar addDisplayItemWithImage: img->pixmap
                                    idx: k++
                                    tag: i
-                             labelText: labelText
-                              helpText: helpText
+                             labelText: [NSString stringWithLispString:labelObj]
+                              helpText: [NSString stringWithLispString:helpObj]
                                enabled: enabled_p];
 #undef TOOLPROP
     }
@@ -1252,15 +1289,15 @@ update_frame_tool_bar (struct frame *f)
 - (void) addDisplayItemWithImage: (EmacsImage *)img
                              idx: (int)idx
                              tag: (int)tag
-                       labelText: (const char *)label
-                        helpText: (const char *)help
+                       labelText: (NSString *)label
+                        helpText: (NSString *)help
                          enabled: (BOOL)enabled
 {
   NSTRACE ("[EmacsToolbar addDisplayItemWithImage: ...]");
 
   /* 1) come up w/identifier */
-  NSString *identifier
-    = [NSString stringWithFormat: @"%lu", (unsigned long)[img hash]];
+  NSString *identifier = [NSString stringWithFormat: @"%lu%@",
+                                   (unsigned long)[img hash], label];
   [activeIdentifiers addObject: identifier];
 
   /* 2) create / reuse item */
@@ -1270,8 +1307,8 @@ update_frame_tool_bar (struct frame *f)
       item = [[[NSToolbarItem alloc] initWithItemIdentifier: identifier]
                autorelease];
       [item setImage: img];
-      [item setLabel: [NSString stringWithUTF8String: label]];
-      [item setToolTip: [NSString stringWithUTF8String: help]];
+      [item setLabel: label];
+      [item setToolTip: help];
       [item setTarget: emacsView];
       [item setAction: @selector (toolbarClicked:)];
       [identifierToItem setObject: item forKey: identifier];
@@ -1515,7 +1552,7 @@ ns_popup_dialog (struct frame *f, Lisp_Object header, Lisp_Object contents)
                                            isQuestion: isQ];
 
   {
-    ptrdiff_t specpdl_count = SPECPDL_INDEX ();
+    specpdl_ref specpdl_count = SPECPDL_INDEX ();
 
     record_unwind_protect_ptr (pop_down_menu, dialog);
     popup_activated_flag = 1;

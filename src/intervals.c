@@ -1,5 +1,5 @@
 /* Code for doing intervals.
-   Copyright (C) 1993-1995, 1997-1998, 2001-2021 Free Software
+   Copyright (C) 1993-1995, 1997-1998, 2001-2022 Free Software
    Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -2180,7 +2180,7 @@ get_local_map (ptrdiff_t position, struct buffer *buffer, Lisp_Object type)
 {
   Lisp_Object prop, lispy_position, lispy_buffer;
   ptrdiff_t old_begv, old_zv, old_begv_byte, old_zv_byte;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   position = clip_to_bounds (BUF_BEGV (buffer), position, BUF_ZV (buffer));
 

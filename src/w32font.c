@@ -1,5 +1,5 @@
 /* Font backend for the Microsoft Windows API.
-   Copyright (C) 2007-2021 Free Software Foundation, Inc.
+   Copyright (C) 2007-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -2385,7 +2385,6 @@ font_supported_scripts (FONTSIGNATURE * sig)
   SUBRANGE (108, Qkharoshthi);
   SUBRANGE (109, Qtai_xuan_jing_symbol);
   SUBRANGE (110, Qcuneiform);
-  SUBRANGE (111, Qcuneiform_numbers_and_punctuation);
   SUBRANGE (111, Qcounting_rod_numeral);
   SUBRANGE (112, Qsundanese);
   SUBRANGE (113, Qlepcha);
@@ -2661,7 +2660,7 @@ in the font selection dialog. */)
   ReleaseDC (FRAME_W32_WINDOW (f), hdc);
 
   {
-    int count = SPECPDL_INDEX ();
+    specpdl_ref count = SPECPDL_INDEX ();
     Lisp_Object value = Qnil;
 
     w32_dialog_in_progress (Qt);
@@ -2828,8 +2827,6 @@ syms_of_w32font (void)
   DEFSYM (Qbuginese, "buginese");
   DEFSYM (Qbuhid, "buhid");
   DEFSYM (Qcuneiform, "cuneiform");
-  DEFSYM (Qcuneiform_numbers_and_punctuation,
-	  "cuneiform-numbers-and-punctuation");
   DEFSYM (Qcypriot, "cypriot");
   DEFSYM (Qdeseret, "deseret");
   DEFSYM (Qglagolitic, "glagolitic");

@@ -1,6 +1,6 @@
 ;;; em-dirs.el --- directory navigation commands  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1999-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2022 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@gnu.org>
 
@@ -391,6 +391,10 @@ in the minibuffer:
 	(unless (equal curdir newdir)
 	  (eshell-add-to-dir-ring curdir))
 	(let ((result (cd newdir)))
+          ;; If we're in "/" and cd to ".." or the like, make things
+          ;; less confusing by changing "/.." to "/".
+          (when (equal (file-truename result) "/")
+            (setq result (cd "/")))
 	  (and eshell-cd-shows-directory
 	       (eshell-printn result)))
 	(run-hooks 'eshell-directory-change-hook)

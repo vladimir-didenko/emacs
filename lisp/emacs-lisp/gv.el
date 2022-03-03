@@ -1,6 +1,6 @@
 ;;; gv.el --- generalized variables  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2012-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2022 Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Keywords: extensions
@@ -594,7 +594,7 @@ binding mode."
         code
       (macroexp-warn-and-return
        "Use of gv-ref probably requires lexical-binding"
-       code))))
+       code nil nil place))))
 
 (defsubst gv-deref (ref)
   "Dereference REF, returning the referenced value.

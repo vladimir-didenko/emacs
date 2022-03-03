@@ -1,6 +1,6 @@
 /* Buffer manipulation primitives for GNU Emacs.
 
-Copyright (C) 1985-1989, 1993-1995, 1997-2021 Free Software Foundation,
+Copyright (C) 1985-1989, 1993-1995, 1997-2022 Free Software Foundation,
 Inc.
 
 This file is part of GNU Emacs.
@@ -912,6 +912,10 @@ does not run the hooks `kill-buffer-hook',
       Fset (intern ("buffer-save-without-query"), Qnil);
       Fset (intern ("buffer-file-number"), Qnil);
       Fset (intern ("buffer-stale-function"), Qnil);
+      /* Cloned buffers need extra setup, to do things such as deep
+	 variable copies for list variables that might be mangled due
+	 to destructive operations in the indirect buffer. */
+      run_hook (Qclone_indirect_buffer_hook);
       set_buffer_internal_1 (old_b);
     }
 
@@ -1247,7 +1251,7 @@ buffer_local_value (Lisp_Object variable, Lisp_Object buffer)
       { /* Look in local_var_alist.  */
 	struct Lisp_Buffer_Local_Value *blv = SYMBOL_BLV (sym);
 	XSETSYMBOL (variable, sym); /* Update In case of aliasing.  */
-	result = Fassoc (variable, BVAR (buf, local_var_alist), Qnil);
+	result = assq_no_quit (variable, BVAR (buf, local_var_alist));
 	if (!NILP (result))
 	  {
 	    if (blv->fwd.fwdptr)
@@ -1552,7 +1556,7 @@ This does not change the name of the visited file (if any).  */)
 
   /* Catch redisplay's attention.  Unless we do this, the mode lines for
      any windows displaying current_buffer will stay unchanged.  */
-  update_mode_lines = 11;
+  bset_update_mode_line (current_buffer);
 
   XSETBUFFER (buf, current_buffer);
   Fsetcar (Frassq (buf, Vbuffer_alist), newname);
@@ -1561,6 +1565,9 @@ This does not change the name of the visited file (if any).  */)
     call0 (intern ("rename-auto-save-file"));
 
   run_buffer_list_update_hook (current_buffer);
+
+  call2 (intern ("uniquify--rename-buffer-advice"),
+         BVAR (current_buffer, name), unique);
 
   /* Refetch since that last call may have done GC.  */
   return BVAR (current_buffer, name);
@@ -1767,7 +1774,7 @@ cleaning up all windows currently displaying the buffer to be killed. */)
 
   /* Run hooks with the buffer to be killed as the current buffer.  */
   {
-    ptrdiff_t count = SPECPDL_INDEX ();
+    specpdl_ref count = SPECPDL_INDEX ();
     bool modified;
 
     record_unwind_protect_excursion ();
@@ -2090,7 +2097,6 @@ Use this function before selecting the buffer, since it may need to inspect
 the current buffer's major mode.  */)
   (Lisp_Object buffer)
 {
-  ptrdiff_t count;
   Lisp_Object function;
 
   CHECK_BUFFER (buffer);
@@ -2113,7 +2119,7 @@ the current buffer's major mode.  */)
                           `hack-local-variables' get run. */
     return Qnil;
 
-  count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   /* To select a nonfundamental mode,
      select the buffer temporarily and then call the mode function.  */
@@ -4028,7 +4034,7 @@ buffer.  */)
 {
   struct buffer *b, *ob = 0;
   Lisp_Object obuffer;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   ptrdiff_t n_beg, n_end;
   ptrdiff_t o_beg UNINIT, o_end UNINIT;
 
@@ -4149,7 +4155,7 @@ DEFUN ("delete-overlay", Fdelete_overlay, Sdelete_overlay, 1, 1, 0,
 {
   Lisp_Object buffer;
   struct buffer *b;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   CHECK_OVERLAY (overlay);
 
@@ -5566,6 +5572,8 @@ syms_of_buffer (void)
   Fput (Qprotected_field, Qerror_message,
 	build_pure_c_string ("Attempt to modify a protected field"));
 
+  DEFSYM (Qclone_indirect_buffer_hook, "clone-indirect-buffer-hook");
+
   DEFVAR_PER_BUFFER ("tab-line-format",
 		     &BVAR (current_buffer, tab_line_format),
 		     Qnil,
@@ -6020,15 +6028,16 @@ specifies.  */);
 
   DEFVAR_PER_BUFFER ("indicate-empty-lines",
 		     &BVAR (current_buffer, indicate_empty_lines), Qnil,
-		     doc: /* Visually indicate empty lines after the buffer end.
-If non-nil, a bitmap is displayed in the left fringe of a window on
-window-systems.  */);
+		     doc: /* Visually indicate unused ("empty") screen lines after the buffer end.
+If non-nil, a bitmap is displayed in the left fringe of a window
+on graphical displays for each screen line that doesn't correspond
+to any buffer text.  */);
 
   DEFVAR_PER_BUFFER ("indicate-buffer-boundaries",
 		     &BVAR (current_buffer, indicate_buffer_boundaries), Qnil,
 		     doc: /* Visually indicate buffer boundaries and scrolling.
 If non-nil, the first and last line of the buffer are marked in the fringe
-of a window on window-systems with angle bitmaps, or if the window can be
+of a window on graphical displays with angle bitmaps, or if the window can be
 scrolled, the top and bottom line of the window are marked with up and down
 arrow bitmaps.
 
@@ -6387,6 +6396,13 @@ If `delete-auto-save-files' is nil, any autosave deletion is inhibited.  */);
 	       doc: /* Non-nil means delete auto-save file when a buffer is saved.
 This is the default.  If nil, auto-save file deletion is inhibited.  */);
   delete_auto_save_files = 1;
+
+  DEFVAR_LISP ("clone-indirect-buffer-hook", Vclone_indirect_buffer_hook,
+	       doc: /* Normal hook to run in the new buffer at the end of `make-indirect-buffer'.
+
+Since `clone-indirect-buffer' calls `make-indirect-buffer', this hook
+will run for `clone-indirect-buffer' calls as well.  */);
+  Vclone_indirect_buffer_hook = Qnil;
 
   defsubr (&Sbuffer_live_p);
   defsubr (&Sbuffer_list);

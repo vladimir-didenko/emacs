@@ -1,6 +1,6 @@
 ;;; finder.el --- topic & keyword-based code finder  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992, 1997-1999, 2001-2021 Free Software Foundation,
+;; Copyright (C) 1992, 1997-1999, 2001-2022 Free Software Foundation,
 ;; Inc.
 
 ;; Author: Eric S. Raymond <esr@snark.thyrsus.com>
@@ -454,7 +454,8 @@ Quit the window and kill all Finder-related buffers."
 
 (defun finder-unload-function ()
   "Unload the Finder library."
-  (with-demoted-errors (unload-feature 'finder-inf t))
+  (with-demoted-errors "Error unloading finder: %S"
+    (unload-feature 'finder-inf t))
   ;; continue standard unloading
   nil)
 

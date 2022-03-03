@@ -1,5 +1,5 @@
 /* Haiku window system support
-   Copyright (C) 2021 Free Software Foundation, Inc.
+   Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -45,7 +45,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #define BLUE_FROM_ULONG(color)	((color) & 0xff)
 
 /* The frame of the currently visible tooltip.  */
-static Lisp_Object tip_frame;
+Lisp_Object tip_frame;
 
 /* The window-system window corresponding to the frame of the
    currently visible tooltip.  */
@@ -418,13 +418,20 @@ haiku_set_parent_frame (struct frame *f,
     }
 
   if (!NILP (old_value))
-    EmacsWindow_unparent (FRAME_HAIKU_WINDOW (f));
+    {
+      EmacsWindow_unparent (FRAME_HAIKU_WINDOW (f));
+      FRAME_OUTPUT_DATA (f)->parent_desc = NULL;
+    }
   if (!NILP (new_value))
     {
       EmacsWindow_parent_to (FRAME_HAIKU_WINDOW (f),
 			     FRAME_HAIKU_WINDOW (p));
       BWindow_set_offset (FRAME_HAIKU_WINDOW (f),
 			  f->left_pos, f->top_pos);
+
+      /* This isn't actually used for anything, but makes the
+	 `parent-id' parameter correct.  */
+      FRAME_OUTPUT_DATA (f)->parent_desc = FRAME_HAIKU_WINDOW (p);
     }
   fset_parent_frame (f, new_value);
   unblock_input ();
@@ -448,6 +455,15 @@ haiku_set_no_accept_focus (struct frame *f, Lisp_Object new_value, Lisp_Object o
       BWindow_set_avoid_focus (FRAME_HAIKU_WINDOW (f),
 			       FRAME_NO_ACCEPT_FOCUS (f));
     }
+  unblock_input ();
+}
+
+static void
+initial_setup_back_buffer (struct frame *f)
+{
+  block_input ();
+  if (NILP (CDR (Fassq (Qinhibit_double_buffering, f->param_alist))))
+    EmacsView_set_up_double_buffering (FRAME_HAIKU_VIEW (f));
   unblock_input ();
 }
 
@@ -547,15 +563,14 @@ unwind_popup (void)
 }
 
 static Lisp_Object
-haiku_create_frame (Lisp_Object parms, int ttip_p)
+haiku_create_frame (Lisp_Object parms)
 {
   struct frame *f;
   Lisp_Object frame, tem;
   Lisp_Object name;
   bool minibuffer_only = false;
-  bool face_change_before = face_change;
   long window_prompting = 0;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   Lisp_Object display;
   struct haiku_display_info *dpyinfo = NULL;
   struct kboard *kb;
@@ -584,8 +599,6 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
   if (STRINGP (name))
     Vx_resource_name = name;
 
-  block_input ();
-
   /* make_frame_without_minibuffer can run Lisp code and garbage collect.  */
   /* No need to protect DISPLAY because that's not used after passing
      it to make_frame_without_minibuffer.  */
@@ -593,10 +606,8 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
   tem = gui_display_get_arg (dpyinfo, parms, Qminibuffer,
                              "minibuffer", "Minibuffer",
                              RES_TYPE_SYMBOL);
-  if (ttip_p)
-    f = make_frame (0);
-  else if (EQ (tem, Qnone) || NILP (tem))
-      f = make_frame_without_minibuffer (Qnil, kb, display);
+  if (EQ (tem, Qnone) || NILP (tem))
+    f = make_frame_without_minibuffer (Qnil, kb, display);
   else if (EQ (tem, Qonly))
     {
       f = make_minibuffer_frame ();
@@ -618,22 +629,16 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
   f->output_data.haiku->pending_zoom_width = INT_MIN;
   f->output_data.haiku->pending_zoom_height = INT_MIN;
 
-  if (ttip_p)
-    f->wants_modeline = false;
-
   fset_icon_name (f, gui_display_get_arg (dpyinfo, parms, Qicon_name,
                                           "iconName", "Title",
                                           RES_TYPE_STRING));
-  if (! STRINGP (f->icon_name) || ttip_p)
+  if (! STRINGP (f->icon_name))
     fset_icon_name (f, Qnil);
 
   FRAME_DISPLAY_INFO (f) = dpyinfo;
 
   /* With FRAME_DISPLAY_INFO set up, this unwind-protect is safe.  */
-  if (!ttip_p)
-    record_unwind_protect (unwind_create_frame, frame);
-  else
-    record_unwind_protect (unwind_create_tip_frame, frame);
+  record_unwind_protect (unwind_create_frame, frame);
 
   FRAME_OUTPUT_DATA (f)->parent_desc = NULL;
   FRAME_OUTPUT_DATA (f)->explicit_parent = 0;
@@ -660,8 +665,6 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
 #endif
   register_font_driver (&haikufont_driver, f);
 
-  f->tooltip = ttip_p;
-
   image_cache_refcount =
     FRAME_IMAGE_CACHE (f) ? FRAME_IMAGE_CACHE (f)->refcount : 0;
 
@@ -670,21 +673,25 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
 
   FRAME_RIF (f)->default_font_parameter (f, parms);
 
-  unblock_input ();
+  if (!FRAME_FONT (f))
+    {
+      delete_frame (frame, Qnoelisp);
+      error ("Invalid frame font");
+    }
 
   gui_default_parameter (f, parms, Qborder_width, make_fixnum (0),
                          "borderwidth", "BorderWidth", RES_TYPE_NUMBER);
-  gui_default_parameter (f, parms, Qinternal_border_width, make_fixnum (ttip_p ? 1 : 2),
+  gui_default_parameter (f, parms, Qinternal_border_width, make_fixnum (2),
                          "internalBorderWidth", "InternalBorderWidth",
                          RES_TYPE_NUMBER);
   gui_default_parameter (f, parms, Qchild_frame_border_width, Qnil,
 			 "childFrameBorderWidth", "childFrameBorderWidth",
 			 RES_TYPE_NUMBER);
   gui_default_parameter (f, parms, Qright_divider_width, make_fixnum (0),
-		       NULL, NULL, RES_TYPE_NUMBER);
+			 NULL, NULL, RES_TYPE_NUMBER);
   gui_default_parameter (f, parms, Qbottom_divider_width, make_fixnum (0),
-		       NULL, NULL, RES_TYPE_NUMBER);
-  gui_default_parameter (f, parms, Qvertical_scroll_bars, !ttip_p ? Qt : Qnil,
+			 NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qvertical_scroll_bars, Qt,
 			 "verticalScrollBars", "VerticalScrollBars",
 			 RES_TYPE_SYMBOL);
   gui_default_parameter (f, parms, Qhorizontal_scroll_bars, Qnil,
@@ -700,7 +707,7 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
                          "leftFringe", "LeftFringe", RES_TYPE_NUMBER);
   gui_default_parameter (f, parms, Qright_fringe, Qnil,
                          "rightFringe", "RightFringe", RES_TYPE_NUMBER);
-  gui_default_parameter (f, parms, Qno_special_glyphs, ttip_p ? Qnil : Qt,
+  gui_default_parameter (f, parms, Qno_special_glyphs, Qnil,
                          NULL, NULL, RES_TYPE_BOOLEAN);
 
   init_frame_faces (f);
@@ -718,57 +725,40 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
 		     FRAME_LINES (f) * FRAME_LINE_HEIGHT (f), 5, 1,
 		     Qx_create_frame_1);
 
-  if (!ttip_p)
-    {
-      gui_default_parameter (f, parms, Qz_group, Qnil, NULL, NULL, RES_TYPE_SYMBOL);
-      gui_default_parameter (f, parms, Qno_focus_on_map, Qnil,
-			     NULL, NULL, RES_TYPE_BOOLEAN);
-      gui_default_parameter (f, parms, Qno_accept_focus, Qnil,
-			     NULL, NULL, RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qz_group, Qnil, NULL, NULL, RES_TYPE_SYMBOL);
+  gui_default_parameter (f, parms, Qno_focus_on_map, Qnil,
+			 NULL, NULL, RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qno_accept_focus, Qnil,
+			 NULL, NULL, RES_TYPE_BOOLEAN);
 
-      /* The resources controlling the menu-bar, tool-bar, and tab-bar are
-	 processed specially at startup, and reflected in the mode
-	 variables; ignore them here.  */
-      gui_default_parameter (f, parms, Qmenu_bar_lines,
-			     NILP (Vmenu_bar_mode)
-			     ? make_fixnum (0) : make_fixnum (1),
-			     NULL, NULL, RES_TYPE_NUMBER);
-      gui_default_parameter (f, parms, Qtab_bar_lines,
-			     NILP (Vtab_bar_mode)
-			     ? make_fixnum (0) : make_fixnum (1),
-			     NULL, NULL, RES_TYPE_NUMBER);
-      gui_default_parameter (f, parms, Qtool_bar_lines,
-			     NILP (Vtool_bar_mode)
-			     ? make_fixnum (0) : make_fixnum (1),
-			     NULL, NULL, RES_TYPE_NUMBER);
-      gui_default_parameter (f, parms, Qbuffer_predicate, Qnil, "bufferPredicate",
-			     "BufferPredicate", RES_TYPE_SYMBOL);
-      gui_default_parameter (f, parms, Qtitle, Qnil, "title", "Title",
-			     RES_TYPE_STRING);
-    }
+  /* The resources controlling the menu-bar, tool-bar, and tab-bar are
+     processed specially at startup, and reflected in the mode
+     variables; ignore them here.  */
+  gui_default_parameter (f, parms, Qmenu_bar_lines,
+			 NILP (Vmenu_bar_mode)
+			 ? make_fixnum (0) : make_fixnum (1),
+			 NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qtab_bar_lines,
+			 NILP (Vtab_bar_mode)
+			 ? make_fixnum (0) : make_fixnum (1),
+			 NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qtool_bar_lines,
+			 NILP (Vtool_bar_mode)
+			 ? make_fixnum (0) : make_fixnum (1),
+			 NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qbuffer_predicate, Qnil, "bufferPredicate",
+			 "BufferPredicate", RES_TYPE_SYMBOL);
+  gui_default_parameter (f, parms, Qtitle, Qnil, "title", "Title",
+			 RES_TYPE_STRING);
 
   parms = get_geometry_from_preferences (dpyinfo, parms);
   window_prompting = gui_figure_window_size (f, parms, false, true);
-
-  if (ttip_p)
-    {
-       /* No fringes on tip frame.  */
-      f->fringe_cols = 0;
-      f->left_fringe_width = 0;
-      f->right_fringe_width = 0;
-      /* No dividers on tip frame.  */
-      f->right_divider_width = 0;
-      f->bottom_divider_width = 0;
-    }
 
   tem = gui_display_get_arg (dpyinfo, parms, Qunsplittable, 0, 0,
                              RES_TYPE_BOOLEAN);
   f->no_split = minibuffer_only || (!EQ (tem, Qunbound) && !NILP (tem));
 
-  /* Add `tooltip' frame parameter's default value.  */
-  if (NILP (Fframe_parameter (frame, Qtooltip)) && ttip_p)
-    Fmodify_frame_parameters (frame, Fcons (Fcons (Qtooltip, Qt), Qnil));
-
+  block_input ();
 #define ASSIGN_CURSOR(cursor, be_cursor) \
   (FRAME_OUTPUT_DATA (f)->cursor = be_cursor)
 
@@ -803,17 +793,18 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
   ASSIGN_CURSOR (current_cursor, FRAME_OUTPUT_DATA (f)->text_cursor);
 #undef ASSIGN_CURSOR
 
-
-  if (ttip_p)
-    f->no_split = true;
   f->terminal->reference_count++;
 
   FRAME_OUTPUT_DATA (f)->window = BWindow_new (&FRAME_OUTPUT_DATA (f)->view);
+  unblock_input ();
+
   if (!FRAME_OUTPUT_DATA (f)->window)
     xsignal1 (Qerror, build_unibyte_string ("Could not create window"));
 
-  if (!minibuffer_only && !ttip_p && FRAME_EXTERNAL_MENU_BAR (f))
+  block_input ();
+  if (!minibuffer_only && FRAME_EXTERNAL_MENU_BAR (f))
     initialize_frame_menubar (f);
+  unblock_input ();
 
   FRAME_OUTPUT_DATA (f)->window_desc = FRAME_OUTPUT_DATA (f)->window;
 
@@ -835,61 +826,39 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
     haiku_set_parent_frame (f, parent_frame, Qnil);
 
   gui_default_parameter (f, parms, Qundecorated, Qnil, NULL, NULL, RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qoverride_redirect, Qnil, NULL, NULL, RES_TYPE_BOOLEAN);
 
   gui_default_parameter (f, parms, Qicon_type, Qnil,
                          "bitmapIcon", "BitmapIcon", RES_TYPE_SYMBOL);
-  if (ttip_p)
-    {
-      gui_default_parameter (f, parms, Qundecorated, Qt, NULL, NULL, RES_TYPE_BOOLEAN);
-      gui_default_parameter (f, parms, Qno_accept_focus, Qt, NULL, NULL,
-			     RES_TYPE_BOOLEAN);
-    }
-  else
-    {
-      gui_default_parameter (f, parms, Qauto_raise, Qnil,
-			     "autoRaise", "AutoRaiseLower", RES_TYPE_BOOLEAN);
-      gui_default_parameter (f, parms, Qauto_lower, Qnil,
-			     "autoLower", "AutoLower", RES_TYPE_BOOLEAN);
-      gui_default_parameter (f, parms, Qcursor_type, Qbox,
-			     "cursorType", "CursorType", RES_TYPE_SYMBOL);
-      gui_default_parameter (f, parms, Qscroll_bar_width, Qnil,
-			     "scrollBarWidth", "ScrollBarWidth",
-			     RES_TYPE_NUMBER);
-      gui_default_parameter (f, parms, Qscroll_bar_height, Qnil,
-			     "scrollBarHeight", "ScrollBarHeight",
-			     RES_TYPE_NUMBER);
-      gui_default_parameter (f, parms, Qalpha, Qnil,
-			     "alpha", "Alpha", RES_TYPE_NUMBER);
-      gui_default_parameter (f, parms, Qfullscreen, Qnil,
-			     "fullscreen", "Fullscreen", RES_TYPE_SYMBOL);
-    }
+  gui_default_parameter (f, parms, Qauto_raise, Qnil,
+			 "autoRaise", "AutoRaiseLower", RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qauto_lower, Qnil,
+			 "autoLower", "AutoLower", RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qcursor_type, Qbox,
+			 "cursorType", "CursorType", RES_TYPE_SYMBOL);
+  gui_default_parameter (f, parms, Qscroll_bar_width, Qnil,
+			 "scrollBarWidth", "ScrollBarWidth",
+			 RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qscroll_bar_height, Qnil,
+			 "scrollBarHeight", "ScrollBarHeight",
+			 RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qalpha, Qnil,
+			 "alpha", "Alpha", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qalpha_background, Qnil,
+                         "alphaBackground", "AlphaBackground", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qfullscreen, Qnil,
+			 "fullscreen", "Fullscreen", RES_TYPE_SYMBOL);
 
   gui_default_parameter (f, parms, Qinhibit_double_buffering, Qnil,
 			 "inhibitDoubleBuffering", "InhibitDoubleBuffering",
 			 RES_TYPE_BOOLEAN);
 
-  if (ttip_p)
-    {
-      Lisp_Object bg = Fframe_parameter (frame, Qbackground_color);
-
-      call2 (Qface_set_after_frame_default, frame, Qnil);
-
-      if (!EQ (bg, Fframe_parameter (frame, Qbackground_color)))
-	{
-	  AUTO_FRAME_ARG (arg, Qbackground_color, bg);
-	  Fmodify_frame_parameters (frame, arg);
-	}
-    }
-
-  if (ttip_p)
-    face_change = face_change_before;
-
   f->can_set_window_size = true;
 
   adjust_frame_size (f, FRAME_TEXT_WIDTH (f), FRAME_TEXT_HEIGHT (f),
-		     0, true, ttip_p ? Qtip_frame : Qx_create_frame_2);
+		     0, true, Qx_create_frame_2);
 
-  if (!FRAME_OUTPUT_DATA (f)->explicit_parent && !ttip_p)
+  if (!FRAME_OUTPUT_DATA (f)->explicit_parent)
     {
       Lisp_Object visibility;
 
@@ -907,33 +876,251 @@ haiku_create_frame (Lisp_Object parms, int ttip_p)
 	}
     }
 
-  if (!ttip_p)
-    {
-      if (FRAME_HAS_MINIBUF_P (f)
-	  && (!FRAMEP (KVAR (kb, Vdefault_minibuffer_frame))
-	      || !FRAME_LIVE_P (XFRAME (KVAR (kb, Vdefault_minibuffer_frame)))))
-	kset_default_minibuffer_frame (kb, frame);
-    }
+  if (FRAME_HAS_MINIBUF_P (f)
+      && (!FRAMEP (KVAR (kb, Vdefault_minibuffer_frame))
+	  || !FRAME_LIVE_P (XFRAME (KVAR (kb, Vdefault_minibuffer_frame)))))
+    kset_default_minibuffer_frame (kb, frame);
 
   for (tem = parms; CONSP (tem); tem = XCDR (tem))
     if (CONSP (XCAR (tem)) && !NILP (XCAR (XCAR (tem))))
       fset_param_alist (f, Fcons (XCAR (tem), f->param_alist));
 
+  block_input ();
   if (window_prompting & (USPosition | PPosition))
     haiku_set_offset (f, f->left_pos, f->top_pos, 1);
   else
     BWindow_center_on_screen (FRAME_HAIKU_WINDOW (f));
+  unblock_input ();
 
   /* Make sure windows on this frame appear in calls to next-window
      and similar functions.  */
   Vwindow_list = Qnil;
 
-  if (ttip_p)
-    adjust_frame_size (f, FRAME_TEXT_WIDTH (f), FRAME_TEXT_HEIGHT (f),
-		       0, true, Qtip_frame);
-
   return unbind_to (count, frame);
 }
+
+/* Create a frame for a tooltip.  PARMS is a list of frame parameters.
+   TEXT is the string to display in the tip frame.  Value is the
+   frame.
+
+   Note that functions called here, esp. gui_default_parameter can
+   signal errors, for instance when a specified color name is
+   undefined.  We have to make sure that we're in a consistent state
+   when this happens.  */
+
+static Lisp_Object
+haiku_create_tip_frame (Lisp_Object parms)
+{
+  struct frame *f;
+  Lisp_Object frame;
+  Lisp_Object name;
+  specpdl_ref count = SPECPDL_INDEX ();
+  bool face_change_before = face_change;
+  struct haiku_display_info *dpyinfo = x_display_list;
+
+  if (!dpyinfo->terminal->name)
+    error ("Terminal is not live, can't create new frames on it");
+
+  parms = Fcopy_alist (parms);
+
+  /* Get the name of the frame to use for resource lookup.  */
+  name = gui_display_get_arg (dpyinfo, parms, Qname, "name", "Name",
+                              RES_TYPE_STRING);
+  if (!STRINGP (name)
+      && !EQ (name, Qunbound)
+      && !NILP (name))
+    error ("Invalid frame name--not a string or nil");
+
+  frame = Qnil;
+  f = make_frame (false);
+  f->wants_modeline = false;
+  XSETFRAME (frame, f);
+  record_unwind_protect (unwind_create_tip_frame, frame);
+
+  f->terminal = dpyinfo->terminal;
+
+  /* By setting the output method, we're essentially saying that
+     the frame is live, as per FRAME_LIVE_P.  If we get a signal
+     from this point on, x_destroy_window might screw up reference
+     counts etc.  */
+  f->output_method = output_haiku;
+  f->output_data.haiku = xzalloc (sizeof *f->output_data.haiku);
+
+  f->output_data.haiku->pending_zoom_x = INT_MIN;
+  f->output_data.haiku->pending_zoom_y = INT_MIN;
+  f->output_data.haiku->pending_zoom_width = INT_MIN;
+  f->output_data.haiku->pending_zoom_height = INT_MIN;
+
+  f->tooltip = true;
+  fset_icon_name (f, Qnil);
+  FRAME_DISPLAY_INFO (f) = dpyinfo;
+
+  FRAME_OUTPUT_DATA (f)->parent_desc = NULL;
+  FRAME_OUTPUT_DATA (f)->explicit_parent = 0;
+
+  /* Set the name; the functions to which we pass f expect the name to
+     be set.  */
+  if (EQ (name, Qunbound) || NILP (name))
+    f->explicit_name = false;
+  else
+    {
+      fset_name (f, name);
+      f->explicit_name = true;
+      /* use the frame's title when getting resources for this frame.  */
+      specbind (Qx_resource_name, name);
+    }
+
+#ifdef USE_BE_CAIRO
+  register_font_driver (&ftcrfont_driver, f);
+#ifdef HAVE_HARFBUZZ
+  register_font_driver (&ftcrhbfont_driver, f);
+#endif
+#endif
+  register_font_driver (&haikufont_driver, f);
+
+  image_cache_refcount =
+    FRAME_IMAGE_CACHE (f) ? FRAME_IMAGE_CACHE (f)->refcount : 0;
+
+  gui_default_parameter (f, parms, Qfont_backend, Qnil,
+                         "fontBackend", "FontBackend", RES_TYPE_STRING);
+
+  /* Extract the window parameters from the supplied values that are
+     needed to determine window geometry.  */
+  FRAME_RIF (f)->default_font_parameter (f, parms);
+
+  /* This defaults to 1 in order to match xterm.  We recognize either
+     internalBorderWidth or internalBorder (which is what xterm calls
+     it).  */
+  if (NILP (Fassq (Qinternal_border_width, parms)))
+    {
+      Lisp_Object value;
+
+      value = gui_display_get_arg (dpyinfo, parms, Qinternal_border_width,
+                                   "internalBorder", "internalBorder",
+                                   RES_TYPE_NUMBER);
+      if (! EQ (value, Qunbound))
+	parms = Fcons (Fcons (Qinternal_border_width, value),
+		       parms);
+    }
+
+  gui_default_parameter (f, parms, Qinternal_border_width, make_fixnum (1),
+                         "internalBorderWidth", "internalBorderWidth",
+                         RES_TYPE_NUMBER);
+
+  gui_default_parameter (f, parms, Qright_divider_width, make_fixnum (0),
+                         NULL, NULL, RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qbottom_divider_width, make_fixnum (0),
+                         NULL, NULL, RES_TYPE_NUMBER);
+
+  /* Also do the stuff which must be set before the window exists.  */
+  gui_default_parameter (f, parms, Qforeground_color, build_string ("black"),
+                         "foreground", "Foreground", RES_TYPE_STRING);
+
+  gui_default_parameter (f, parms, Qbackground_color, build_string ("white"),
+                         "background", "Background", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qmouse_color, build_string ("black"),
+                         "pointerColor", "Foreground", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qcursor_color, build_string ("black"),
+                         "cursorColor", "Foreground", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qborder_color, build_string ("black"),
+                         "borderColor", "BorderColor", RES_TYPE_STRING);
+  gui_default_parameter (f, parms, Qno_special_glyphs, Qnil,
+                         NULL, NULL, RES_TYPE_BOOLEAN);
+
+  /* Init faces before gui_default_parameter is called for the
+     scroll-bar-width parameter because otherwise we end up in
+     init_iterator with a null face cache, which should not happen.  */
+  init_frame_faces (f);
+
+  gui_default_parameter (f, parms, Qinhibit_double_buffering, Qnil,
+                         "inhibitDoubleBuffering", "InhibitDoubleBuffering",
+                         RES_TYPE_BOOLEAN);
+
+  gui_figure_window_size (f, parms, false, false);
+
+  {
+    void *window;
+
+    block_input ();
+    window = BWindow_new (&FRAME_OUTPUT_DATA (f)->view);
+
+    FRAME_OUTPUT_DATA (f)->window = window;
+    if (!window)
+      emacs_abort ();
+
+    FRAME_OUTPUT_DATA (f)->window_desc = window;
+    BWindow_set_tooltip_decoration (window);
+    unblock_input ();
+  }
+
+  gui_default_parameter (f, parms, Qauto_raise, Qnil,
+                         "autoRaise", "AutoRaiseLower", RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qauto_lower, Qnil,
+                         "autoLower", "AutoRaiseLower", RES_TYPE_BOOLEAN);
+  gui_default_parameter (f, parms, Qcursor_type, Qbox,
+                         "cursorType", "CursorType", RES_TYPE_SYMBOL);
+  gui_default_parameter (f, parms, Qalpha, Qnil,
+                         "alpha", "Alpha", RES_TYPE_NUMBER);
+  gui_default_parameter (f, parms, Qalpha_background, Qnil,
+                         "alphaBackground", "AlphaBackground", RES_TYPE_NUMBER);
+
+  initial_setup_back_buffer (f);
+
+  /* Add `tooltip' frame parameter's default value. */
+  if (NILP (Fframe_parameter (frame, Qtooltip)))
+    {
+      AUTO_FRAME_ARG (arg, Qtooltip, Qt);
+      Fmodify_frame_parameters (frame, arg);
+    }
+
+  /* FIXME - can this be done in a similar way to normal frames?
+     https://lists.gnu.org/r/emacs-devel/2007-10/msg00641.html */
+
+  /* Set up faces after all frame parameters are known.  This call
+     also merges in face attributes specified for new frames.
+
+     Frame parameters may be changed if .Xdefaults contains
+     specifications for the default font.  For example, if there is an
+     `Emacs.default.attributeBackground: pink', the `background-color'
+     attribute of the frame gets set, which let's the internal border
+     of the tooltip frame appear in pink.  Prevent this.  */
+  {
+    Lisp_Object bg = Fframe_parameter (frame, Qbackground_color);
+
+    call2 (Qface_set_after_frame_default, frame, Qnil);
+
+    if (!EQ (bg, Fframe_parameter (frame, Qbackground_color)))
+      {
+	AUTO_FRAME_ARG (arg, Qbackground_color, bg);
+	Fmodify_frame_parameters (frame, arg);
+      }
+  }
+
+  f->no_split = true;
+
+  /* Now that the frame will be official, it counts as a reference to
+     its display and terminal.  */
+  f->terminal->reference_count++;
+
+  /* It is now ok to make the frame official even if we get an error
+     below.  And the frame needs to be on Vframe_list or making it
+     visible won't work.  */
+  Vframe_list = Fcons (frame, Vframe_list);
+  f->can_set_window_size = true;
+  adjust_frame_size (f, FRAME_TEXT_WIDTH (f), FRAME_TEXT_HEIGHT (f),
+		     0, true, Qtip_frame);
+
+  /* Setting attributes of faces of the tooltip frame from resources
+     and similar will set face_change, which leads to the clearing of
+     all current matrices.  Since this isn't necessary here, avoid it
+     by resetting face_change to the value it had before we created
+     the tip frame.  */
+  face_change = face_change_before;
+
+  /* Discard the unwind_protect.  */
+  return unbind_to (count, frame);
+}
+
 
 static void
 compute_tip_xy (struct frame *f,
@@ -1023,10 +1210,9 @@ haiku_hide_tip (bool delete)
     return Qnil;
   else
     {
-      ptrdiff_t count;
       Lisp_Object was_open = Qnil;
 
-      count = SPECPDL_INDEX ();
+      specpdl_ref count = SPECPDL_INDEX ();
       specbind (Qinhibit_redisplay, Qt);
       specbind (Qinhibit_quit, Qt);
 
@@ -1064,6 +1250,20 @@ haiku_set_undecorated (struct frame *f, Lisp_Object new_value,
   block_input ();
   FRAME_UNDECORATED (f) = !NILP (new_value);
   BWindow_change_decoration (FRAME_HAIKU_WINDOW (f), NILP (new_value));
+  unblock_input ();
+}
+
+static void
+haiku_set_override_redirect (struct frame *f, Lisp_Object new_value,
+			     Lisp_Object old_value)
+{
+  if (EQ (new_value, old_value))
+    return;
+
+  block_input ();
+  BWindow_set_override_redirect (FRAME_HAIKU_WINDOW (f),
+				 !NILP (new_value));
+  FRAME_OVERRIDE_REDIRECT (f) = !NILP (new_value);
   unblock_input ();
 }
 
@@ -1174,7 +1374,7 @@ haiku_set_background_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval
     {
       struct face *defface;
 
-      BView_draw_lock (FRAME_HAIKU_VIEW (f));
+      BView_draw_lock (FRAME_HAIKU_VIEW (f), false, 0, 0, 0, 0);
       BView_SetViewColor (FRAME_HAIKU_VIEW (f), color.pixel);
       BView_draw_unlock (FRAME_HAIKU_VIEW (f));
 
@@ -1198,7 +1398,7 @@ haiku_set_cursor_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
   CHECK_STRING (arg);
 
   block_input ();
-  Emacs_Color color;
+  Emacs_Color color, fore_pixel;
 
   if (haiku_get_color (SSDATA (arg), &color))
     {
@@ -1208,6 +1408,17 @@ haiku_set_cursor_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
     }
 
   FRAME_CURSOR_COLOR (f) = color;
+
+  if (STRINGP (Vx_cursor_fore_pixel))
+    {
+      if (haiku_get_color (SSDATA (Vx_cursor_fore_pixel),
+			   &fore_pixel))
+	error ("Bad color %s", SSDATA (Vx_cursor_fore_pixel));
+      FRAME_OUTPUT_DATA (f)->cursor_fg = fore_pixel.pixel;
+    }
+  else
+    FRAME_OUTPUT_DATA (f)->cursor_fg = FRAME_BACKGROUND_PIXEL (f);
+
   if (FRAME_VISIBLE_P (f))
     {
       gui_update_cursor (f, 0);
@@ -1238,7 +1449,7 @@ haiku_get_pixel (haiku bitmap, int x, int y)
   BBitmap_dimensions (bitmap, &left, &top, &right, &bottom,
 		      &bytes_per_row, &mono_p);
 
-  if (x < left || x > right || y < top || y > bottom)
+  if (x < 0 || x > right - left || y < 0 || y > bottom - top)
     emacs_abort ();
 
   if (!mono_p)
@@ -1263,7 +1474,7 @@ haiku_put_pixel (haiku bitmap, int x, int y, unsigned long pixel)
   BBitmap_dimensions (bitmap, &left, &top, &right, &bottom,
 		      &bytes_per_row, &mono_p);
 
-  if (x < left || x > right || y < top || y > bottom)
+  if (x < 0 || x > right - left || y < 0 || y > bottom - top)
     emacs_abort ();
 
   if (mono_p)
@@ -1291,8 +1502,8 @@ haiku_free_frame_resources (struct frame *f)
   Lisp_Object bar;
   struct scroll_bar *b;
 
-  block_input ();
   check_window_system (f);
+  block_input ();
 
   hlinfo = MOUSE_HL_INFO (f);
   window = FRAME_HAIKU_WINDOW (f);
@@ -1393,6 +1604,7 @@ haiku_visualize_frame (struct frame *f)
       if (FRAME_NO_FOCUS_ON_MAP (f) &&
 	  !FRAME_NO_ACCEPT_FOCUS (f))
 	BWindow_set_avoid_focus (FRAME_HAIKU_WINDOW (f), 0);
+      BWindow_sync (FRAME_HAIKU_WINDOW (f));
 
       haiku_set_offset (f, f->left_pos, f->top_pos, 0);
 
@@ -1409,6 +1621,7 @@ haiku_unvisualize_frame (struct frame *f)
   block_input ();
 
   BWindow_set_visible (FRAME_HAIKU_WINDOW (f), 0);
+  BWindow_sync (FRAME_HAIKU_WINDOW (f));
   SET_FRAME_VISIBLE (f, 0);
   SET_FRAME_ICONIFIED (f, 0);
 
@@ -1423,6 +1636,7 @@ haiku_set_internal_border_width (struct frame *f, Lisp_Object arg, Lisp_Object o
 
   if (new_width == old_width)
     return;
+
   f->internal_border_width = new_width;
 
   if (FRAME_HAIKU_WINDOW (f))
@@ -1512,17 +1726,21 @@ haiku_set_inhibit_double_buffering (struct frame *f,
   block_input ();
   if (FRAME_HAIKU_WINDOW (f))
     {
+#ifndef USE_BE_CAIRO
       if (NILP (new_value))
 	{
+#endif
 	  EmacsView_set_up_double_buffering (FRAME_HAIKU_VIEW (f));
 	  if (!NILP (old_value))
 	    {
 	      SET_FRAME_GARBAGED (f);
 	      expose_frame (f, 0, 0, 0, 0);
 	    }
+#ifndef USE_BE_CAIRO
 	}
       else
 	EmacsView_disable_double_buffering (FRAME_HAIKU_VIEW (f));
+#endif
     }
   unblock_input ();
 }
@@ -1626,16 +1844,29 @@ DEFUN ("x-open-connection", Fx_open_connection, Sx_open_connection,
        doc: /* SKIP: real doc in xfns.c.  */)
      (Lisp_Object display, Lisp_Object resource_string, Lisp_Object must_succeed)
 {
-  struct haiku_display_info *dpy_info;
+  struct haiku_display_info *dpyinfo;
   CHECK_STRING (display);
 
   if (NILP (Fstring_equal (display, build_string ("be"))))
-    !NILP (must_succeed) ? fatal ("Bad display") : error ("Bad display");
-  dpy_info = haiku_term_init ();
+    {
+      if (!NILP (must_succeed))
+	fatal ("Bad display");
+      else
+	error ("Bad display");
+    }
 
-  if (!dpy_info)
-    !NILP (must_succeed) ? fatal ("Display not responding") :
-      error ("Display not responding");
+  if (x_display_list)
+    return Qnil;
+
+  dpyinfo = haiku_term_init ();
+
+  if (!dpyinfo)
+    {
+      if (!NILP (must_succeed))
+	fatal ("Display not responding");
+      else
+	error ("Display not responding");
+    }
 
   return Qnil;
 }
@@ -1688,7 +1919,7 @@ DEFUN ("x-display-mm-width", Fx_display_mm_width, Sx_display_mm_width, 0, 1, 0,
   int width, height;
   BScreen_px_dim (&width, &height);
 
-  return make_fixnum (height / (dpyinfo->resy / 25.4));
+  return make_fixnum (width / (dpyinfo->resx / 25.4));
 }
 
 DEFUN ("x-create-frame", Fx_create_frame, Sx_create_frame,
@@ -1696,7 +1927,7 @@ DEFUN ("x-create-frame", Fx_create_frame, Sx_create_frame,
        doc: /* SKIP: real doc in xfns.c.  */)
      (Lisp_Object parms)
 {
-  return haiku_create_frame (parms, 0);
+  return haiku_create_frame (parms);
 }
 
 DEFUN ("x-display-visual-class", Fx_display_visual_class,
@@ -1710,10 +1941,8 @@ DEFUN ("x-display-visual-class", Fx_display_visual_class,
 
   if (planes == 8)
     return intern ("static-color");
-  else if (planes == 16 || planes == 15)
-    return intern ("pseudo-color");
 
-  return intern ("direct-color");
+  return intern ("true-color");
 }
 
 DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
@@ -1721,26 +1950,26 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
   (Lisp_Object string, Lisp_Object frame, Lisp_Object parms,
    Lisp_Object timeout, Lisp_Object dx, Lisp_Object dy)
 {
-  struct frame *tip_f;
+  struct frame *f, *tip_f;
   struct window *w;
   int root_x, root_y;
   struct buffer *old_buffer;
   struct text_pos pos;
   int width, height;
   int old_windows_or_buffers_changed = windows_or_buffers_changed;
-  ptrdiff_t count = SPECPDL_INDEX ();
-  ptrdiff_t count_1;
+  specpdl_ref count = SPECPDL_INDEX ();
   Lisp_Object window, size, tip_buf;
-
   AUTO_STRING (tip, " *tip*");
 
   specbind (Qinhibit_redisplay, Qt);
 
   CHECK_STRING (string);
+  if (SCHARS (string) == 0)
+    string = make_unibyte_string (" ", 1);
 
   if (NILP (frame))
     frame = selected_frame;
-  decode_window_system_frame (frame);
+  f = decode_window_system_frame (frame);
 
   if (NILP (timeout))
     timeout = make_fixnum (5);
@@ -1757,7 +1986,7 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
   else
     CHECK_FIXNUM (dy);
 
-  if (haiku_use_system_tooltips)
+  if (use_system_tooltips)
     {
       int root_x, root_y;
       CHECK_STRING (string);
@@ -1800,24 +2029,21 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
     {
       if (FRAME_VISIBLE_P (XFRAME (tip_frame))
 	  && EQ (frame, tip_last_frame)
-	  && !NILP (Fequal_including_properties (string, tip_last_string))
-	  && !NILP (Fequal (parms, tip_last_parms)))
+	  && !NILP (Fequal_including_properties (tip_last_string, string))
+	  && !NILP (Fequal (tip_last_parms, parms)))
 	{
 	  /* Only DX and DY have changed.  */
 	  tip_f = XFRAME (tip_frame);
 	  if (!NILP (tip_timer))
 	    {
-	      Lisp_Object timer = tip_timer;
-
+	      call1 (Qcancel_timer, tip_timer);
 	      tip_timer = Qnil;
-	      call1 (Qcancel_timer, timer);
 	    }
 
 	  block_input ();
 	  compute_tip_xy (tip_f, parms, dx, dy, FRAME_PIXEL_WIDTH (tip_f),
 			  FRAME_PIXEL_HEIGHT (tip_f), &root_x, &root_y);
-	  haiku_set_offset (tip_f, root_x, root_y, 1);
-	  haiku_visualize_frame (tip_f);
+	  BWindow_set_offset (FRAME_HAIKU_WINDOW (tip_f), root_x, root_y);
 	  unblock_input ();
 
 	  goto start_timer;
@@ -1828,8 +2054,8 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
 	  Lisp_Object tail, elt, parm, last;
 
 	  /* Check if every parameter in PARMS has the same value in
-	     tip_last_parms.  This may destruct tip_last_parms
-	     which, however, will be recreated below.  */
+	     tip_last_parms.  This may destruct tip_last_parms which,
+	     however, will be recreated below.  */
 	  for (tail = parms; CONSP (tail); tail = XCDR (tail))
 	    {
 	      elt = XCAR (tail);
@@ -1855,8 +2081,9 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
 		  call2 (Qassq_delete_all, parm, tip_last_parms);
 	    }
 
-	  /* Now check if there's a parameter left in tip_last_parms with a
-	     non-nil value.  */
+	  /* Now check if every parameter in what is left of
+	     tip_last_parms with a non-nil value has an association in
+	     PARMS.  */
 	  for (tail = tip_last_parms; CONSP (tail); tail = XCDR (tail))
 	    {
 	      elt = XCAR (tail);
@@ -1882,10 +2109,6 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
   tip_last_string = string;
   tip_last_parms = parms;
 
-  /* Block input until the tip has been fully drawn, to avoid crashes
-     when drawing tips in menus.  */
-  block_input ();
-
   if (NILP (tip_frame) || !FRAME_LIVE_P (XFRAME (tip_frame)))
     {
       /* Add default values to frame parameters.  */
@@ -1896,21 +2119,16 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
       if (NILP (Fassq (Qborder_width, parms)))
 	parms = Fcons (Fcons (Qborder_width, make_fixnum (1)), parms);
       if (NILP (Fassq (Qborder_color, parms)))
-	parms = Fcons (Fcons (Qborder_color, build_string ("lightyellow")),
-		       parms);
+	parms = Fcons (Fcons (Qborder_color, build_string ("lightyellow")), parms);
       if (NILP (Fassq (Qbackground_color, parms)))
 	parms = Fcons (Fcons (Qbackground_color, build_string ("lightyellow")),
 		       parms);
 
-      /* Create a frame for the tooltip and record it in the global
+      /* Create a frame for the tooltip, and record it in the global
 	 variable tip_frame.  */
-
-      if (NILP (tip_frame = haiku_create_frame (parms, 1)))
-	{
-	  /* Creating the tip frame failed.  */
-	  unblock_input ();
-	  return unbind_to (count, Qnil);
-	}
+      if (NILP (tip_frame = haiku_create_tip_frame (parms)))
+	/* Creating the tip frame failed.  */
+	return unbind_to (count, Qnil);
     }
 
   tip_f = XFRAME (tip_frame);
@@ -1950,12 +2168,12 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
 
   w->pixel_width = w->total_cols * FRAME_COLUMN_WIDTH (tip_f);
   w->pixel_height = w->total_lines * FRAME_LINE_HEIGHT (tip_f);
-  FRAME_TOTAL_COLS (tip_f) = WINDOW_TOTAL_COLS (w);
+  FRAME_TOTAL_COLS (tip_f) = w->total_cols;
   adjust_frame_glyphs (tip_f);
 
-  /* Insert STRING into the root window's buffer and fit the frame to
-     the buffer.  */
-  count_1 = SPECPDL_INDEX ();
+  /* Insert STRING into root window's buffer and fit the frame to the
+     buffer.  */
+  specpdl_ref count_1 = SPECPDL_INDEX ();
   old_buffer = current_buffer;
   set_buffer_internal_1 (XBUFFER (w->contents));
   bset_truncate_lines (current_buffer, Qnil);
@@ -1975,22 +2193,36 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
   /* Add the frame's internal border to calculated size.  */
   width = XFIXNUM (Fcar (size)) + 2 * FRAME_INTERNAL_BORDER_WIDTH (tip_f);
   height = XFIXNUM (Fcdr (size)) + 2 * FRAME_INTERNAL_BORDER_WIDTH (tip_f);
+
   /* Calculate position of tooltip frame.  */
   compute_tip_xy (tip_f, parms, dx, dy, width, height, &root_x, &root_y);
-  BWindow_resize (FRAME_HAIKU_WINDOW (tip_f), width, height);
-  haiku_set_offset (tip_f, root_x, root_y, 1);
-  BWindow_set_tooltip_decoration (FRAME_HAIKU_WINDOW (tip_f));
+
+  /* Show tooltip frame.  */
+  block_input ();
+  void *wnd = FRAME_HAIKU_WINDOW (tip_f);
+  BWindow_resize (wnd, width, height);
+  BView_resize_to (FRAME_HAIKU_VIEW (tip_f), width, height);
   BView_set_view_cursor (FRAME_HAIKU_VIEW (tip_f),
-			 FRAME_OUTPUT_DATA (XFRAME (frame))->current_cursor);
-  SET_FRAME_VISIBLE (tip_f, 1);
-  BWindow_set_visible (FRAME_HAIKU_WINDOW (tip_f), 1);
+			 FRAME_OUTPUT_DATA (f)->current_cursor);
+  BWindow_set_offset (wnd, root_x, root_y);
+  BWindow_set_visible (wnd, true);
+  SET_FRAME_VISIBLE (tip_f, true);
+  FRAME_PIXEL_WIDTH (tip_f) = width;
+  FRAME_PIXEL_HEIGHT (tip_f) = height;
+  BWindow_sync (wnd);
+
+  /* This is needed because the app server resets the cursor whenever
+     a new window is mapped, so we won't see the cursor set on the
+     tooltip if the mouse pointer isn't actually over it.  */
+  BView_set_view_cursor (FRAME_HAIKU_VIEW (f),
+			 FRAME_OUTPUT_DATA (f)->current_cursor);
+  unblock_input ();
 
   w->must_be_updated_p = true;
-  flush_frame (tip_f);
   update_single_window (w);
+  flush_frame (tip_f);
   set_buffer_internal_1 (old_buffer);
   unbind_to (count_1, Qnil);
-  unblock_input ();
   windows_or_buffers_changed = old_windows_or_buffers_changed;
 
  start_timer:
@@ -2200,7 +2432,6 @@ Optional arg SAVE_TEXT, if non-nil, specifies some text to show in the entry fie
    Lisp_Object dir, Lisp_Object mustmatch,
    Lisp_Object dir_only_p, Lisp_Object save_text)
 {
-  ptrdiff_t idx;
   if (!x_display_list)
     error ("Be windowing not initialized");
 
@@ -2218,7 +2449,7 @@ Optional arg SAVE_TEXT, if non-nil, specifies some text to show in the entry fie
   CHECK_LIVE_FRAME (frame);
   check_window_system (XFRAME (frame));
 
-  idx = SPECPDL_INDEX ();
+  specpdl_ref idx = SPECPDL_INDEX ();
   record_unwind_protect_void (unwind_popup);
 
   struct frame *f = XFRAME (frame);
@@ -2232,7 +2463,7 @@ Optional arg SAVE_TEXT, if non-nil, specifies some text to show in the entry fie
 				   FRAME_HAIKU_WINDOW (f),
 				   !NILP (save_text) ? SSDATA (ENCODE_UTF_8 (save_text)) : NULL,
 				   SSDATA (ENCODE_UTF_8 (prompt)),
-				   block_input, unblock_input);
+				   block_input, unblock_input, maybe_quit);
 
   unbind_to (idx, Qnil);
 
@@ -2315,6 +2546,67 @@ DEFUN ("x-display-save-under", Fx_display_save_under,
   return Qnil;
 }
 
+DEFUN ("haiku-frame-restack", Fhaiku_frame_restack, Shaiku_frame_restack, 2, 3, 0,
+       doc: /* Restack FRAME1 below FRAME2.
+This means that if both frames are visible and the display areas of
+these frames overlap, FRAME2 (partially) obscures FRAME1.  If optional
+third argument ABOVE is non-nil, restack FRAME1 above FRAME2.  This
+means that if both frames are visible and the display areas of these
+frames overlap, FRAME1 (partially) obscures FRAME2.
+
+Some window managers may refuse to restack windows.  */)
+     (Lisp_Object frame1, Lisp_Object frame2, Lisp_Object above)
+{
+  struct frame *f1 = decode_live_frame (frame1);
+  struct frame *f2 = decode_live_frame (frame2);
+
+  check_window_system (f1);
+  check_window_system (f2);
+
+  block_input ();
+
+  if (NILP (above))
+    {
+      /* If the window that is currently active will be sent behind
+	 another window, make the window that it is being sent behind
+	 active first, to avoid both windows being moved to the back of
+	 the display.  */
+
+      if (BWindow_is_active (FRAME_HAIKU_WINDOW (f1))
+	  /* But don't do this if any of the frames involved have
+	     child frames, since they are guaranteed to be in front of
+	     their toplevel parents.  */
+	  && !FRAME_PARENT_FRAME (f1)
+	  && !FRAME_PARENT_FRAME (f2))
+	{
+	  BWindow_activate (FRAME_HAIKU_WINDOW (f2));
+	  BWindow_sync (FRAME_HAIKU_WINDOW (f2));
+	}
+
+      BWindow_send_behind (FRAME_HAIKU_WINDOW (f1),
+			   FRAME_HAIKU_WINDOW (f2));
+    }
+  else
+    {
+      if (BWindow_is_active (FRAME_HAIKU_WINDOW (f2))
+	  && !FRAME_PARENT_FRAME (f1)
+	  && !FRAME_PARENT_FRAME (f2))
+	{
+	  BWindow_activate (FRAME_HAIKU_WINDOW (f1));
+	  BWindow_sync (FRAME_HAIKU_WINDOW (f1));
+	}
+
+      BWindow_send_behind (FRAME_HAIKU_WINDOW (f2),
+			   FRAME_HAIKU_WINDOW (f1));
+    }
+  BWindow_sync (FRAME_HAIKU_WINDOW (f1));
+  BWindow_sync (FRAME_HAIKU_WINDOW (f2));
+
+  unblock_input ();
+
+  return Qnil;
+}
+
 frame_parm_handler haiku_frame_parm_handlers[] =
   {
     gui_set_autoraise,
@@ -2363,8 +2655,9 @@ frame_parm_handler haiku_frame_parm_handlers[] =
     haiku_set_no_focus_on_map,
     haiku_set_no_accept_focus,
     NULL, /* set z group */
-    NULL, /* set override redir */
-    gui_set_no_special_glyphs
+    haiku_set_override_redirect,
+    gui_set_no_special_glyphs,
+    gui_set_alpha_background,
   };
 
 void
@@ -2377,6 +2670,7 @@ syms_of_haikufns (void)
   DEFSYM (Qalways, "always");
   DEFSYM (Qnot_useful, "not-useful");
   DEFSYM (Qwhen_mapped, "when-mapped");
+  DEFSYM (Qtooltip_reuse_hidden_frame, "tooltip-reuse-hidden-frame");
 
   defsubr (&Sx_hide_tip);
   defsubr (&Sxw_display_color_p);
@@ -2409,6 +2703,7 @@ syms_of_haikufns (void)
   defsubr (&Shaiku_put_resource);
   defsubr (&Shaiku_frame_list_z_order);
   defsubr (&Sx_display_save_under);
+  defsubr (&Shaiku_frame_restack);
 
   tip_timer = Qnil;
   staticpro (&tip_timer);
@@ -2425,13 +2720,9 @@ syms_of_haikufns (void)
 	       doc: /* SKIP: real doc in xfns.c.  */);
   Vx_max_tooltip_size = Fcons (make_fixnum (80), make_fixnum (40));
 
-  DEFVAR_BOOL ("haiku-use-system-tooltips", haiku_use_system_tooltips,
-	       doc: /* When non-nil, Emacs will display tooltips using the App Kit.
-This can avoid a great deal of consing that does not play
-well with the Haiku memory allocator, but comes with the
-disadvantage of not being able to use special display properties
-within tooltips.  */);
-  haiku_use_system_tooltips = 1;
+  DEFVAR_LISP ("x-cursor-fore-pixel", Vx_cursor_fore_pixel,
+	       doc: /* SKIP: real doc in xfns.c.  */);
+  Vx_cursor_fore_pixel = Qnil;
 
 #ifdef USE_BE_CAIRO
   DEFVAR_LISP ("cairo-version-string", Vcairo_version_string,

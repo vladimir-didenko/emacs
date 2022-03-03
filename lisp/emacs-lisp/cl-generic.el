@@ -1,6 +1,6 @@
 ;;; cl-generic.el --- CLOS-style generic functions for Elisp  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2015-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2015-2022 Free Software Foundation, Inc.
 
 ;; Author: Stefan Monnier <monnier@iro.umontreal.ca>
 ;; Version: 1.0
@@ -381,9 +381,9 @@ the specializer used will be the one returned by BODY."
                                    . ,(lambda () spec-args))
                                  macroexpand-all-environment)))
       (require 'cl-lib)        ;Needed to expand `cl-flet' and `cl-function'.
-      (when (interactive-form (cadr fun))
-        (message "Interactive forms unsupported in generic functions: %S"
-                 (interactive-form (cadr fun))))
+      (when (assq 'interactive (cadr fun))
+        (message "Interactive forms not supported in generic functions: %S"
+                 (assq 'interactive (cadr fun))))
       ;; First macroexpand away the cl-function stuff (e.g. &key and
       ;; destructuring args, `declare' and whatnot).
       (pcase (macroexpand fun macroenv)
@@ -498,7 +498,8 @@ The set of acceptable TYPEs (also called \"specializers\") is defined
                     cl--generic-edebug-make-name nil]
              lambda-doc                 ; documentation string
              def-body)))                ; part to be debugged
-  (let ((qualifiers nil))
+  (let ((qualifiers nil)
+        (orig-name name))
     (while (cl-generic--method-qualifier-p args)
       (push args qualifiers)
       (setq args (pop body)))
@@ -514,7 +515,7 @@ The set of acceptable TYPEs (also called \"specializers\") is defined
                (let* ((obsolete (get name 'byte-obsolete-info)))
                  (macroexp-warn-and-return
                   (macroexp--obsolete-warning name obsolete "generic function")
-                  nil)))
+                  nil nil nil orig-name)))
          ;; You could argue that `defmethod' modifies rather than defines the
          ;; function, so warnings like "not known to be defined" are fair game.
          ;; But in practice, it's common to use `cl-defmethod'
@@ -604,7 +605,9 @@ The set of acceptable TYPEs (also called \"specializers\") is defined
 
 (defun cl--generic-get-dispatcher (dispatch)
   (with-memoization
-      (gethash dispatch cl--generic-dispatchers)
+      ;; We need `copy-sequence` here because this `dispatch' object might be
+      ;; modified by side-effect in `cl-generic-define-method' (bug#46722).
+      (gethash (copy-sequence dispatch) cl--generic-dispatchers)
     ;; (message "cl--generic-get-dispatcher (%S)" dispatch)
     (let* ((dispatch-arg (car dispatch))
            (generalizers (cdr dispatch))

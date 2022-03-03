@@ -1,6 +1,6 @@
 ;;; cperl-mode.el --- Perl code editing commands for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1987, 1991-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1985-1987, 1991-2022 Free Software Foundation, Inc.
 
 ;; Author: Ilya Zakharevich
 ;;	Bob Olson
@@ -3834,7 +3834,7 @@ recursive calls in starting lines of here-documents."
 		"\\<" cperl-sub-regexp "\\>" ;  sub with proto/attr
 		"\\("
 		   cperl-white-and-comment-rex
-                   (rx (group (eval cperl--normal-identifier-rx)))
+                   (rx (opt (group (eval cperl--normal-identifier-rx))))
                 "\\)"
 		"\\("
 		   cperl-maybe-white-and-comment-rex

@@ -1,6 +1,6 @@
 @c -*-texinfo-*-
 @c This is part of the GNU Emacs Lisp Reference Manual.
-@c Copyright (C) 1990--1995, 1998--1999, 2001--2021 Free Software
+@c Copyright (C) 1990--1995, 1998--1999, 2001--2022 Free Software
 @c Foundation, Inc.
 @c See the file elisp.texi for copying conditions.
 @node Windows
@@ -3377,8 +3377,8 @@ functions it should try instead as, for example:
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-base-action
+(setopt
+ display-buffer-base-action
  '((display-buffer-reuse-window display-buffer-same-window
     display-buffer-in-previous-window
     display-buffer-use-some-window)))
@@ -3392,8 +3392,8 @@ Instead of customizing this variable to @code{t}, customize
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-base-action
+(setopt
+ display-buffer-base-action
  '((display-buffer-reuse-window display-buffer-pop-up-frame)
    (reusable-frames . 0)))
 @end group
@@ -3409,8 +3409,8 @@ specifying the action function @code{display-buffer-same-window}.
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-alist
+(setopt
+ display-buffer-alist
  (cons '("\\*foo\\*" (display-buffer-same-window))
         display-buffer-alist))
 @end group
@@ -3483,8 +3483,8 @@ another frame.  Such a user might provide the following customization:
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-base-action
+(setopt
+ display-buffer-base-action
  '((display-buffer-reuse-window display-buffer-pop-up-frame)
    (reusable-frames . 0)))
 @end group
@@ -3529,8 +3529,8 @@ In fact, this:
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-base-action
+(setopt
+ display-buffer-base-action
  '(display-buffer-pop-up-frame (reusable-frames . 0)))
 @end group
 @end example
@@ -3586,8 +3586,8 @@ by customizing the option @code{display-buffer-alist} as follows:
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-alist
+(setopt
+ display-buffer-alist
  '(("\\*foo\\*"
     (display-buffer-reuse-window display-buffer-pop-up-frame))))
 @end group
@@ -3609,8 +3609,8 @@ we would have to specify that separately, however:
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-alist
+(setopt
+ display-buffer-alist
  '(("\\*foo\\*"
     (display-buffer-reuse-window display-buffer-pop-up-frame)
     (reusable-frames . visible))))
@@ -3716,8 +3716,8 @@ written that as
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-alist
+(setopt
+ display-buffer-alist
  '(("\\*foo\\*"
     (display-buffer-reuse-window display-buffer-pop-up-frame)
     (inhibit-same-window . t)
@@ -3860,8 +3860,8 @@ follows:
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-alist
+(setopt
+ display-buffer-alist
  '(("\\*foo\\*"
     (display-buffer-below-selected display-buffer-at-bottom)
     (inhibit-same-window . t)
@@ -3874,8 +3874,8 @@ To add a customization for a second buffer one would then write:
 
 @example
 @group
-(customize-set-variable
- 'display-buffer-alist
+(setopt
+ display-buffer-alist
  '(("\\*foo\\*"
     (display-buffer-below-selected display-buffer-at-bottom)
     (inhibit-same-window . t)
@@ -5281,13 +5281,6 @@ other window is selected.  When it is non-@code{nil} and the
 minibuffer is selected, it takes precedence over
 @code{other-window-scroll-buffer}.  @xref{Definition of
 minibuffer-scroll-window}.
-
-When the minibuffer is active, it is the next window if the selected
-window is the one at the bottom right corner.  In this case,
-@code{scroll-other-window} attempts to scroll the minibuffer.  If the
-minibuffer contains just one line, it has nowhere to scroll to, so the
-line reappears after the echo area momentarily displays the message
-@samp{End of buffer}.
 @end deffn
 
 @deffn Command scroll-other-window-down &optional count

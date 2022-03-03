@@ -1,6 +1,6 @@
 ;;; haiku-win.el --- set up windowing on Haiku -*- lexical-binding: t -*-
 
-;; Copyright (C) 2021 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 ;; This file is part of GNU Emacs.
 
@@ -36,7 +36,7 @@
 (require 'fontset)
 (require 'dnd)
 
-(add-to-list 'display-format-alist '(".*" . haiku-win))
+(add-to-list 'display-format-alist '(".*" . haiku))
 
 ;;;; Command line argument handling.
 
@@ -50,6 +50,7 @@
 (declare-function haiku-selection-data "haikuselect.c")
 (declare-function haiku-selection-put "haikuselect.c")
 (declare-function haiku-selection-targets "haikuselect.c")
+(declare-function haiku-selection-owner-p "haikuselect.c")
 (declare-function haiku-put-resource "haikufns.c")
 
 (defun haiku--handle-x-command-line-resources (command-line-resources)
@@ -85,7 +86,8 @@ DISPLAY may be set to the name of a display that will be initialized."
   "Convert symbolic selection type TYPE to its MIME equivalent.
 If TYPE is nil, return \"text/plain\"."
   (cond
-   ((memq type '(TEXT COMPOUND_TEXT STRING UTF8_STRING)) "text/plain")
+   ((eq type 'STRING) "text/plain;charset=iso-8859-1")
+   ((eq type 'UTF8_STRING) "text/plain")
    ((stringp type) type)
    ((symbolp type) (symbol-name type))
    (t "text/plain")))
@@ -105,20 +107,22 @@ If TYPE is nil, return \"text/plain\"."
                                               &context (window-system haiku))
   (haiku-selection-data selection "text/plain"))
 
-(cl-defmethod gui-backend-selection-owner-p (_
-                                             &context (window-system haiku))
-  t)
+(cl-defmethod gui-backend-selection-owner-p (selection &context (window-system haiku))
+  (haiku-selection-owner-p selection))
 
 (declare-function haiku-read-file-name "haikufns.c")
 
-(defun x-file-dialog (prompt dir default_filename mustmatch only_dir_p)
+(defun x-file-dialog (prompt dir &optional default-filename mustmatch only-dir-p)
   "SKIP: real doc in xfns.c."
   (if (eq (framep-on-display (selected-frame)) 'haiku)
-      (haiku-read-file-name prompt (selected-frame)
-                            (or dir (and default_filename
-                                         (file-name-directory default_filename)))
-                            mustmatch only_dir_p
-                            (file-name-nondirectory default_filename))
+      (haiku-read-file-name (if (not (string-suffix-p ": " prompt))
+                                prompt
+                              (substring prompt 0 (- (length prompt) 2)))
+                            (selected-frame)
+                            (or dir (and default-filename
+                                         (file-name-directory default-filename)))
+                            mustmatch only-dir-p
+                            (file-name-nondirectory default-filename))
     (error "x-file-dialog on a tty frame")))
 
 (defun haiku-dnd-handle-drag-n-drop-event (event)
@@ -132,6 +136,16 @@ If TYPE is nil, return \"text/plain\"."
 
 (define-key special-event-map [drag-n-drop]
             'haiku-dnd-handle-drag-n-drop-event)
+
+(defvaralias 'haiku-use-system-tooltips 'use-system-tooltips)
+
+(defun haiku-use-system-tooltips-watcher (&rest _ignored)
+  "Variable watcher to force a menu bar update when `use-system-tooltip' changes.
+This is necessary because on Haiku `use-system-tooltip' doesn't
+take effect on menu items until the menu bar is updated again."
+  (force-mode-line-update t))
+
+(add-variable-watcher 'use-system-tooltips #'haiku-use-system-tooltips-watcher)
 
 (provide 'haiku-win)
 (provide 'term/haiku-win)

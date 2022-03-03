@@ -1,6 +1,6 @@
 ;;; ert.el --- Emacs Lisp Regression Testing  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2007-2008, 2010-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2008, 2010-2022 Free Software Foundation, Inc.
 
 ;; Author: Christian Ohler <ohler@gnu.org>
 ;; Keywords: lisp, tools
@@ -39,7 +39,7 @@
 ;; but signals a different error when its condition is violated that
 ;; is caught and processed by ERT.  In addition, it analyzes its
 ;; argument form and records information that helps debugging
-;; (`assert' tries to do something similar when its second argument
+;; (`cl-assert' tries to do something similar when its second argument
 ;; SHOW-ARGS is true, but `should' is more sophisticated).  For
 ;; information on `should-not' and `should-error', see their
 ;; docstrings.  `skip-unless' skips the test immediately without
@@ -129,7 +129,8 @@ mode.")
   (body (cl-assert nil))
   (most-recent-result nil)
   (expected-result-type ':passed)
-  (tags '()))
+  (tags '())
+  (file-name nil))
 
 (defun ert-test-boundp (symbol)
   "Return non-nil if SYMBOL names a test."
@@ -240,7 +241,8 @@ in batch mode, an error is signalled.
                             `(:expected-result-type ,expected-result))
                         ,@(when tags-supplied-p
                             `(:tags ,tags))
-                        :body (lambda () ,@body)))
+                        :body (lambda () ,@body)
+                        :file-name ,(or (macroexp-file-name) buffer-file-name)))
          ',name))))
 
 (defvar ert--find-test-regexp
@@ -335,14 +337,19 @@ It should only be stopped when ran from inside `ert--run-test-internal'."
                                  (unless (eql ,value ',default-value)
                                    (list :value ,value))
                                  (unless (eql ,value ',default-value)
-                                   (let ((-explainer-
-                                          (and (symbolp ',fn-name)
-                                               (get ',fn-name 'ert-explainer))))
-                                     (when -explainer-
-                                       (list :explanation
-                                             (apply -explainer- ,args))))))
+                                   (when-let ((-explainer-
+                                               (ert--get-explainer ',fn-name)))
+                                     (list :explanation
+                                           (apply -explainer- ,args)))))
                          value)
                ,value))))))))
+
+(defun ert--get-explainer (fn-name)
+  (when (symbolp fn-name)
+    (cl-loop for fn in (cons fn-name (function-alias-p fn-name))
+             for explainer = (get fn 'ert-explainer)
+             when explainer
+             return explainer)))
 
 (defun ert--expand-should (whole form inner-expander)
   "Helper function for the `should' macro and its variants.
@@ -950,7 +957,8 @@ t    -- Selects UNIVERSE.
 :expected, :unexpected -- Select tests according to their most recent result.
 a string -- A regular expression selecting all tests with matching names.
 a test   -- (i.e., an object of the ert-test data-type) Selects that test.
-a symbol -- Selects the test that the symbol names, errors if none.
+a symbol -- Selects the test that the symbol names, signals an
+    `ert-test-unbound' error if none.
 \(member TESTS...) -- Selects the elements of TESTS, a list of tests
     or symbols naming tests.
 \(eql TEST) -- Selects TEST, a test or a symbol naming a test.
@@ -1012,52 +1020,47 @@ contained in UNIVERSE."
                           universe))))
     ((pred ert-test-p) (list selector))
     ((pred symbolp)
-     (cl-assert (ert-test-boundp selector))
+     (unless (ert-test-boundp selector)
+       (signal 'ert-test-unbound (list selector)))
      (list (ert-get-test selector)))
-    (`(,operator . ,operands)
-     (cl-ecase operator
-       (member
-        (mapcar (lambda (purported-test)
-                  (pcase-exhaustive purported-test
-                    ((pred symbolp)
-                     (cl-assert (ert-test-boundp purported-test))
-                     (ert-get-test purported-test))
-                    ((pred ert-test-p) purported-test)))
-                operands))
-       (eql
-        (cl-assert (eql (length operands) 1))
-        (ert-select-tests `(member ,@operands) universe))
-       (and
-        ;; Do these definitions of AND, NOT and OR satisfy de
-        ;; Morgan's laws?  Should they?
-        (cl-case (length operands)
-          (0 (ert-select-tests 't universe))
-          (t (ert-select-tests `(and ,@(cdr operands))
-                               (ert-select-tests (car operands)
-                                                 universe)))))
-       (not
-        (cl-assert (eql (length operands) 1))
-        (let ((all-tests (ert-select-tests 't universe)))
-          (cl-set-difference all-tests
-                             (ert-select-tests (car operands)
-                                               all-tests))))
-       (or
-        (cl-case (length operands)
-          (0 (ert-select-tests 'nil universe))
-          (t (cl-union (ert-select-tests (car operands) universe)
-                       (ert-select-tests `(or ,@(cdr operands))
-                                         universe)))))
-       (tag
-        (cl-assert (eql (length operands) 1))
-        (let ((tag (car operands)))
-          (ert-select-tests `(satisfies
-                              ,(lambda (test)
-                                 (member tag (ert-test-tags test))))
-                            universe)))
-       (satisfies
-        (cl-assert (eql (length operands) 1))
-        (cl-remove-if-not (car operands)
-                          (ert-select-tests 't universe)))))))
+    (`(member . ,operands)
+     (mapcar (lambda (purported-test)
+               (pcase-exhaustive purported-test
+                 ((pred symbolp)
+                  (unless (ert-test-boundp purported-test)
+                    (signal 'ert-test-unbound
+                            (list purported-test)))
+                  (ert-get-test purported-test))
+                 ((pred ert-test-p) purported-test)))
+             operands))
+    (`(eql ,operand)
+     (ert-select-tests `(member ,operand) universe))
+    ;; Do these definitions of AND, NOT and OR satisfy de Morgan's
+    ;; laws?  Should they?
+    (`(and)
+     (ert-select-tests 't universe))
+    (`(and ,first . ,rest)
+     (ert-select-tests `(and ,@rest)
+                       (ert-select-tests first universe)))
+    (`(not ,operand)
+     (let ((all-tests (ert-select-tests 't universe)))
+       (cl-set-difference all-tests
+                          (ert-select-tests operand all-tests))))
+    (`(or)
+     (ert-select-tests 'nil universe))
+    (`(or ,first . ,rest)
+     (cl-union (ert-select-tests first universe)
+               (ert-select-tests `(or ,@rest) universe)))
+    (`(tag ,tag)
+     (ert-select-tests `(satisfies
+                         ,(lambda (test)
+                            (member tag (ert-test-tags test))))
+                       universe))
+    (`(satisfies ,predicate)
+     (cl-remove-if-not predicate
+                       (ert-select-tests 't universe)))))
+
+(define-error 'ert-test-unbound "ERT test is unbound")
 
 (defun ert--insert-human-readable-selector (selector)
   "Insert a human-readable presentation of SELECTOR into the current buffer."
@@ -1369,6 +1372,22 @@ RESULT must be an `ert-test-result-with-condition'."
 (defvar ert-quiet nil
   "Non-nil makes ERT only print important information in batch mode.")
 
+(defun ert-test-location (test)
+  "Return a string description the source location of TEST."
+  (when-let ((loc
+              (ignore-errors
+                (find-function-search-for-symbol
+                 (ert-test-name test) 'ert-deftest (ert-test-file-name test)))))
+    (let* ((buffer (car loc))
+           (point (cdr loc))
+           (file (file-relative-name (buffer-file-name buffer)))
+           (line (with-current-buffer buffer
+                   (line-number-at-pos point))))
+      (format "at %s:%s" file line))))
+
+(defvar ert-batch-backtrace-right-margin 70
+  "The maximum line length for printing backtraces in `ert-run-tests-batch'.")
+
 ;;;###autoload
 (defun ert-run-tests-batch (&optional selector)
   "Run the tests specified by SELECTOR, printing results to the terminal.
@@ -1422,7 +1441,8 @@ Returns the stats object."
                          (message "%9s  %S%s"
                                   (ert-string-for-test-result result nil)
                                   (ert-test-name test)
-                                  (if (getenv "EMACS_TEST_VERBOSE")
+                                  (if (cl-plusp
+                                       (length (getenv "EMACS_TEST_VERBOSE")))
                                       (ert-reason-for-test-result result)
                                     ""))))
               (message "%s" ""))
@@ -1434,7 +1454,8 @@ Returns the stats object."
                          (message "%9s  %S%s"
                                   (ert-string-for-test-result result nil)
                                   (ert-test-name test)
-                                  (if (getenv "EMACS_TEST_VERBOSE")
+                                  (if (cl-plusp
+                                       (length (getenv "EMACS_TEST_VERBOSE")))
                                       (ert-reason-for-test-result result)
                                     ""))))
               (message "%s" ""))
@@ -1494,14 +1515,17 @@ Returns the stats object."
             (let* ((max (prin1-to-string (length (ert--stats-tests stats))))
                    (format-string (concat "%9s  %"
                                           (prin1-to-string (length max))
-                                          "s/" max "  %S (%f sec)")))
+                                          "s/" max "  %S (%f sec)%s")))
               (message format-string
                        (ert-string-for-test-result result
                                                    (ert-test-result-expected-p
                                                     test result))
                        (1+ (ert--stats-test-pos stats test))
                        (ert-test-name test)
-                       (ert-test-result-duration result))))))))
+                       (ert-test-result-duration result)
+                       (if (ert-test-result-expected-p test result)
+                           ""
+                         (concat " " (ert-test-location test))))))))))
    nil))
 
 ;;;###autoload

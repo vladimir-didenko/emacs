@@ -1,6 +1,6 @@
 @c -*-texinfo-*-
 @c This is part of the GNU Emacs Lisp Reference Manual.
-@c Copyright (C) 1990--1995, 1998--1999, 2001--2021 Free Software
+@c Copyright (C) 1990--1995, 1998--1999, 2001--2022 Free Software
 @c Foundation, Inc.
 @c See the file elisp.texi for copying conditions.
 @node Modes
@@ -762,6 +762,9 @@ uncompression packages: an entry of the form @code{("\\.gz\\'"
 @var{function} t)} can uncompress the file and then put the uncompressed
 file in the proper mode according to the name sans @samp{.gz}.
 
+If @code{auto-mode-alist} has more than one element whose @var{regexp}
+matches the file name, Emacs will use the first match.
+
 Here is an example of how to prepend several pattern pairs to
 @code{auto-mode-alist}.  (You might use this sort of expression in your
 init file.)
@@ -1058,11 +1061,21 @@ very end of every properly-written major mode command.
 @cindex Tabulated List mode
 
   Tabulated List mode is a major mode for displaying tabulated data,
-i.e., data consisting of @dfn{entries}, each entry occupying one row of
-text with its contents divided into columns.  Tabulated List mode
+i.e., data consisting of @dfn{entries}, each entry occupying one row
+of text with its contents divided into columns.  Tabulated List mode
 provides facilities for pretty-printing rows and columns, and sorting
 the rows according to the values in each column.  It is derived from
 Special mode (@pxref{Basic Major Modes}).
+
+@findex make-vtable
+@cindex variable pitch tables
+  Tabulated List mode is geared towards displaying text using
+monospaced fonts, using a single font and text size.  If you want to
+display a table using variable pitch fonts or images,
+@code{make-vtable} can be used instead.  vtable also support having
+more than a single table in a buffer, or having a buffer that contains
+both a table and additional text in it.  @xref{Introduction,,, vtable},
+for more information.
 
   Tabulated List mode is intended to be used as a parent mode by a more
 specialized major mode.  Examples include Process Menu mode
@@ -1961,8 +1974,26 @@ This function also forces an update of the menu bar and frame title.
 @end defun
 
   The selected window's mode line is usually displayed in a different
-color using the face @code{mode-line}.  Other windows' mode lines appear
-in the face @code{mode-line-inactive} instead.  @xref{Faces}.
+color using the face @code{mode-line-active}.  Other windows' mode
+lines appear in the face @code{mode-line-inactive} instead.
+@xref{Faces}.
+
+@defun mode-line-window-selected-p
+If you want to have more extensive differences between the mode lines
+in selected and non-selected windows, you can use this predicate in an
+@code{:eval} construct.  For instance, if you want to display the
+buffer name in bold in selected windows, but in italics in the other
+windows, you can say something like:
+
+@lisp
+(setq-default
+ mode-line-buffer-identification
+ '(:eval (propertize "%12b"
+		     'face (if (mode-line-window-selected-p)
+			       'bold
+			     'italic))))
+@end lisp
+@end defun
 
 @vindex mode-line-compact
   Some modes put a lot of data in the mode line, pushing elements at

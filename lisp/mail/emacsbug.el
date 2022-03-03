@@ -1,6 +1,6 @@
 ;;; emacsbug.el --- command to report Emacs bugs to appropriate mailing list  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1985, 1994, 1997-1998, 2000-2021 Free Software
+;; Copyright (C) 1985, 1994, 1997-1998, 2000-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Author: K. Shane Hartman
@@ -304,6 +304,9 @@ usually do not have translators for other languages.\n\n")))
     (emacs-bug--system-description)
     (insert "Configured features:\n" system-configuration-features "\n\n")
     (fill-region (line-beginning-position -1) (point))
+    (when (and (featurep 'native-compile)
+               (null (native-comp-available-p)))
+      (insert "(NATIVE_COMP present but libgccjit not available)\n\n"))
     (insert "Important settings:\n")
     (mapc
      (lambda (var)

@@ -1,6 +1,6 @@
 ;;; oc-basic.el --- basic back-end for citations  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2021 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 ;; Author: Nicolas Goaziou <mail@nicolasgoaziou.fr>
 
@@ -178,21 +178,29 @@ Return a hash table with citation references as keys and fields alist as values.
                                      " and ")))
                              ('issued
                               ;; Date are expressed as an array
-                              ;; (`date-parts') or a "string (`raw').
-                              ;; In both cases, extract the year and
-                              ;; associate it to `year' field, for
-                              ;; compatibility with BibTeX format.
+                              ;; (`date-parts') or a "string (`raw'
+                              ;; or `literal'). In both cases,
+                              ;; extract the year and associate it
+                              ;; to `year' field, for compatibility
+                              ;; with BibTeX format.
                               (let ((date (or (alist-get 'date-parts value)
+                                              (alist-get 'literal value)
                                               (alist-get 'raw value))))
                                 (cons 'year
                                       (cond
                                        ((consp date)
                                         (caar date))
                                        ((stringp date)
-                                        (car (split-string date "-")))
+                                        (replace-regexp-in-string
+                                          (rx
+                                            (minimal-match (zero-or-more anything))
+                                            (group-n 1 (repeat 4 digit))
+                                            (zero-or-more anything))
+                                          (rx (backref 1))
+                                          date))
                                        (t
                                         (error "Unknown CSL-JSON date format: %S"
-                                               date))))))
+                                               value))))))
                              (_
                               (cons field value))))
                          item)

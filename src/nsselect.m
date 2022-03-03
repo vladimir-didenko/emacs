@@ -1,5 +1,5 @@
 /* NeXT/Open/GNUstep / macOS Cocoa selection processing for emacs.
-   Copyright (C) 1993-1994, 2005-2006, 2008-2021 Free Software
+   Copyright (C) 1993-1994, 2005-2006, 2008-2022 Free Software
    Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -250,7 +250,7 @@ ns_get_foreign_selection (Lisp_Object symbol, Lisp_Object target)
 
       NSString *type;
       NSEnumerator *e = [[pb types] objectEnumerator];
-      while (type = [e nextObject])
+      while ((type = [e nextObject]))
         {
           NSString *val = [typeLookup valueForKey:type];
           if (val && ! [types containsObject:val])

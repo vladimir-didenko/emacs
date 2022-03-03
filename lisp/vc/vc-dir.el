@@ -1,6 +1,6 @@
 ;;; vc-dir.el --- Directory status display under VC  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2007-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2007-2022 Free Software Foundation, Inc.
 
 ;; Author: Dan Nicolaescu <dann@ics.uci.edu>
 ;; Keywords: vc tools
@@ -1538,9 +1538,8 @@ These are the commands available for use in the file status buffer:
 This implements the `bookmark-make-record-function' type for
 `vc-dir' buffers."
   (let* ((bookmark-name
-          (concat "(" (symbol-name vc-dir-backend) ") "
-                  (file-name-nondirectory
-                   (directory-file-name default-directory))))
+          (file-name-nondirectory
+           (directory-file-name default-directory)))
          (defaults (list bookmark-name default-directory)))
     `(,bookmark-name
       ,@(bookmark-make-record-default 'no-file)
@@ -1559,6 +1558,8 @@ type returned by `vc-dir-bookmark-make-record'."
                 (current-buffer))))
     (bookmark-default-handler
      `("" (buffer . ,buf) . ,(bookmark-get-bookmark-record bmk)))))
+
+(put 'vc-dir-bookmark-jump 'bookmark-handler-type "VC")
 
 
 (provide 'vc-dir)

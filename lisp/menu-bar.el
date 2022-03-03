@@ -1,6 +1,6 @@
 ;;; menu-bar.el --- define a default menu bar  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1993-1995, 2000-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1993-1995, 2000-2022 Free Software Foundation, Inc.
 
 ;; Author: Richard M. Stallman
 ;; Maintainer: emacs-devel@gnu.org
@@ -96,18 +96,28 @@
     (bindings--define-key menu [separator-print]
       menu-bar-separator)
 
-    (unless (featurep 'ns)
-      (bindings--define-key menu [close-tab]
-        '(menu-item "Close Tab" tab-close
-                    :visible (fboundp 'tab-close)
-                    :help "Close currently selected tab"))
-      (bindings--define-key menu [make-tab]
-        '(menu-item "New Tab" tab-new
-                    :visible (fboundp 'tab-new)
-                    :help "Open a new tab"))
+    (bindings--define-key menu [close-tab]
+      '(menu-item "Close Tab" tab-close
+                  :visible (fboundp 'tab-close)
+                  :help "Close currently selected tab"))
+    (bindings--define-key menu [make-tab]
+      '(menu-item "New Tab" tab-new
+                  :visible (fboundp 'tab-new)
+                  :help "Open a new tab"))
 
-      (bindings--define-key menu [separator-tab]
-        menu-bar-separator))
+    (bindings--define-key menu [separator-tab]
+      menu-bar-separator)
+
+    (bindings--define-key menu [undelete-frame-mode]
+      '(menu-item "Allow Undeleting Frames" undelete-frame-mode
+                  :help "Allow frames to be restored after deletion"
+                  :button (:toggle . undelete-frame-mode)))
+
+    (bindings--define-key menu [undelete-last-deleted-frame]
+      '(menu-item "Undelete Frame" undelete-frame
+                  :enable (and undelete-frame-mode
+                                (car undelete-frame--deleted-frames))
+                  :help "Undelete the most recently deleted frame"))
 
     ;; Don't use delete-frame as event name because that is a special
     ;; event.
@@ -121,9 +131,9 @@
                   :visible (fboundp 'make-frame-on-monitor)
                   :help "Open a new frame on another monitor"))
     (bindings--define-key menu [make-frame-on-display]
-      '(menu-item "New Frame on Display..." make-frame-on-display
+      '(menu-item "New Frame on Display Server..." make-frame-on-display
                   :visible (fboundp 'make-frame-on-display)
-                  :help "Open a new frame on another display"))
+                  :help "Open a new frame on a display server"))
     (bindings--define-key menu [make-frame]
       '(menu-item "New Frame" make-frame-command
                   :visible (fboundp 'make-frame-command)
@@ -168,17 +178,23 @@
                         t))
                   :help "Recover edits from a crashed session"))
     (bindings--define-key menu [revert-buffer]
-      '(menu-item "Revert Buffer" revert-buffer
-                  :enable (or (not (eq revert-buffer-function
-                                       'revert-buffer--default))
-                              (not (eq
-                                    revert-buffer-insert-file-contents-function
-                                    'revert-buffer-insert-file-contents--default-function))
-                              (and buffer-file-number
-                                   (or (buffer-modified-p)
-                                       (not (verify-visited-file-modtime
-                                             (current-buffer))))))
-                  :help "Re-read current buffer from its file"))
+      '(menu-item
+        "Revert Buffer" revert-buffer
+        :enable
+        (or (not (eq revert-buffer-function
+                     'revert-buffer--default))
+            (not (eq
+                  revert-buffer-insert-file-contents-function
+                  'revert-buffer-insert-file-contents--default-function))
+            (and buffer-file-number
+                 (or (buffer-modified-p)
+                     (not (verify-visited-file-modtime
+                           (current-buffer)))
+                     ;; Enable if the buffer has a different
+                     ;; writeability than the file.
+                     (not (eq (not buffer-read-only)
+                              (file-writable-p buffer-file-name))))))
+        :help "Re-read current buffer from its file"))
     (bindings--define-key menu [write-file]
       '(menu-item "Save As..." write-file
                   :enable (and (menu-bar-menu-frame-live-and-visible-p)
@@ -2332,9 +2348,13 @@ It must accept a buffer as its only required argument.")
   (and (lookup-key (current-global-map) [menu-bar buffer])
        (or force (frame-or-buffer-changed-p))
        (let ((buffers (buffer-list))
-	     (frames (frame-list))
-	     buffers-menu)
-
+	     frames buffers-menu)
+         ;; Ignore the initial frame if present.  It can happen if
+         ;; Emacs was started as a daemon.  (bug#53740)
+         (dolist (frame (frame-list))
+           (unless (equal (terminal-name (frame-terminal frame))
+                          "initial_terminal")
+             (push frame frames)))
 	 ;; Make the menu of buffers proper.
 	 (setq buffers-menu
                (let ((i 0)
@@ -2527,7 +2547,7 @@ Use \\[menu-bar-mode] to make the menu bar appear."))))
 (put 'menu-bar-mode 'standard-value '(t))
 
 (defun toggle-menu-bar-mode-from-frame (&optional arg)
-  "Toggle display of the menu bar of the current frame.
+  "Toggle display of the menu bar.
 See `menu-bar-mode' for more information."
   (interactive (list (or current-prefix-arg 'toggle)))
   (if (eq arg 'toggle)
@@ -2619,8 +2639,11 @@ FROM-MENU-BAR, if non-nil, means we are dropping one of menu-bar's menus."
       ;; `setup-specified-language-environment', for instance,
       ;; expects this to be set from a menu keymap.
       (setq last-command-event (car (last event)))
-      ;; mouse-major-mode-menu was using `command-execute' instead.
-      (call-interactively cmd))))
+      (setq from--tty-menu-p nil)
+      ;; Signal use-dialog-box-p this command was invoked from a menu.
+      (let ((from--tty-menu-p t))
+        ;; mouse-major-mode-menu was using `command-execute' instead.
+        (call-interactively cmd)))))
 
 (defun popup-menu-normalize-position (position)
   "Convert the POSITION to the form which `popup-menu' expects internally.

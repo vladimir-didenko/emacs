@@ -4,7 +4,7 @@ dnl	autoconf
 dnl in the directory containing this script.
 dnl If you changed any AC_DEFINES, also run autoheader.
 dnl
-dnl Copyright (C) 1994-1996, 1999-2021 Free Software Foundation, Inc.
+dnl Copyright (C) 1994-1996, 1999-2022 Free Software Foundation, Inc.
 dnl
 dnl  This file is part of GNU Emacs.
 dnl
@@ -410,18 +410,19 @@ dnl This should be the last --with option, because --with-x is
 dnl added later on when we find the file name of X, and it's best to
 dnl keep them together visually.
 AC_ARG_WITH([x-toolkit],[AS_HELP_STRING([--with-x-toolkit=KIT],
- [use an X toolkit (KIT one of: yes or gtk, gtk2, gtk3, lucid or athena, no)])],
+ [use an X toolkit (KIT one of: yes or gtk, gtk2, gtk3, lucid or athena, motif, no)])],
 [	  case "${withval}" in
 	    y | ye | yes )	val=gtk ;;
 	    n | no )		val=no  ;;
 	    l | lu | luc | luci | lucid )	val=lucid ;;
 	    a | at | ath | athe | athen | athena )	val=athena ;;
+	    m | mo | mot | moti | motif )	val=motif ;;
 	    g | gt | gtk  )	val=gtk ;;
 	    gtk2  )	val=gtk2 ;;
 	    gtk3  )	val=gtk3 ;;
 	    * )
 AC_MSG_ERROR(['--with-x-toolkit=$withval' is invalid;
-this option's value should be 'yes', 'no', 'lucid', 'athena', 'gtk',
+this option's value should be 'yes', 'no', 'lucid', 'athena', 'motif', 'gtk',
 'gtk2' or 'gtk3'.  'yes' and 'gtk' are synonyms.
 'athena' and 'lucid' are synonyms.])
 	    ;;
@@ -462,7 +463,7 @@ OPTION_DEFAULT_ON([harfbuzz],[don't use HarfBuzz for text shaping])
 OPTION_DEFAULT_ON([libotf],[don't use libotf for OpenType font support])
 OPTION_DEFAULT_ON([m17n-flt],[don't use m17n-flt for text shaping])
 
-OPTION_DEFAULT_ON([toolkit-scroll-bars],[don't use Xaw3d/GTK toolkit scroll bars])
+OPTION_DEFAULT_ON([toolkit-scroll-bars],[don't use Motif/Xaw3d/GTK toolkit scroll bars])
 OPTION_DEFAULT_ON([xaw3d],[don't use Xaw3d])
 OPTION_DEFAULT_ON([xim],[at runtime, default X11 XIM to off])
 OPTION_DEFAULT_ON([xdbe],[don't use X11 double buffering support])
@@ -470,7 +471,7 @@ AC_ARG_WITH([ns],[AS_HELP_STRING([--with-ns],
 [use Nextstep (macOS Cocoa or GNUstep) windowing system.
 On by default on macOS.])],[],[with_ns=maybe])
 OPTION_DEFAULT_OFF([w32], [use native MS Windows GUI in a Cygwin build])
-OPTION_DEFAULT_OFF([pgtk], [use pure GTK build without reliance on X libs (Wayland support) (requires cairo) - Experimental])
+OPTION_DEFAULT_OFF([pgtk], [use GTK to support window systems other than X])
 
 OPTION_DEFAULT_ON([gpm],[don't use -lgpm for mouse support on a GNU/Linux console])
 OPTION_DEFAULT_ON([dbus],[don't compile with D-Bus support])
@@ -1200,6 +1201,8 @@ dnl Automake replacements.
 AC_DEFUN([AM_CONDITIONAL],
   [$2 && $1_CONDITION=1 || $1_CONDITION=
    AC_SUBST([$1_CONDITION])])
+AC_DEFUN([AM_COND_IF],
+  [AS_IF([test "$$1_CONDITION"], [$2], [$3])])
 
 dnl Prefer silent make output.  For verbose output, use
 dnl 'configure --disable-silent-rules' or 'make V=1' .
@@ -2279,6 +2282,7 @@ term_header=
 HAVE_X_WINDOWS=no
 HAVE_X11=no
 USE_X_TOOLKIT=none
+HAVE_PGTK=no
 
 case "${window_system}" in
   x11 )
@@ -2322,6 +2326,7 @@ dnl use the toolkit if we have gtk, or X11R5 or newer.
     term_header=haikuterm.h
   ;;
 esac
+AC_SUBST(HAVE_PGTK)
 
 if test "$window_system" = none && test "X$with_x" != "Xno"; then
    AC_CHECK_PROG(HAVE_XSERVER, X, true, false)
@@ -2334,7 +2339,7 @@ if test "$window_system" = none && test "X$with_x" != "Xno"; then
    then
         AC_MSG_ERROR([You seem to be running X, but no X development libraries
 were found.  You should install the relevant development files for X
-and for the toolkit you want, such as Gtk+.  Also make
+and for the toolkit you want, such as Gtk+ or Motif.  Also make
 sure you have development files for image handling, i.e.
 tiff, gif, jpeg, png and xpm.
 If you are sure you want Emacs compiled without X window support, pass
@@ -2617,10 +2622,11 @@ if test "${HAVE_X11}" = "yes"; then
 	emacs_cv_xkb=yes, emacs_cv_xkb=no)])
   if test $emacs_cv_xkb = yes; then
     AC_DEFINE(HAVE_XKB, 1, [Define to 1 if you have the Xkb extension.])
+    AC_CHECK_FUNCS(XkbRefreshKeyboardMapping XkbFreeNames)
   fi
 
-  AC_CHECK_FUNCS(XrmSetDatabase XScreenResourceString \
-XScreenNumberOfScreen)
+  AC_CHECK_FUNCS(XrmSetDatabase XScreenResourceString XScreenNumberOfScreen)
+  AC_CHECK_FUNCS(XDisplayCells XDestroySubwindows)
 fi
 
 if test "${window_system}" = "x11"; then
@@ -2636,6 +2642,7 @@ fail;
     AC_DEFINE(HAVE_X11R6, 1,
 	      [Define to 1 if you have the X11R6 or newer version of Xlib.])
     AC_DEFINE(HAVE_X_I18N, 1, [Define if you have usable i18n support.])
+    AC_CHECK_MEMBERS([XICCallback.callback], [], [], [#include <X11/Xlib.h>])
     ## inoue@ainet.or.jp says Solaris has a bug related to X11R6-style
     ## XIM support.
     case "$opsys" in
@@ -2803,9 +2810,6 @@ if test "${opsys}" != "mingw32"; then
 	 AC_DEFINE([GLIB_DISABLE_DEPRECATION_WARNINGS], [1],
 	   [Define to 1 to disable Glib deprecation warnings.])
        fi
-       if test "$window_system" = pgtk; then
-	  GLIB_GSETTINGS
-       fi
     else
        check_gtk2=yes
        gtk3_pkg_errors="$GTK_PKG_ERRORS "
@@ -2910,40 +2914,6 @@ if test "${HAVE_GTK}" = "yes"; then
   fi
 fi
 
-
-dnl Enable xwidgets if GTK3 and WebKitGTK+ are available.
-dnl Enable xwidgets if macOS Cocoa and WebKit framework are available.
-HAVE_XWIDGETS=no
-XWIDGETS_OBJ=
-if test "$with_xwidgets" != "no"; then
-  if test "$USE_GTK_TOOLKIT" = "GTK3" && test "$window_system" != "none"; then
-    WEBKIT_REQUIRED=2.12
-    WEBKIT_MODULES="webkit2gtk-4.0 >= $WEBKIT_REQUIRED"
-    EMACS_CHECK_MODULES([WEBKIT], [$WEBKIT_MODULES])
-    HAVE_XWIDGETS=$HAVE_WEBKIT
-    XWIDGETS_OBJ="xwidget.o"
-  elif test "${NS_IMPL_COCOA}" = "yes"; then
-    dnl FIXME: Check framework WebKit2
-    dnl WEBKIT_REQUIRED=M.m.p
-    WEBKIT_LIBS="-Wl,-framework -Wl,WebKit"
-    WEBKIT_CFLAGS="-I/System/Library/Frameworks/WebKit.framework/Headers"
-    HAVE_WEBKIT="yes"
-    HAVE_XWIDGETS=$HAVE_WEBKIT
-    XWIDGETS_OBJ="xwidget.o"
-    NS_OBJC_OBJ="$NS_OBJC_OBJ nsxwidget.o"
-    dnl Update NS_OBJC_OBJ with added nsxwidget.o
-    AC_SUBST(NS_OBJC_OBJ)
-  else
-    AC_MSG_ERROR([xwidgets requested, it requires GTK3 as X window toolkit or macOS Cocoa as window system.])
-  fi
-
-  test $HAVE_XWIDGETS = yes ||
-    AC_MSG_ERROR([xwidgets requested but WebKitGTK+ or WebKit framework not found.])
-
-  AC_DEFINE([HAVE_XWIDGETS], 1, [Define to 1 if you have xwidgets support.])
-fi
-AC_SUBST(XWIDGETS_OBJ)
-
 CFLAGS=$OLD_CFLAGS
 LIBS=$OLD_LIBS
 
@@ -3015,6 +2985,7 @@ if test "${HAVE_X11}" = "yes" -o "${window_system}" = "pgtk" && test "${with_gse
       LIBS=$old_LIBS
    fi
 fi
+AC_SUBST(HAVE_GSETTINGS)
 
 dnl GConf has been tested under GNU/Linux only.
 dnl The version is really arbitrary, it is about the same age as Gtk+ 2.6.
@@ -3405,41 +3376,6 @@ if test "${with_xim}" != "no"; then
 	    [Define to 1 to default runtime use of XIM to on.])
 fi
 
-
-if test "${HAVE_XIM}" != "no"; then
-  late_CFLAGS=$CFLAGS
-  if test "$GCC" = yes; then
-    CFLAGS="$CFLAGS --pedantic-errors"
-  fi
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-#include <X11/Xlib.h>
-#include <X11/Xresource.h>]],
-[[Display *display;
-XrmDatabase db;
-char *res_name;
-char *res_class;
-XIMProc  callback;
-XPointer *client_data;
-#ifndef __GNUC__
-/* If we're not using GCC, it's probably not XFree86, and this is
-   probably right, but we can't use something like --pedantic-errors.  */
-extern Bool XRegisterIMInstantiateCallback(Display*, XrmDatabase, char*,
-                                           char*, XIMProc, XPointer*);
-#endif
-(void)XRegisterIMInstantiateCallback(display, db, res_name, res_class, callback,
-   client_data);]])],
-    [emacs_cv_arg6_star=yes])
-  AH_TEMPLATE(XRegisterIMInstantiateCallback_arg6,
-         [Define to the type of the 6th arg of XRegisterIMInstantiateCallback,
-either XPointer or XPointer*.])dnl
-  if test "$emacs_cv_arg6_star" = yes; then
-    AC_DEFINE(XRegisterIMInstantiateCallback_arg6, [XPointer*])
-  else
-    AC_DEFINE(XRegisterIMInstantiateCallback_arg6, [XPointer])
-  fi
-  CFLAGS=$late_CFLAGS
-fi
-
 # Check for XRender
 HAVE_XRENDER=no
 if test "${HAVE_X11}" = "yes"; then
@@ -3464,6 +3400,13 @@ if test "${HAVE_X11}" = "yes"; then
     CAIRO_MODULE="cairo >= $CAIRO_REQUIRED"
     EMACS_CHECK_MODULES(CAIRO, $CAIRO_MODULE)
     if test $HAVE_CAIRO = yes; then
+      CAIRO_XCB_MODULE="cairo-xcb >= $CAIRO_REQUIRED"
+      EMACS_CHECK_MODULES(CAIRO_XCB, $CAIRO_XCB_MODULE)
+      if test $HAVE_CAIRO_XCB = yes; then
+	CAIRO_CFLAGS="$CAIRO_CFLAGS $CAIRO_XCB_CFLAGS"
+	CAIRO_LIBS="$CAIRO_LIBS $CAIRO_XCB_LIBS"
+	AC_DEFINE(USE_CAIRO_XCB, 1, [Define to 1 if cairo XCB surfaces are available.])
+      fi
       AC_DEFINE(USE_CAIRO, 1, [Define to 1 if using cairo.])
       CFLAGS="$CFLAGS $CAIRO_CFLAGS"
       LIBS="$LIBS $CAIRO_LIBS"
@@ -3474,6 +3417,51 @@ if test "${HAVE_X11}" = "yes"; then
     fi
   fi
 fi
+
+dnl Enable xwidgets if GTK3 and WebKitGTK+ are available.
+dnl Enable xwidgets if macOS Cocoa and WebKit framework are available.
+HAVE_XWIDGETS=no
+XWIDGETS_OBJ=
+if test "$with_xwidgets" != "no"; then
+  if test "$USE_GTK_TOOLKIT" = "GTK3" && test "$window_system" != "none"; then
+    WEBKIT_REQUIRED=2.12
+    WEBKIT_MODULES="webkit2gtk-4.0 >= $WEBKIT_REQUIRED"
+    EMACS_CHECK_MODULES([WEBKIT], [$WEBKIT_MODULES])
+    HAVE_XWIDGETS=$HAVE_WEBKIT
+    XWIDGETS_OBJ="xwidget.o"
+    if test "$HAVE_X_WINDOWS" = "yes" && test "${with_cairo}" = "no"; then
+      CAIRO_XLIB_MODULES="cairo >= 1.8.0 cairo-xlib >= 1.8.0"
+      EMACS_CHECK_MODULES(CAIRO_XLIB, $CAIRO_XLIB_MODULES)
+      if test $HAVE_CAIRO_XLIB = "yes"; then
+        CAIRO_CFLAGS="$CAIRO_XLIB_CFLAGS"
+	CAIRO_LIBS="$CAIRO_XLIB_LIBS"
+	AC_SUBST(CAIRO_CFLAGS)
+	AC_SUBST(CAIRO_LIBS)
+      else
+        AC_MSG_ERROR([xwidgets requested, but a suitable cairo installation wasn't found])
+      fi
+    fi
+  elif test "${NS_IMPL_COCOA}" = "yes"; then
+    dnl FIXME: Check framework WebKit2
+    dnl WEBKIT_REQUIRED=M.m.p
+    WEBKIT_LIBS="-Wl,-framework -Wl,WebKit"
+    WEBKIT_CFLAGS="-I/System/Library/Frameworks/WebKit.framework/Headers"
+    HAVE_WEBKIT="yes"
+    HAVE_XWIDGETS=$HAVE_WEBKIT
+    XWIDGETS_OBJ="xwidget.o"
+    NS_OBJC_OBJ="$NS_OBJC_OBJ nsxwidget.o"
+    dnl Update NS_OBJC_OBJ with added nsxwidget.o
+    AC_SUBST(NS_OBJC_OBJ)
+  else
+    AC_MSG_ERROR([xwidgets requested, it requires GTK3 as X window toolkit or macOS Cocoa as window system.])
+  fi
+
+  test $HAVE_XWIDGETS = yes ||
+    AC_MSG_ERROR([xwidgets requested but WebKitGTK+ or WebKit framework not found.])
+
+  AC_DEFINE([HAVE_XWIDGETS], 1, [Define to 1 if you have xwidgets support.])
+fi
+AC_SUBST(XWIDGETS_OBJ)
 
 if test "$window_system" = "pgtk"; then
   CAIRO_REQUIRED=1.12.0
@@ -3746,20 +3734,24 @@ AC_SUBST(LIBOTF_LIBS)
 AC_SUBST(M17N_FLT_CFLAGS)
 AC_SUBST(M17N_FLT_LIBS)
 
+XCB_LIBS=
 if test "${HAVE_X11}" = "yes"; then
   AC_CHECK_HEADER(X11/Xlib-xcb.h,
     AC_CHECK_LIB(xcb, xcb_translate_coordinates, HAVE_XCB=yes))
   if test "${HAVE_XCB}" = "yes"; then
     AC_CHECK_LIB(X11-xcb, XGetXCBConnection, HAVE_X11_XCB=yes)
     if test "${HAVE_X11_XCB}" = "yes"; then
-      AC_DEFINE(USE_XCB, 1,
+      AC_CHECK_LIB(xcb-util, xcb_aux_sync, HAVE_XCB_UTIL=yes)
+      if test "${HAVE_XCB_UTIL}" = "yes"; then
+        AC_DEFINE(USE_XCB, 1,
 [Define to 1 if you have the XCB library and X11-XCB library for mixed
-   X11/XCB programming.])
-      XCB_LIBS="-lX11-xcb -lxcb"
-      AC_SUBST(XCB_LIBS)
+  X11/XCB programming.])
+        XCB_LIBS="-lX11-xcb -lxcb -lxcb-util"
+      fi
     fi
   fi
 fi
+AC_SUBST(XCB_LIBS)
 
 ### Use -lXpm if available, unless '--with-xpm=no'.
 ### mingw32 doesn't use -lXpm, since it loads the library dynamically.
@@ -4488,10 +4480,33 @@ if test "${HAVE_X11}" = "yes" && test "${with_xinput2}" != "no"; then
        AC_MSG_WARN([You are building Emacs with GTK+ 2 and the X Input Extension version 2.
 This might lead to problems if your version of GTK+ is not built with support for XInput 2.])
      fi
+
+     # Now check for some members (which used in conjunction with
+     # protocol definitions) can be used to determine the version of
+     # XInput supported.
+     AC_CHECK_MEMBERS([XIScrollClassInfo.type, XITouchClassInfo.type,
+       XIBarrierReleasePointerInfo.deviceid, XIGestureClassInfo.type],
+       [], [], [#include <X11/extensions/XInput2.h>])
    fi
 fi
 AC_SUBST(XINPUT_CFLAGS)
 AC_SUBST(XINPUT_LIBS)
+
+XSYNC_LIBS=
+XSYNC_CFLAGS=
+HAVE_XSYNC=no
+if test "${HAVE_X11}" = "yes"; then
+   AC_CHECK_HEADER(X11/extensions/sync.h,
+     AC_CHECK_LIB(Xext, XSyncQueryExtension, HAVE_XSYNC=yes),
+     [], [#include <X11/Xlib.h>])
+
+  if test "${HAVE_XSYNC}" = "yes"; then
+    AC_DEFINE(HAVE_XSYNC, 1, [Define to 1 if the X Synchronization Extension is available.])
+    XSYNC_LIBS="-lXext"
+  fi
+fi
+AC_SUBST(XSYNC_LIBS)
+AC_SUBST(XSYNC_CFLAGS)
 
 ### Use Xdbe (-lXdbe) if available
 HAVE_XDBE=no
@@ -4655,7 +4670,7 @@ AC_CHECK_HEADERS(
     ]])])
 AC_SUBST([HAVE_SECCOMP])
 
-EMACS_CHECK_MODULES([LIBSECCOMP], [libseccomp >= 2.4.0])
+EMACS_CHECK_MODULES([LIBSECCOMP], [libseccomp >= 2.5.2])
 AC_SUBST([HAVE_LIBSECCOMP])
 AC_SUBST([LIBSECCOMP_LIBS])
 AC_SUBST([LIBSECCOMP_CFLAGS])
@@ -5769,7 +5784,7 @@ fi
 
 version=$PACKAGE_VERSION
 
-copyright="Copyright (C) 2021 Free Software Foundation, Inc."
+copyright="Copyright (C) 2022 Free Software Foundation, Inc."
 AC_DEFINE_UNQUOTED(COPYRIGHT, ["$copyright"],
   [Short copyright string for this version of Emacs.])
 AC_SUBST(copyright)

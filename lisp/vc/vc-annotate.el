@@ -1,6 +1,6 @@
 ;;; vc-annotate.el --- VC Annotate Support  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1997-1998, 2000-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1997-1998, 2000-2022 Free Software Foundation, Inc.
 
 ;; Author: Martin Lorentzson <emwson@emw.ericsson.se>
 ;; Maintainer: emacs-devel@gnu.org
@@ -57,7 +57,7 @@ is applied to the background."
   :set (lambda (symbol value)
 	 (set-default symbol value)
 	 (when (boundp 'vc-annotate-color-map)
-	   (with-demoted-errors
+	   (with-demoted-errors "VC color map error: %S"
 	     ;; Update the value of the dependent variable.
 	     (custom-reevaluate-setting 'vc-annotate-color-map))))
   :version "25.1"

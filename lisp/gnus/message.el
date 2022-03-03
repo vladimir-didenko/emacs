@@ -1,6 +1,6 @@
 ;;; message.el --- composing mail and news messages -*- lexical-binding: t -*-
 
-;; Copyright (C) 1996-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1996-2022 Free Software Foundation, Inc.
 
 ;; Author: Lars Magne Ingebrigtsen <larsi@gnus.org>
 ;; Keywords: mail, news
@@ -4335,6 +4335,48 @@ Instead, just auto-save the buffer and then bury it."
 
 (autoload 'mml-secure-bcc-is-safe "mml-sec")
 
+(defcustom message-server-alist nil
+  "Alist of rules to generate \"X-Message-SMTP-Method\" header.
+The header will be inserted just before the message is sent.
+Elements should be of the form (COND . METHOD).
+If COND is a string, METHOD will be inserted if the \"From\"
+address compares equal with COND.
+If COND is a function, METHOD will be inserted if COND returns
+a non-nil value when called in the message buffer without any
+arguments.  If METHOD is nil in this case, the return value of
+the function will be inserted instead.
+If the buffer already has a\"X-Message-SMTP-Method\" header,
+it is left unchanged."
+  :type '(alist :key-type '(choice
+                            (string :tag "From Address")
+                            (function :tag "Predicate"))
+                :value-type 'string)
+  :version "29.1"
+  :group 'message-sending)
+
+(defun message-update-smtp-method-header ()
+  "Insert an X-Message-SMTP-Method header according to `message-server-alist'."
+  (unless (message-fetch-field "X-Message-SMTP-Method")
+    (let ((from (cadr (mail-extract-address-components
+                       (save-restriction
+                         (widen)
+                         (message-narrow-to-headers-or-head)
+                         (message-fetch-field "From")))))
+          method)
+      (catch 'exit
+        (dolist (server message-server-alist)
+          (cond ((functionp (car server))
+                 (let ((res (funcall (car server))))
+                   (when res
+                     (setq method (or (cdr server) res))
+                     (throw 'exit nil))))
+                ((and (stringp (car server))
+                      (string= (car server) from))
+                 (setq method (cdr server))
+                 (throw 'exit nil)))))
+      (when method
+        (message-add-header (concat "X-Message-SMTP-Method: " method))))))
+
 (defun message-send (&optional arg)
   "Send the message in the current buffer.
 If `message-interactive' is non-nil, wait for success indication or
@@ -4348,6 +4390,7 @@ It should typically alter the sending method in some way or other."
   (undo-boundary)
   (let ((inhibit-read-only t))
     (put-text-property (point-min) (point-max) 'read-only nil))
+  (message-update-smtp-method-header)
   (message-fix-before-sending)
   (run-hooks 'message-send-hook)
   (mml-secure-bcc-is-safe)
@@ -4862,7 +4905,18 @@ If you always want Gnus to send messages in one piece, set
 	      (message-generate-headers '(Lines)))
 	    ;; Remove some headers.
 	    (message-remove-header message-ignored-mail-headers t)
-            (mail-encode-encoded-word-buffer))
+            (mail-encode-encoded-word-buffer)
+	    ;; Then check for suspicious addresses.
+            (dolist (hdr '("To" "Cc" "Bcc"))
+              (let ((addr (message-fetch-field hdr)))
+	        (when (stringp addr)
+	          (dolist (address (mail-header-parse-addresses addr t))
+	            (when-let ((warning (textsec-suspicious-p
+                                         address 'email-address-header)))
+	              (unless (y-or-n-p
+		               (format "Suspicious address: %s; send anyway?"
+                                       warning))
+		        (user-error "Suspicious address %s" address))))))))
 	  (goto-char (point-max))
 	  ;; require one newline at the end.
 	  (or (= (preceding-char) ?\n)
@@ -8315,7 +8369,11 @@ regular text mode tabbing command."
 
 (defcustom message-expand-name-standard-ui nil
   "If non-nil, use the standard completion UI in `message-expand-name'.
-E.g. this means it will obey `completion-styles' and other such settings."
+E.g. this means it will obey `completion-styles' and other such settings.
+
+If this variable is non-nil and `message-mail-alias-type' is
+`ecomplete', `message-self-insert-commands' should probably be
+set to nil."
   :version "27.1"
   :type 'boolean)
 
@@ -8567,26 +8625,23 @@ From headers in the original article."
 		   message-hidden-headers))
 	(inhibit-point-motion-hooks t)
 	(inhibit-modification-hooks t)
-	(end-of-headers (point-min)))
+	end-of-headers)
     (when regexps
       (save-excursion
 	(save-restriction
 	  (message-narrow-to-headers)
+          (setq end-of-headers (point-min-marker))
 	  (goto-char (point-min))
 	  (while (not (eobp))
 	    (if (not (message-hide-header-p regexps))
 		(message-next-header)
-	      (let ((begin (point))
-		    header header-len)
+	      (let ((begin (point)))
 		(message-next-header)
-		(setq header (buffer-substring begin (point))
-		      header-len (- (point) begin))
-		(delete-region begin (point))
-		(goto-char end-of-headers)
-		(insert header)
-		(setq end-of-headers
-		      (+ end-of-headers header-len))))))))
-    (narrow-to-region end-of-headers (point-max))))
+                (let ((header (delete-and-extract-region begin (point))))
+                  (save-excursion
+                    (goto-char end-of-headers)
+                    (insert-before-markers header))))))))
+      (narrow-to-region end-of-headers (point-max)))))
 
 (defun message-hide-header-p (regexps)
   (let ((result nil)

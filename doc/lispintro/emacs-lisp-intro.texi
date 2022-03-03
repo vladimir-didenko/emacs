@@ -1,8 +1,6 @@
 \input texinfo                       @c -*- mode: texinfo; coding: utf-8 -*-
 @comment %**start of header
 @setfilename ../../info/eintr.info
-@c setfilename emacs-lisp-intro.info
-@c sethtmlfilename emacs-lisp-intro.html
 @settitle Programming in Emacs Lisp
 @include docstyle.texi
 @syncodeindex vr cp
@@ -117,7 +115,7 @@ Edition @value{edition-number}, @value{update-date}
 @sp 1
 Distributed with Emacs version @value{EMACSVER}.
 @sp 1
-Copyright @copyright{} 1990--1995, 1997, 2001--2021 Free Software
+Copyright @copyright{} 1990--1995, 1997, 2001--2022 Free Software
 Foundation, Inc.
 @sp 1
 

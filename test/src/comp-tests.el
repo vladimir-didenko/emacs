@@ -1,6 +1,6 @@
 ;;; comp-tests.el --- unit tests for src/comp.c      -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2019-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2019-2022 Free Software Foundation, Inc.
 
 ;; Author: Andrea Corallo <akrl@sdf.org>
 
@@ -1369,7 +1369,14 @@ Return a list of results."
          (when (eql x 1.0)
 	   (error ""))
          x)
-       t)))
+       t)
+
+      ;; 74
+      ((defun comp-tests-ret-type-spec-f (x)
+         (if (eq x 0)
+	     (error "")
+	   (1+ x)))
+       number)))
 
   (defun comp-tests-define-type-spec-test (number x)
     `(comp-deftest ,(intern (format "ret-type-spec-%d" number)) ()

@@ -1,6 +1,6 @@
 ;;; help-mode.el --- `help-mode' used by *Help* buffers  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1985-1986, 1993-1994, 1998-2021 Free Software
+;; Copyright (C) 1985-1986, 1993-1994, 1998-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -45,6 +45,7 @@
     (define-key map [XF86Forward] 'help-go-forward)
     (define-key map "\C-c\C-c" 'help-follow-symbol)
     (define-key map "s" 'help-view-source)
+    (define-key map "I" 'help-goto-lispref-info)
     (define-key map "i" 'help-goto-info)
     (define-key map "c" 'help-customize)
     map)
@@ -819,6 +820,14 @@ The help buffers are divided into \"pages\" by the ^L character."
   (info-lookup-symbol (plist-get help-mode--current-data :symbol)
                       'emacs-lisp-mode))
 
+(defun help-goto-lispref-info ()
+  "View the Emacs Lisp manual *info* node of the current help item."
+  (interactive nil help-mode)
+  (unless help-mode--current-data
+    (error "No symbol to look up in the current buffer"))
+  (info-lookup-symbol (plist-get help-mode--current-data :symbol)
+                      'emacs-lisp-only))
+
 (defun help-customize ()
   "Customize variable or face whose doc string is shown in the current buffer."
   (interactive nil help-mode)
@@ -927,6 +936,7 @@ BOOKMARK is a bookmark name or a bookmark record."
     (pop-to-buffer "*Help*")
     (goto-char position)))
 
+(put 'help-bookmark-jump 'bookmark-handler-type "Help")
 
 (provide 'help-mode)
 

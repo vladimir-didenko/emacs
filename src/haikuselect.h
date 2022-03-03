@@ -1,5 +1,5 @@
 /* Haiku window system selection support. Hey Emacs, this is -*- C++ -*-
-   Copyright (C) 2021 Free Software Foundation, Inc.
+   Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -65,6 +65,15 @@ extern "C"
 
   extern void
   BClipboard_secondary_targets (char **buf, int len);
+
+  extern bool
+  BClipboard_owns_clipboard (void);
+
+  extern bool
+  BClipboard_owns_primary (void);
+
+  extern bool
+  BClipboard_owns_secondary (void);
 
   /* Free the returned data.  */
   extern void BClipboard_free_data (void *ptr);

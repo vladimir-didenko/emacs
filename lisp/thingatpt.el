@@ -1,6 +1,6 @@
 ;;; thingatpt.el --- get the `thing' at point  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1991-1998, 2000-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1991-1998, 2000-2022 Free Software Foundation, Inc.
 
 ;; Author: Mike Williams <mikew@gopher.dosli.govt.nz>
 ;; Maintainer: emacs-devel@gnu.org
@@ -171,30 +171,24 @@ Possibilities include `symbol', `list', `sexp', `defun',
 When the optional argument NO-PROPERTIES is non-nil,
 strip text properties from the return value.
 
-If the current buffer uses fields (see Info node `(elisp)Fields'),
-this function will narrow to the field before identifying the
-thing at point.
-
 See the file `thingatpt.el' for documentation on how to define
 a symbol as a valid THING."
-  (save-restriction
-    (narrow-to-region (field-beginning) (field-end))
-    (let ((text
-           (cond
-            ((cl-loop for (pthing . function) in thing-at-point-provider-alist
-                      when (eq pthing thing)
-                      for result = (funcall function)
-                      when result
-                      return result))
-            ((get thing 'thing-at-point)
-             (funcall (get thing 'thing-at-point)))
-            (t
-             (let ((bounds (bounds-of-thing-at-point thing)))
-               (when bounds
-                 (buffer-substring (car bounds) (cdr bounds))))))))
-      (when (and text no-properties (sequencep text))
-        (set-text-properties 0 (length text) nil text))
-      text)))
+  (let ((text
+         (cond
+          ((cl-loop for (pthing . function) in thing-at-point-provider-alist
+                    when (eq pthing thing)
+                    for result = (funcall function)
+                    when result
+                    return result))
+          ((get thing 'thing-at-point)
+           (funcall (get thing 'thing-at-point)))
+          (t
+           (let ((bounds (bounds-of-thing-at-point thing)))
+             (when bounds
+               (buffer-substring (car bounds) (cdr bounds))))))))
+    (when (and text no-properties (sequencep text))
+      (set-text-properties 0 (length text) nil text))
+    text))
 
 ;;;###autoload
 (defun bounds-of-thing-at-mouse (event thing)
@@ -514,14 +508,14 @@ If no URL is found, return nil.
 If optional argument LAX is non-nil, look for URLs that are not
 well-formed, such as foo@bar or <nobody>.
 
-If optional arguments BOUNDS are non-nil, it should be a cons
+If optional argument BOUNDS is non-nil, it should be a cons
 cell of the form (START . END), containing the beginning and end
 positions of the URI.  Otherwise, these positions are detected
 automatically from the text around point.
 
 If the scheme component is absent, either because a URI delimited
 with <url:...> lacks one, or because an ill-formed URI was found
-with LAX or BEG and END, try to add a scheme in the returned URI.
+with LAX or BOUNDS, try to add a scheme in the returned URI.
 The scheme is chosen heuristically: \"mailto:\" if the address
 looks like an email address, \"ftp://\" if it starts with
 \"ftp\", etc."

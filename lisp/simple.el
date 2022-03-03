@@ -1,6 +1,6 @@
 ;;; simple.el --- basic editing commands for Emacs  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1987, 1993-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1985-1987, 1993-2022 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: internal
@@ -1292,6 +1292,11 @@ If Transient Mark mode is enabled, the mark is active, and N is 1,
 delete the text in the region and deactivate the mark instead.
 To disable this, set variable `delete-active-region' to nil.
 
+If N is positive, characters composed into a single grapheme cluster
+count as a single character and are deleted together.  Thus,
+\"\\[universal-argument] 2 \\[delete-forward-char]\" when two grapheme clusters follow point will
+delete the characters composed into both of the grapheme clusters.
+
 Optional second arg KILLFLAG non-nil means to kill (save in kill
 ring) instead of delete.  If called interactively, a numeric
 prefix argument specifies N, and KILLFLAG is also set if a prefix
@@ -1311,6 +1316,21 @@ the actual saved text might be different from what was killed."
 	 (if (eq delete-active-region 'kill)
 	     (kill-region (region-beginning) (region-end) 'region)
 	   (funcall region-extract-function 'delete-only)))
+
+	;; For forward deletion, treat composed characters as a single
+	;; character to delete.
+        ((>= n 1)
+         (let ((pos (point))
+               start cmp)
+           (setq start pos)
+           (while (> n 0)
+             ;; 'find-composition' will return (FROM TO ....) or nil.
+             (setq cmp (find-composition pos))
+             (if cmp
+                 (setq pos (cadr cmp))
+               (setq pos (1+ pos)))
+             (setq n (1- n)))
+           (delete-char (- pos start) killflag)))
 
 	;; Otherwise, do simple deletion.
 	(t (delete-char n killflag))))
@@ -1457,46 +1477,59 @@ START and END."
   (cond ((not (called-interactively-p 'any))
 	 (count-words start end))
 	(arg
-	 (count-words--buffer-message))
+	 (message "%s" (count-words--buffer-format)))
 	(t
-	 (count-words--message "Region" start end))))
+	 (message "%s" (count-words--format "Region" start end)))))
 
-(defun count-words (start end)
+(defun count-words (start end &optional totals)
   "Count words between START and END.
 If called interactively, START and END are normally the start and
 end of the buffer; but if the region is active, START and END are
 the start and end of the region.  Print a message reporting the
-number of lines, words, and chars.
+number of lines, words, and chars.  With prefix argument, also
+include the data for the entire (un-narrowed) buffer.
 
 If called from Lisp, return the number of words between START and
-END, without printing any message."
-  (interactive (list nil nil))
-  (cond ((not (called-interactively-p 'any))
-	 (let ((words 0)
-               ;; Count across field boundaries. (Bug#41761)
-               (inhibit-field-text-motion t))
-	   (save-excursion
-	     (save-restriction
-	       (narrow-to-region start end)
-	       (goto-char (point-min))
-	       (while (forward-word-strictly 1)
-		 (setq words (1+ words)))))
-	   words))
-	((use-region-p)
-	 (call-interactively 'count-words-region))
-	(t
-	 (count-words--buffer-message))))
+END, without printing any message.  TOTALS is ignored when called
+from Lisp."
+  (interactive (list nil nil current-prefix-arg))
+  ;; When called from Lisp, return the data.
+  (if (not (called-interactively-p 'any))
+      (let ((words 0)
+            ;; Count across field boundaries. (Bug#41761)
+            (inhibit-field-text-motion t))
+	(save-excursion
+	  (save-restriction
+	    (narrow-to-region start end)
+	    (goto-char (point-min))
+	    (while (forward-word-strictly 1)
+	      (setq words (1+ words)))))
+	words)
+    ;; When called interactively, message the data.
+    (let ((totals (if (and totals
+                           (or (use-region-p)
+                               (buffer-narrowed-p)))
+                      (save-restriction
+                        (widen)
+                        (count-words--format "; buffer in total"
+                                             (point-min) (point-max)))
+                    "")))
+      (if (use-region-p)
+	  (message "%s%s" (count-words--format
+                           "Region" (region-beginning) (region-end))
+                   totals)
+        (message "%s%s" (count-words--buffer-format) totals)))))
 
-(defun count-words--buffer-message ()
-  (count-words--message
+(defun count-words--buffer-format ()
+  (count-words--format
    (if (buffer-narrowed-p) "Narrowed part of buffer" "Buffer")
    (point-min) (point-max)))
 
-(defun count-words--message (str start end)
+(defun count-words--format (str start end)
   (let ((lines (count-lines start end))
 	(words (count-words start end))
 	(chars (- end start)))
-    (message "%s has %d line%s, %d word%s, and %d character%s."
+    (format "%s has %d line%s, %d word%s, and %d character%s"
 	     str
 	     lines (if (= lines 1) "" "s")
 	     words (if (= words 1) "" "s")
@@ -2306,8 +2339,8 @@ maps."
    (let* ((execute-extended-command--last-typed nil)
           (keymaps
            ;; The major mode's keymap and any active minor modes.
-           (cons
-            (current-local-map)
+           (nconc
+            (and (current-local-map) (list (current-local-map)))
             (mapcar
              #'cdr
              (seq-filter
@@ -2348,12 +2381,17 @@ don't clear it."
                        (setq current-prefix-arg prefix-arg)
                        (setq prefix-arg nil)
                        (when current-prefix-arg
-                         (prefix-command-update))))))
+                         (prefix-command-update)))))
+        query)
     (if (and (symbolp cmd)
              (get cmd 'disabled)
-             disabled-command-function)
-        ;; FIXME: Weird calling convention!
-        (run-hooks 'disabled-command-function)
+             (or (and (setq query (and (consp (get cmd 'disabled))
+                                       (eq (car (get cmd 'disabled)) 'query)))
+                      (not (command-execute--query cmd)))
+                 (and (not query) disabled-command-function)))
+        (when (not query)
+          ;; FIXME: Weird calling convention!
+          (run-hooks 'disabled-command-function))
       (let ((final cmd))
         (while
             (progn
@@ -2377,6 +2415,21 @@ don't clear it."
               (put cmd 'command-execute-obsolete-warned t)
               (message "%s" (macroexp--obsolete-warning
                              cmd (get cmd 'byte-obsolete-info) "command"))))))))))
+
+(defun command-execute--query (command)
+  "Query the user whether to run COMMAND."
+  (let ((query (get command 'disabled)))
+    (funcall (if (nth 1 query) #'yes-or-no-p #'y-or-n-p)
+             (nth 2 query))))
+
+;;;###autoload
+(defun command-query (command query &optional verbose)
+  "Make executing COMMAND issue QUERY to the user.
+This will, by default, use `y-or-n-p', but if VERBOSE,
+`yes-or-no-p' is used instead."
+  (put command 'disabled
+       (list 'query (not (not verbose)) query)))
+
 
 (defvar minibuffer-history nil
   "Default minibuffer history list.
@@ -2957,7 +3010,8 @@ undo record: if we undo from 4, `pending-undo-list' will be at 3,
 
 (defcustom undo-no-redo nil
   "If t, `undo' doesn't go through redo entries."
-  :type 'boolean)
+  :type 'boolean
+  :group 'undo)
 
 (defvar pending-undo-list nil
   "Within a run of consecutive undo commands, list remaining to be undone.
@@ -4091,6 +4145,10 @@ interactively when the prefix argument is given), insert the
 output in current buffer after point leaving mark after it.  This
 cannot be done asynchronously.
 
+If OUTPUT-BUFFER is a buffer or buffer name different from the
+current buffer, instead of outputting at point in that buffer,
+the output will be appended at the end of that buffer.
+
 The user option `shell-command-dont-erase-buffer', which see, controls
 whether the output buffer is erased and where to put point after
 the shell command.
@@ -4701,6 +4759,8 @@ File name handlers might not support pty association, if PROGRAM is nil."
     (if (eobp)
         (forward-line -1)
       (beginning-of-line))))
+
+(declare-function thread-name "thread.c")
 
 (defun list-processes--refresh ()
   "Recompute the list of processes for the Process List buffer.
@@ -6662,11 +6722,10 @@ mode temporarily."
         (user-error "No mark set in this buffer"))
     (set-mark (point))
     (goto-char omark)
-    (cond (temp-highlight
-	   (setq-local transient-mark-mode (cons 'only transient-mark-mode)))
-	  ((xor arg (not (region-active-p)))
-	   (deactivate-mark))
-	  (t (activate-mark)))
+    (or temp-highlight
+        (cond ((xor arg (not (region-active-p)))
+	       (deactivate-mark))
+	      (t (activate-mark))))
     nil))
 
 (defcustom shift-select-mode t
@@ -8277,7 +8336,8 @@ Just \\[universal-argument] as argument means to use the current column."
              ;; We used to use current-column silently, but C-x f is too easily
              ;; typed as a typo for C-x C-f, so we turned it into an error and
              ;; now an interactive prompt.
-             (read-number "Set fill-column to: " (current-column)))))
+             (read-number (format "Change fill-column from %s to: " fill-column)
+                          (current-column)))))
   (if (consp arg)
       (setq arg (current-column)))
   (if (not (integerp arg))
@@ -8980,6 +9040,7 @@ makes it easier to edit it."
     (define-key map [down-mouse-2] nil)
     (define-key map "\C-m" 'choose-completion)
     (define-key map "\e\e\e" 'delete-completion-window)
+    (define-key map [remap keyboard-quit] #'delete-completion-window)
     (define-key map [left] 'previous-completion)
     (define-key map [right] 'next-completion)
     (define-key map [?\t] 'next-completion)
@@ -9027,38 +9088,68 @@ Go to the window from which completion was requested."
       (if (get-buffer-window buf)
 	  (select-window (get-buffer-window buf))))))
 
+(defcustom completion-wrap-movement t
+  "Non-nil means to wrap around when selecting completion options.
+This affects the commands `next-completion' and
+`previous-completion'."
+  :type 'boolean
+  :version "29.1"
+  :group 'completion)
+
 (defun previous-completion (n)
-  "Move to the previous item in the completion list."
+  "Move to the previous item in the completion list.
+With prefix argument N, move back N items (negative N means move
+forward)."
   (interactive "p")
   (next-completion (- n)))
 
 (defun next-completion (n)
   "Move to the next item in the completion list.
-With prefix argument N, move N items (negative N means move backward)."
+With prefix argument N, move N items (negative N means move
+backward)."
   (interactive "p")
   (let ((beg (point-min)) (end (point-max)))
-    (while (and (> n 0) (not (eobp)))
-      ;; If in a completion, move to the end of it.
-      (when (get-text-property (point) 'mouse-face)
-	(goto-char (next-single-property-change (point) 'mouse-face nil end)))
-      ;; Move to start of next one.
-      (unless (get-text-property (point) 'mouse-face)
-	(goto-char (next-single-property-change (point) 'mouse-face nil end)))
-      (setq n (1- n)))
-    (while (and (< n 0) (not (bobp)))
-      (let ((prop (get-text-property (1- (point)) 'mouse-face)))
-	;; If in a completion, move to the start of it.
-	(when (and prop (eq prop (get-text-property (point) 'mouse-face)))
-	  (goto-char (previous-single-property-change
-		      (point) 'mouse-face nil beg)))
-	;; Move to end of the previous completion.
-	(unless (or (bobp) (get-text-property (1- (point)) 'mouse-face))
-	  (goto-char (previous-single-property-change
-		      (point) 'mouse-face nil beg)))
-	;; Move to the start of that one.
-	(goto-char (previous-single-property-change
-		    (point) 'mouse-face nil beg))
-	(setq n (1+ n))))))
+    (catch 'bound
+      (while (> n 0)
+        ;; If in a completion, move to the end of it.
+        (when (get-text-property (point) 'mouse-face)
+          (goto-char (next-single-property-change (point) 'mouse-face nil end)))
+        ;; If at the last completion option, wrap or skip to the
+        ;; minibuffer, if requested.
+        (when (and completion-wrap-movement (eobp))
+          (if (and (member (this-command-keys) '("\t" [backtab]))
+                   completion-auto-select)
+              (throw 'bound nil)
+            (goto-char (point-min))))
+        ;; Move to start of next one.
+        (unless (get-text-property (point) 'mouse-face)
+          (goto-char (next-single-property-change (point) 'mouse-face nil end)))
+        (setq n (1- n)))
+      (while (< n 0)
+        (let ((prop (get-text-property (1- (point)) 'mouse-face)))
+          ;; If in a completion, move to the start of it.
+          (when (and prop (eq prop (get-text-property (point) 'mouse-face)))
+            (goto-char (previous-single-property-change
+                        (point) 'mouse-face nil beg)))
+          ;; Move to end of the previous completion.
+          (unless (or (bobp) (get-text-property (1- (point)) 'mouse-face))
+            (goto-char (previous-single-property-change
+                        (point) 'mouse-face nil beg)))
+          ;; If at the first completion option, wrap or skip to the
+          ;; minibuffer, if requested.
+          (when (and completion-wrap-movement (bobp))
+            (if (and (member (this-command-keys) '("\t" [backtab]))
+                     completion-auto-select)
+                (progn
+                  (goto-char (next-single-property-change (point) 'mouse-face nil end))
+                  (throw 'bound nil))
+              (goto-char (point-max))))
+          ;; Move to the start of that one.
+          (goto-char (previous-single-property-change
+                      (point) 'mouse-face nil beg))
+          (setq n (1+ n)))))
+    (when (/= 0 n)
+      (switch-to-minibuffer))))
 
 (defun choose-completion (&optional event)
   "Choose the completion at point.
@@ -9226,6 +9317,12 @@ Called from `temp-buffer-show-hook'."
   :version "22.1"
   :group 'completion)
 
+(defcustom completion-auto-select nil
+  "Non-nil means to automatically select the *Completions* buffer."
+  :type 'boolean
+  :version "29.1"
+  :group 'completion)
+
 ;; This function goes in completion-setup-hook, so that it is called
 ;; after the text of the completion list buffer is written.
 (defun completion-setup-function ()
@@ -9262,7 +9359,9 @@ Called from `temp-buffer-show-hook'."
 	    (insert "Click on a completion to select it.\n"))
 	(insert (substitute-command-keys
 		 "In this buffer, type \\[choose-completion] to \
-select the completion near point.\n\n"))))))
+select the completion near point.\n\n")))))
+  (when completion-auto-select
+    (switch-to-completions)))
 
 (add-hook 'completion-setup-hook #'completion-setup-function)
 
@@ -9275,10 +9374,16 @@ select the completion near point.\n\n"))))))
                            (get-buffer-window "*Completions*" 0)))))
     (when window
       (select-window window)
-      ;; In the new buffer, go to the first completion.
-      ;; FIXME: Perhaps this should be done in `minibuffer-completion-help'.
-      (when (bobp)
-	(next-completion 1)))))
+      (cond
+       ((and (memq this-command '(completion-at-point minibuffer-complete))
+             (equal (this-command-keys) [backtab])
+             (bobp))
+        (goto-char (point-max))
+        (previous-completion 1))
+       ;; In the new buffer, go to the first completion.
+       ;; FIXME: Perhaps this should be done in `minibuffer-completion-help'.
+       ((bobp)
+        (next-completion 1))))))
 
 (defun read-expression-switch-to-completions ()
   "Select the completion list window while reading an expression."
@@ -9393,9 +9498,6 @@ PREFIX is the string that represents this modifier in an event type symbol."
 
 (defvar clone-buffer-hook nil
   "Normal hook to run in the new buffer at the end of `clone-buffer'.")
-
-(defvar clone-indirect-buffer-hook nil
-  "Normal hook to run in the new buffer at the end of `clone-indirect-buffer'.")
 
 (defun clone-process (process &optional newname)
   "Create a twin copy of PROCESS.
@@ -9549,8 +9651,6 @@ Returns the newly created indirect buffer."
       (setq newname (substring newname 0 (match-beginning 0))))
   (let* ((name (generate-new-buffer-name newname))
 	 (buffer (make-indirect-buffer (current-buffer) name t)))
-    (with-current-buffer buffer
-      (run-hooks 'clone-indirect-buffer-hook))
     (when display-flag
       (pop-to-buffer buffer nil norecord))
     buffer))

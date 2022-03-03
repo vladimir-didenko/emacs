@@ -1,5 +1,5 @@
 /* Haiku window system support.
-   Copyright (C) 2021 Free Software Foundation, Inc.
+   Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -35,6 +35,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 /* The port used to send messages from the application thread to
    Emacs.  */
 port_id port_application_to_emacs;
+
+/* The port used to send popup menu messages from the application
+   thread to Emacs.  */
+port_id port_popup_menu_to_emacs;
 
 void
 haiku_io_init (void)
@@ -90,6 +94,12 @@ haiku_len (enum haiku_event_type type)
       return sizeof (struct haiku_refs_event);
     case APP_QUIT_REQUESTED_EVENT:
       return sizeof (struct haiku_app_quit_requested_event);
+    case DUMMY_EVENT:
+      return sizeof (struct haiku_dummy_event);
+    case MENU_BAR_LEFT:
+      return sizeof (struct haiku_menu_bar_left_event);
+    case SCROLL_BAR_PART_EVENT:
+      return sizeof (struct haiku_scroll_bar_part_event);
     }
 
   emacs_abort ();
@@ -98,9 +108,11 @@ haiku_len (enum haiku_event_type type)
 /* Read the size of the next message into len, returning -1 if the
    query fails or there is no next message.  */
 void
-haiku_read_size (ssize_t *len)
+haiku_read_size (ssize_t *len, bool popup_menu_p)
 {
-  port_id from = port_application_to_emacs;
+  port_id from = (popup_menu_p
+		  ? port_popup_menu_to_emacs
+		  : port_application_to_emacs);
   ssize_t size;
 
   size = port_buffer_size_etc (from, B_TIMEOUT, 0);
@@ -129,13 +141,16 @@ haiku_read (enum haiku_event_type *type, void *buf, ssize_t len)
 }
 
 /* The same as haiku_read, but time out after TIMEOUT microseconds.
+   POPUP_MENU_P means to read from the popup menu port instead.
    Input is blocked when an attempt to read is in progress.  */
 int
 haiku_read_with_timeout (enum haiku_event_type *type, void *buf, ssize_t len,
-			 time_t timeout)
+			 time_t timeout, bool popup_menu_p)
 {
   int32 typ;
-  port_id from = port_application_to_emacs;
+  port_id from = (popup_menu_p
+		  ? port_popup_menu_to_emacs
+		  : port_application_to_emacs);
 
   block_input ();
   if (read_port_etc (from, &typ, buf, len,
@@ -165,9 +180,12 @@ haiku_write (enum haiku_event_type type, void *buf)
 }
 
 int
-haiku_write_without_signal (enum haiku_event_type type, void *buf)
+haiku_write_without_signal (enum haiku_event_type type, void *buf,
+			    bool popup_menu_p)
 {
-  port_id to = port_application_to_emacs;
+  port_id to = (popup_menu_p
+		? port_popup_menu_to_emacs
+		: port_application_to_emacs);
 
   if (write_port (to, (int32_t) type, buf, haiku_len (type)) < B_OK)
     return -1;
@@ -193,7 +211,7 @@ record_c_unwind_protect_from_cxx (void (*fn) (void *), void *r)
 }
 
 /* SPECPDL_IDX that is safe from C++ code.  */
-ptrdiff_t
+specpdl_ref
 c_specpdl_idx_from_cxx (void)
 {
   return SPECPDL_INDEX ();
@@ -201,7 +219,7 @@ c_specpdl_idx_from_cxx (void)
 
 /* unbind_to (IDX, Qnil), but safe from C++ code.  */
 void
-c_unbind_to_nil_from_cxx (ptrdiff_t idx)
+c_unbind_to_nil_from_cxx (specpdl_ref idx)
 {
   unbind_to (idx, Qnil);
 }

@@ -1,6 +1,6 @@
 ;;; xterm.el --- define function key sequences and standard colors for xterm  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1995, 2001-2020 Free Software Foundation, Inc.
+;; Copyright (C) 1995, 2001-2020, 2022 Free Software Foundation, Inc.
 
 ;; Author: FSF
 ;; Keywords: terminals
@@ -290,6 +290,7 @@ See the documentation of `create-fontset-from-fontset-spec' for the format.")
 
 ;; Any display name is OK.
 (add-to-list 'display-format-alist '(".*" . pgtk))
+
 (cl-defmethod handle-args-function (args &context (window-system pgtk))
   (x-handle-args args))
 
@@ -297,10 +298,10 @@ See the documentation of `create-fontset-from-fontset-spec' for the format.")
   (x-create-frame-with-faces params))
 
 (declare-function pgtk-own-selection-internal "pgtkselect.c" (selection value &optional frame))
-(declare-function pgtk-disown-selection-internal "pgtkselect.c" (selection &optional time_object terminal))
+(declare-function pgtk-disown-selection-internal "pgtkselect.c" (selection &optional terminal))
 (declare-function pgtk-selection-owner-p "pgtkselect.c" (&optional selection terminal))
 (declare-function pgtk-selection-exists-p "pgtkselect.c" (&optional selection terminal))
-(declare-function pgtk-get-selection-internal "pgtkselect.c" (selection-symbol target-type &optional time_stamp terminal))
+(declare-function pgtk-get-selection-internal "pgtkselect.c" (selection-symbol target-type &optional terminal))
 
 (cl-defmethod gui-backend-set-selection (selection value
                                          &context (window-system pgtk))
@@ -325,8 +326,7 @@ See the documentation of `create-fontset-from-fontset-spec' for the format.")
 (defun pgtk-preedit-text (event)
   "An internal function to display preedit text from input method.
 
-EVENT is an event of PGTK_PREEDIT_TEXT_EVENT.
-It contains colors and texts."
+EVENT is a `preedit-text-event'."
   (interactive "e")
   (when pgtk-preedit-overlay
     (delete-overlay pgtk-preedit-overlay))
@@ -356,6 +356,7 @@ It contains colors and texts."
     (overlay-put ov 'before-string ovstr)
     (setq pgtk-preedit-overlay ov)))
 
+(define-key special-event-map [preedit-text] 'pgtk-preedit-text)
 
 (add-hook 'after-init-hook
           (function
@@ -509,6 +510,8 @@ This uses `icon-map-list' to map icon file names to stock icon names."
     (accelerate-menu frame))
    (t
     (popup-menu (mouse-menu-bar-map) last-nonmenu-event))))
+
+(defvaralias 'x-gtk-use-system-tooltips 'use-system-tooltips)
 
 (provide 'pgtk-win)
 (provide 'term/pgtk-win)

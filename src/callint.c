@@ -1,5 +1,5 @@
 /* Call a Lisp function interactively.
-   Copyright (C) 1985-1986, 1993-1995, 1997, 2000-2021 Free Software
+   Copyright (C) 1985-1986, 1993-1995, 1997, 2000-2022 Free Software
    Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -251,7 +251,7 @@ return non-nil.
 usage: (funcall-interactively FUNCTION &rest ARGUMENTS)  */)
      (ptrdiff_t nargs, Lisp_Object *args)
 {
-  ptrdiff_t speccount = SPECPDL_INDEX ();
+  specpdl_ref speccount = SPECPDL_INDEX ();
   temporarily_switch_to_single_kboard (NULL);
 
   /* Nothing special to do here, all the work is inside
@@ -279,7 +279,7 @@ invoke it (via an `interactive' spec that contains, for instance, an
 `this-command-keys-vector' is used.  */)
   (Lisp_Object function, Lisp_Object record_flag, Lisp_Object keys)
 {
-  ptrdiff_t speccount = SPECPDL_INDEX ();
+  specpdl_ref speccount = SPECPDL_INDEX ();
 
   bool arg_from_tty = false;
   ptrdiff_t key_count;
@@ -541,7 +541,7 @@ invoke it (via an `interactive' spec that contains, for instance, an
 
 	case 'k':		/* Key sequence.  */
 	  {
-	    ptrdiff_t speccount1 = SPECPDL_INDEX ();
+	    specpdl_ref speccount1 = SPECPDL_INDEX ();
 	    specbind (Qcursor_in_echo_area, Qt);
 	    /* Prompt in `minibuffer-prompt' face.  */
 	    Fput_text_property (make_fixnum (0),
@@ -571,7 +571,7 @@ invoke it (via an `interactive' spec that contains, for instance, an
 
 	case 'K':		/* Key sequence to be defined.  */
 	  {
-	    ptrdiff_t speccount1 = SPECPDL_INDEX ();
+	    specpdl_ref speccount1 = SPECPDL_INDEX ();
 	    specbind (Qcursor_in_echo_area, Qt);
 	    /* Prompt in `minibuffer-prompt' face.  */
 	    Fput_text_property (make_fixnum (0),

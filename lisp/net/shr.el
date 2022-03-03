@@ -1,6 +1,6 @@
 ;;; shr.el --- Simple HTML Renderer -*- lexical-binding: t -*-
 
-;; Copyright (C) 2010-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2010-2022 Free Software Foundation, Inc.
 
 ;; Author: Lars Magne Ingebrigtsen <larsi@gnus.org>
 ;; Keywords: html
@@ -40,6 +40,7 @@
 (require 'image)
 (require 'puny)
 (require 'url-cookie)
+(require 'url-file)
 (require 'pixel-fill)
 (require 'text-property-search)
 
@@ -630,7 +631,7 @@ size, and full-buffer size."
               (t
                (shr-generic dom)))
         (when-let ((id (dom-attr dom 'id)))
-          (push (cons id (point)) shr--link-targets))
+          (push (cons id (set-marker (make-marker) start)) shr--link-targets))
 	;; If style is set, then this node has set the color.
 	(when style
 	  (shr-colorize-region
@@ -857,9 +858,9 @@ size, and full-buffer size."
 	  shr-base))
   (when (zerop (length url))
     (setq url nil))
-  ;; Strip leading whitespace
-  (and url (string-match "\\`\\s-+" url)
-       (setq url (substring url (match-end 0))))
+  ;; Strip leading/trailing whitespace.
+  (when url
+    (setq url (string-trim url)))
   (cond ((zerop (length url))
          (nth 3 base))
         ((or (not base)
@@ -877,8 +878,10 @@ size, and full-buffer size."
 	 ;; A link to an anchor.
 	 (concat (nth 3 base) url))
 	(t
-	 ;; Totally relative.
-	 (url-expand-file-name url (concat (car base) (cadr base))))))
+	 ;; Totally relative.  Allow Tramp file names if we're
+	 ;; rendering a file:// URL.
+         (let ((url-allow-non-local-files (equal (nth 2 base) "file")))
+	   (url-expand-file-name url (concat (car base) (cadr base)))))))
 
 (defun shr-ensure-newline ()
   (unless (bobp)
@@ -1465,9 +1468,20 @@ ones, in case fg and bg are nil."
     (shr-generic dom)
     (when-let* ((id (and (not (dom-attr dom 'id)) ; Handled by `shr-descend'.
                          (dom-attr dom 'name)))) ; Obsolete since HTML5.
-      (push (cons id (point)) shr--link-targets))
+      (push (cons id (set-marker (make-marker) start)) shr--link-targets))
     (when url
-      (shr-urlify (or shr-start start) (shr-expand-url url) title))))
+      (shr-urlify (or shr-start start) (shr-expand-url url) title)
+      ;; Check whether the URL is suspicious.
+      (when-let ((warning (or (textsec-suspicious-p
+                               (shr-expand-url url) 'url)
+                              (textsec-suspicious-p
+                               (cons (shr-expand-url url)
+                                     (buffer-substring (or shr-start start)
+                                                       (point)))
+                               'link))))
+        (add-text-properties (or shr-start start) (point)
+                             (list 'face '(shr-link textsec-suspicious)))
+        (insert (propertize "⚠️" 'help-echo warning))))))
 
 (defun shr-tag-abbr (dom)
   (let ((title (dom-attr dom 'title))

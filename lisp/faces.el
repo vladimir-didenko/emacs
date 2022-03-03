@@ -1,6 +1,6 @@
 ;;; faces.el --- Lisp faces -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992-1996, 1998-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1992-1996, 1998-2022 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: internal
@@ -663,7 +663,12 @@ face spec.  It is mostly intended for internal use only.
 
 If FRAME is nil, set the attributes for all existing frames, as
 well as the default for new frames.  If FRAME is t, change the
-default for new frames only.
+default for new frames only.  As an exception, to reset the value
+of some attribute to `unspecified' in a way that overrides the
+non-`unspecified' value defined by the face's spec in `defface',
+for new frames, you must explicitly call this function with FRAME
+set to t and the attribute's value set to `unspecified'; just
+using FRAME of nil will not affect new frames in this case.
 
 ARGS must come in pairs ATTRIBUTE VALUE.  ATTRIBUTE must be a
 valid face attribute name.  All attributes can be set to
@@ -686,8 +691,10 @@ and `?' are allowed.
 
 VALUE specifies the relative proportionate width of the font to use.
 It must be one of the symbols `ultra-condensed', `extra-condensed',
-`condensed', `semi-condensed', `normal', `semi-expanded', `expanded',
-`extra-expanded', or `ultra-expanded'.
+`condensed' (a.k.a. `compressed', a.k.a. `narrow'),
+`semi-condensed' (a.k.a. `demi-condensed'), `normal' (a.k.a. `medium',
+a.k.a. `regular'), `semi-expanded' (a.k.a. `demi-expanded'),
+`expanded', `extra-expanded', or `ultra-expanded' (a.k.a. `wide').
 
 `:height'
 
@@ -703,9 +710,11 @@ for it to be relative to).
 `:weight'
 
 VALUE specifies the weight of the font to use.  It must be one of
-the symbols `ultra-heavy', `heavy', `ultra-bold', `extra-bold',
-`bold', `semi-bold', `medium', `normal', `book', `semi-light',
-`light', `extra-light', `ultra-light', or `thin'.
+the symbols `ultra-heavy', `heavy' (a.k.a. `black'),
+`ultra-bold' (a.k.a. `extra-bold'), `bold',
+`semi-bold' (a.k.a. `demi-bold'), `medium', `normal' (a.k.a. `regular',
+a.k.a. `book'), `semi-light' (a.k.a. `demi-light'),
+`light', `extra-light' (a.k.a. `ultra-light'), or `thin'.
 
 `:slant'
 
@@ -1061,6 +1070,9 @@ of the default face.  Value is FACE."
 
 (defvar crm-separator) ; from crm.el
 
+(defconst read-face-name-sample-text "SAMPLE"
+  "Text string to display as the sample text for `read-face-name'.")
+
 (defun read-face-name (prompt &optional default multiple)
   "Read one or more face names, prompting with PROMPT.
 PROMPT should not end in a space or a colon.
@@ -1077,54 +1089,67 @@ That is, if DEFAULT is a list and MULTIPLE is nil, the first
 element of DEFAULT is returned.  If DEFAULT isn't a list, but
 MULTIPLE is non-nil, a one-element list containing DEFAULT is
 returned.  Otherwise, DEFAULT is returned verbatim."
-  (unless (listp default)
-    (setq default (list default)))
-  (when default
-    (setq default
-          (if multiple
-              (mapconcat (lambda (f) (if (symbolp f) (symbol-name f) f))
-                         default ", ")
-            ;; If we only want one, and the default is more than one,
-            ;; discard the unwanted ones.
-            (setq default (car default))
-            (if (symbolp default)
-                (symbol-name default)
-              default))))
-  (when (and default (not multiple))
-    (require 'crm)
-    ;; For compatibility with `completing-read-multiple' use `crm-separator'
-    ;; to define DEFAULT if MULTIPLE is nil.
-    (setq default (car (split-string default crm-separator t))))
+  (let (defaults)
+    (unless (listp default)
+      (setq default (list default)))
+    (when default
+      (setq default
+            (if multiple
+                (mapconcat (lambda (f) (if (symbolp f) (symbol-name f) f))
+                           default ", ")
+              ;; If we only want one, and the default is more than one,
+              ;; discard the unwanted ones and use them only in the
+              ;; "future history" retrieved via `M-n M-n ...'.
+              (setq defaults default default (car default))
+              (if (symbolp default)
+                  (symbol-name default)
+                default))))
+    (when (and default (not multiple))
+      (require 'crm)
+      ;; For compatibility with `completing-read-multiple' use `crm-separator'
+      ;; to define DEFAULT if MULTIPLE is nil.
+      (setq default (car (split-string default crm-separator t))))
 
-  ;; Older versions of `read-face-name' did not append ": " to the
-  ;; prompt, so there are third party libraries that have that in the
-  ;; prompt.  If so, remove it.
-  (setq prompt (replace-regexp-in-string ": ?\\'" "" prompt))
-  (let ((prompt (if default
-                    (format-prompt prompt default)
-                  (format "%s: " prompt)))
-        aliasfaces nonaliasfaces faces)
-    ;; Build up the completion tables.
-    (mapatoms (lambda (s)
-                (if (facep s)
-                    (if (get s 'face-alias)
-                        (push (symbol-name s) aliasfaces)
-                      (push (symbol-name s) nonaliasfaces)))))
-    (if multiple
-        (progn
-          (dolist (face (completing-read-multiple
-                         prompt
-                         (completion-table-in-turn nonaliasfaces aliasfaces)
-                         nil t nil 'face-name-history default))
-            ;; Ignore elements that are not faces
-            ;; (for example, because DEFAULT was "all faces")
-            (if (facep face) (push (intern face) faces)))
-          (nreverse faces))
-      (let ((face (completing-read
-                   prompt
-                   (completion-table-in-turn nonaliasfaces aliasfaces)
-                   nil t nil 'face-name-history default)))
-        (if (facep face) (intern face))))))
+    ;; Older versions of `read-face-name' did not append ": " to the
+    ;; prompt, so there are third party libraries that have that in the
+    ;; prompt.  If so, remove it.
+    (setq prompt (replace-regexp-in-string ": ?\\'" "" prompt))
+    (let ((prompt (if default
+                      (format-prompt prompt default)
+                    (format "%s: " prompt)))
+          (completion-extra-properties
+           '(:affixation-function
+             (lambda (faces)
+               (mapcar
+                (lambda (face)
+                  (list face
+                        (concat (propertize read-face-name-sample-text
+                                            'face face)
+                                "\t")
+                        ""))
+                faces))))
+          aliasfaces nonaliasfaces faces)
+      ;; Build up the completion tables.
+      (mapatoms (lambda (s)
+                  (if (facep s)
+                      (if (get s 'face-alias)
+                          (push (symbol-name s) aliasfaces)
+                        (push (symbol-name s) nonaliasfaces)))))
+      (if multiple
+          (progn
+            (dolist (face (completing-read-multiple
+                           prompt
+                           (completion-table-in-turn nonaliasfaces aliasfaces)
+                           nil t nil 'face-name-history default))
+              ;; Ignore elements that are not faces
+              ;; (for example, because DEFAULT was "all faces")
+              (if (facep face) (push (intern face) faces)))
+            (nreverse faces))
+        (let ((face (completing-read
+                     prompt
+                     (completion-table-in-turn nonaliasfaces aliasfaces)
+                     nil t nil 'face-name-history defaults)))
+          (if (facep face) (intern face)))))))
 
 ;; Not defined without X, but behind window-system test.
 (defvar x-bitmap-file-path)
@@ -1718,7 +1743,15 @@ The following sources are applied in this order:
         (and tail (face-spec-set-2 face frame
                                    (list :extend (cadr tail))))))
     (setq face-attrs (face-spec-choose (get face 'face-override-spec) frame))
-    (face-spec-set-2 face frame face-attrs)))
+    (face-spec-set-2 face frame face-attrs)
+    (when (and (fboundp 'set-frame-parameter) ; This isn't available
+                                              ; during loadup.
+               (eq face 'scroll-bar))
+      ;; Set the `scroll-bar-foreground' and `scroll-bar-background'
+      ;; frame parameters, because the face is handled by setting
+      ;; those two parameters.  (bug#13476)
+      (set-frame-parameter frame 'scroll-bar-foreground (face-foreground face))
+      (set-frame-parameter frame 'scroll-bar-background (face-background face)))))
 
 (defun face-spec-set-2 (face frame face-attrs)
   "Set the face attributes of FACE on FRAME according to FACE-ATTRS.
@@ -2630,7 +2663,7 @@ See `mode-line-display' for the face used on mode lines."
   :group 'basic-faces)
 
 (defface mode-line-active
-  '((t :inherit (mode-line variable-pitch)))
+  '((t :inherit mode-line))
   "Face for the selected mode line.
 This inherits from the `mode-line' face."
   :version "29.1"
@@ -2639,7 +2672,7 @@ This inherits from the `mode-line' face."
 
 (defface mode-line-inactive
   '((default
-     :inherit (mode-line variable-pitch))
+     :inherit mode-line)
     (((class color) (min-colors 88) (background light))
      :weight light
      :box (:line-width -1 :color "grey75" :style nil)
@@ -2801,11 +2834,9 @@ used to display the prompt text."
   :group 'frames
   :group 'basic-faces)
 
-(defface scroll-bar
-  '((((background light)) :foreground "black")
-    (((background dark))  :foreground "white"))
+(defface scroll-bar '((t nil))
   "Basic face for the scroll bar colors under X."
-  :version "28.1"
+  :version "21.1"
   :group 'frames
   :group 'basic-faces)
 
@@ -2963,7 +2994,7 @@ It is used for characters of no fonts too."
   :group 'basic-faces)
 
 (defface read-multiple-choice-face
-  '((t (:inherit underline
+  '((t (:inherit (help-key-binding underline)
         :weight bold)))
   "Face for the symbol name in `read-multiple-choice' output."
   :group 'basic-faces

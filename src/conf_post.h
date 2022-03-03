@@ -1,6 +1,6 @@
 /* conf_post.h --- configure.ac includes this via AH_BOTTOM
 
-Copyright (C) 1988, 1993-1994, 1999-2002, 2004-2021 Free Software
+Copyright (C) 1988, 1993-1994, 1999-2002, 2004-2022 Free Software
 Foundation, Inc.
 
 This file is part of GNU Emacs.
@@ -182,6 +182,26 @@ You lose; /* Emacs for DOS must be compiled with DJGPP */
 # define SIZE_MAX  4294967295U
 #endif
 
+/* Things that lib/reg* wants.  */
+
+#define mbrtowc(pwc, s, n, ps) mbtowc ((pwc), (s), (n))
+#define wcrtomb(s, wc, ps) wctomb ((s), (wc))
+#define btowc(b) ((wchar_t) (b))
+#define towupper(chr) toupper (chr)
+#define towlower(chr) tolower (chr)
+#define iswalnum(chr) isalnum (chr)
+#define wctype(name) ((wctype_t) 0)
+#define iswctype(wc, type) false
+#define mbsinit(ps) 1
+
+/* Some things that lib/at-func.c wants.  */
+#define GNULIB_SUPPORT_ONLY_AT_FDCWD
+
+/* Needed by lib/lchmod.c.  */
+#define EOPNOTSUPP EINVAL
+
+#define MALLOC_0_IS_NONNULL 1
+
 /* We must intercept 'opendir' calls to stash away the directory name,
    so we could reuse it in readlinkat; see msdos.c.  */
 #define opendir sys_opendir
@@ -351,6 +371,19 @@ extern int emacs_setenv_TZ (char const *);
    For now, assume that this problem occurs on all platforms.  */
 #if ADDRESS_SANITIZER && !defined vfork
 # define vfork fork
+#endif
+
+/* vfork is deprecated on at least macOS 11.6 and later, but it still works
+   and is faster than fork, so silence the warning as if we knew what we
+   are doing.  */
+#ifdef DARWIN_OS
+#define VFORK()								\
+  (_Pragma("clang diagnostic push")					\
+   _Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")	\
+   vfork ()								\
+   _Pragma("clang diagnostic pop"))
+#else
+#define VFORK() vfork ()
 #endif
 
 #if ! (defined __FreeBSD__ || defined GNU_LINUX || defined __MINGW32__)

@@ -1,6 +1,6 @@
 /* Record indices of function doc strings stored in a file. -*- coding: utf-8 -*-
 
-Copyright (C) 1985-1986, 1993-1995, 1997-2021 Free Software Foundation,
+Copyright (C) 1985-1986, 1993-1995, 1997-2022 Free Software Foundation,
 Inc.
 
 This file is part of GNU Emacs.
@@ -83,17 +83,20 @@ get_doc_string (Lisp_Object filepos, bool unibyte, bool definition)
 {
   char *from, *to, *name, *p, *p1;
   Lisp_Object file, pos;
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
+  Lisp_Object dir;
   USE_SAFE_ALLOCA;
 
   if (FIXNUMP (filepos))
     {
       file = Vdoc_file_name;
+      dir = Vdoc_directory;
       pos = filepos;
     }
   else if (CONSP (filepos))
     {
       file = XCAR (filepos);
+      dir = Fsymbol_value (Qlisp_directory);
       pos = XCDR (filepos);
     }
   else
@@ -101,7 +104,7 @@ get_doc_string (Lisp_Object filepos, bool unibyte, bool definition)
 
   EMACS_INT position = eabs (XFIXNUM (pos));
 
-  if (!STRINGP (Vdoc_directory))
+  if (!STRINGP (dir))
     return Qnil;
 
   if (!STRINGP (file))
@@ -113,7 +116,7 @@ get_doc_string (Lisp_Object filepos, bool unibyte, bool definition)
   Lisp_Object tem = Ffile_name_absolute_p (file);
   file = ENCODE_FILE (file);
   Lisp_Object docdir
-    = NILP (tem) ? ENCODE_FILE (Vdoc_directory) : empty_unibyte_string;
+    = NILP (tem) ? ENCODE_FILE (dir) : empty_unibyte_string;
   ptrdiff_t docdir_sizemax = SBYTES (docdir) + 1;
   if (will_dump_p ())
     docdir_sizemax = max (docdir_sizemax, sizeof sibling_etc);
@@ -542,7 +545,6 @@ the same file name is found in the `doc-directory'.  */)
   EMACS_INT pos;
   Lisp_Object sym;
   char *p, *name;
-  ptrdiff_t count;
   char const *dirname;
   ptrdiff_t dirlen;
   /* Preloaded defcustoms using custom-initialize-delay are added to
@@ -566,7 +568,7 @@ the same file name is found in the `doc-directory'.  */)
       dirlen = SBYTES (Vdoc_directory);
     }
 
-  count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
   USE_SAFE_ALLOCA;
   name = SAFE_ALLOCA (dirlen + SBYTES (filename) + 1);
   lispstpcpy (stpcpy (name, dirname), filename); 	/*** Add this line ***/
@@ -703,6 +705,7 @@ See variable `text-quoting-style'.  */)
 void
 syms_of_doc (void)
 {
+  DEFSYM (Qlisp_directory, "lisp-directory");
   DEFSYM (Qsubstitute_command_keys, "substitute-command-keys");
   DEFSYM (Qfunction_documentation, "function-documentation");
   DEFSYM (Qgrave, "grave");

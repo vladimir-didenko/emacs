@@ -1,6 +1,6 @@
 ;;; re-builder.el --- building Regexps with visual feedback -*- lexical-binding: t -*-
 
-;; Copyright (C) 1999-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2022 Free Software Foundation, Inc.
 
 ;; Author: Detlev Zundel <dzu@gnu.org>
 ;; Keywords: matching, lisp, tools
@@ -323,7 +323,10 @@ Except for Lisp syntax this is the same as `reb-regexp'.")
          (reb-lisp-mode))
         (t (reb-mode)))
   (reb-restart-font-lock)
-  (reb-do-update))
+  ;; When using `rx' syntax, the initial syntax () is invalid.  But
+  ;; don't signal an error in that case.
+  (ignore-errors
+    (reb-do-update)))
 
 (defun reb-mode-buffer-p ()
   "Return non-nil if the current buffer is a RE Builder buffer."

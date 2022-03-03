@@ -1,6 +1,6 @@
 ;;; sh-script.el --- shell-script editing commands for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1993-1997, 1999, 2001-2021 Free Software Foundation,
+;; Copyright (C) 1993-1997, 1999, 2001-2022 Free Software Foundation,
 ;; Inc.
 
 ;; Author: Daniel Pfeiffer <occitan@esperanto.org>
@@ -1407,7 +1407,7 @@ If FORCE is non-nil and no process found, create one."
 (defun sh-show-shell ()
   "Pop the shell interaction buffer."
   (interactive)
-  (pop-to-buffer (process-buffer (sh-shell-process t))))
+  (pop-to-buffer (process-buffer (sh-shell-process t)) display-comint-buffer-action))
 
 (defun sh-send-text (text)
   "Send the text to the `sh-shell-process'."
@@ -1602,7 +1602,7 @@ This adds rules for comments and assignments."
 
 ;;; Completion
 
-(defvar sh--completion-keywords '("if" "while" "until" "for"))
+(defvar sh--completion-keywords '("if" "while" "until" "for" "then"))
 
 (defun sh--vars-before-point ()
   (save-excursion
@@ -1774,21 +1774,27 @@ Does not preserve point."
         (n (skip-syntax-backward ".")))
     (if (or (zerop n)
             (and (eq n -1)
+                 ;; Skip past quoted white space.
                  (let ((p (point)))
                    (if (eq -1 (% (skip-syntax-backward "\\") 2))
                        t
                      (goto-char p)
                      nil))))
         (while
-            (progn (skip-syntax-backward ".w_'")
-                   (or (not (zerop (skip-syntax-backward "\\")))
-                       (when (eq ?\\ (char-before (1- (point))))
-                         (let ((p (point)))
-                           (forward-char -1)
-                           (if (eq -1 (% (skip-syntax-backward "\\") 2))
-                               t
-                             (goto-char p)
-                             nil))))))
+            (progn
+              ;; Skip past words, but stop at semicolons.
+              (while (and (not (zerop (skip-syntax-backward "w_'")))
+                          (not (eq (char-before (point)) ?\;))
+                          (skip-syntax-backward ".")))
+              (or (not (zerop (skip-syntax-backward "\\")))
+                  ;; Skip past quoted white space.
+                  (when (eq ?\\ (char-before (1- (point))))
+                    (let ((p (point)))
+                      (forward-char -1)
+                      (if (eq -1 (% (skip-syntax-backward "\\") 2))
+                          t
+                        (goto-char p)
+                        nil))))))
       (goto-char (- (point) (% (skip-syntax-backward "\\") 2))))
     (buffer-substring-no-properties (point) pos)))
 
@@ -1973,7 +1979,7 @@ May return nil if the line should not be treated as continued."
          (cons 'column (smie-indent-keyword ";"))
        (smie-rule-separator kind)))
     (`(:after . ,(or ";;" ";&" ";;&"))
-     (with-demoted-errors
+     (with-demoted-errors "SMIE rule error: %S"
        (smie-backward-sexp token)
        (cons 'column
              (if (or (smie-rule-bolp)

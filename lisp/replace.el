@@ -1,6 +1,6 @@
 ;;; replace.el --- replace commands for Emacs -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1987, 1992, 1994, 1996-1997, 2000-2021 Free
+;; Copyright (C) 1985-1987, 1992, 1994, 1996-1997, 2000-2022 Free
 ;; Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -186,6 +186,12 @@ See `replace-regexp' and `query-replace-regexp-eval'.")
                         length)
              length)))))
 
+(defvar query-replace-read-from-default nil
+  "Function to get default non-regexp value for `query-replace-read-from'.")
+
+(defvar query-replace-read-from-regexp-default nil
+  "Function to get default regexp value for `query-replace-read-from'.")
+
 (defun query-replace-read-from-suggestions ()
   "Return a list of standard suggestions for `query-replace-read-from'.
 By default, the list includes the active region, the identifier
@@ -233,8 +239,12 @@ wants to replace FROM with TO."
 		       query-replace-defaults))
 	     (symbol-value query-replace-from-history-variable)))
 	   (minibuffer-allow-text-properties t) ; separator uses text-properties
+	   (default (when (and query-replace-read-from-default (not regexp-flag))
+		      (funcall query-replace-read-from-default)))
 	   (prompt
-	    (cond ((and query-replace-defaults separator)
+            (cond ((and query-replace-read-from-regexp-default regexp-flag) prompt)
+                  (default (format-prompt prompt default))
+                  ((and query-replace-defaults separator)
                    (format-prompt prompt (car minibuffer-history)))
                   (query-replace-defaults
                    (format-prompt
@@ -255,16 +265,26 @@ wants to replace FROM with TO."
                                 (append '((separator . t) (face . t))
                                         text-property-default-nonsticky)))
                 (if regexp-flag
-                    (read-regexp prompt nil 'minibuffer-history)
+                    (read-regexp
+                     (if query-replace-read-from-regexp-default
+                         (string-remove-suffix ": " prompt)
+                       prompt)
+                     query-replace-read-from-regexp-default
+                     'minibuffer-history)
                   (read-from-minibuffer
                    prompt nil nil nil nil
-                   (query-replace-read-from-suggestions) t)))))
+                   (if default
+                       (delete-dups
+                        (cons default (query-replace-read-from-suggestions)))
+                     (query-replace-read-from-suggestions))
+                   t)))))
            (to))
-      (if (and (zerop (length from)) query-replace-defaults)
+      (if (and (zerop (length from)) query-replace-defaults (not default))
 	  (cons (caar query-replace-defaults)
 		(query-replace-compile-replacement
 		 (cdar query-replace-defaults) regexp-flag))
-        (setq from (query-replace--split-string from))
+        (setq from (or (and (zerop (length from)) default)
+                       (query-replace--split-string from)))
         (when (consp from) (setq to (cdr from) from (car from)))
         (add-to-history query-replace-from-history-variable from nil t)
         ;; Warn if user types \n or \t, but don't reject the input.
@@ -1413,10 +1433,15 @@ To return to ordinary Occur mode, use \\[occur-cease-edit]."
                             (length s1)))))
                      (prefix-len (funcall common-prefix buf-str text))
                      (suffix-len (funcall common-prefix
-                                          (reverse buf-str) (reverse text))))
+                                          (reverse (substring
+                                                    buf-str prefix-len))
+                                          (reverse (substring
+                                                    text prefix-len)))))
                 (setq beg-pos (+ beg-pos prefix-len))
                 (setq end-pos (- end-pos suffix-len))
-                (setq text (substring text prefix-len (- suffix-len)))
+                (setq text (substring text prefix-len
+                                      (and (not (zerop suffix-len))
+                                           (- suffix-len))))
                 (delete-region beg-pos end-pos)
                 (goto-char beg-pos)
                 (insert text)))
@@ -2086,6 +2111,7 @@ See also `multi-occur'."
 				                     ;; (for Occur Edit mode).
 				                     front-sticky t
 						     rear-nonsticky t
+                                                     read-only t
 						     occur-target ,markers
 						     follow-link t
 				                     help-echo "mouse-2: go to this occurrence"))))
@@ -2621,6 +2647,15 @@ It is used by `query-replace-regexp', `replace-regexp',
 It is called with three arguments, as if it were
 `re-search-forward'.")
 
+(defvar replace-regexp-function nil
+  "Function to convert the FROM string of query-replace commands to a regexp.
+This is used by `query-replace', `query-replace-regexp', etc. as
+the value of `isearch-regexp-function' when they search for the
+occurences of the string/regexp to be replaced.  This is intended
+to be used when the string to be replaced, as typed by the user,
+is not to be interpreted literally, but instead should be converted
+to a regexp that is actually used for the search.")
+
 (defun replace-search (search-string limit regexp-flag delimited-flag
 		       case-fold &optional backward)
   "Search for the next occurrence of SEARCH-STRING to replace."
@@ -2633,7 +2668,8 @@ It is called with three arguments, as if it were
   ;; outside of this function because then another I-search
   ;; used after `recursive-edit' might override them.
   (let* ((isearch-regexp regexp-flag)
-	 (isearch-regexp-function (or delimited-flag
+	 (isearch-regexp-function (or replace-regexp-function
+				      delimited-flag
 				      (and replace-char-fold
 					   (not regexp-flag)
 					   #'char-fold-to-regexp)))
@@ -2690,7 +2726,8 @@ It is called with three arguments, as if it were
   (if query-replace-lazy-highlight
       (let ((isearch-string search-string)
 	    (isearch-regexp regexp-flag)
-	    (isearch-regexp-function (or delimited-flag
+	    (isearch-regexp-function (or replace-regexp-function
+					 delimited-flag
 					 (and replace-char-fold
 					      (not regexp-flag)
 					      #'char-fold-to-regexp)))
@@ -3196,7 +3233,13 @@ characters."
 			       (last-command 'recenter-top-bottom))
 			   (recenter-top-bottom)))
 			((eq def 'edit)
-			 (let ((opos (point-marker)))
+			 (let ((opos (point-marker))
+			       ;; Restore original isearch filter to allow
+			       ;; using isearch in a recursive edit even
+			       ;; when perform-replace was started from
+			       ;; `xref--query-replace-1' that let-binds
+			       ;; `isearch-filter-predicate' (bug#53758).
+			       (isearch-filter-predicate #'isearch-filter-visible))
 			   (setq real-match-data (replace-match-data
 						  nil real-match-data
 						  real-match-data))

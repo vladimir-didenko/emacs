@@ -1,6 +1,6 @@
 ;;; subr.el --- basic lisp subroutines for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1992, 1994-1995, 1999-2021 Free Software
+;; Copyright (C) 1985-1986, 1992, 1994-1995, 1999-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -1149,8 +1149,17 @@ Subkeymaps may be modified but are not canonicalized."
       (setq map (map-keymap ;; -internal
                  (lambda (key item)
                    (if (consp key)
-                       ;; Treat char-ranges specially.
-                       (push (cons key item) ranges)
+                       (if (= (car key) (1- (cdr key)))
+                           ;; If we have a two-character range, then
+                           ;; treat it as two separate characters
+                           ;; (because this makes `describe-bindings'
+                           ;; look better and shouldn't affect
+                           ;; anything else).
+                           (progn
+                             (push (cons (car key) item) bindings)
+                             (push (cons (cdr key) item) bindings))
+                         ;; Treat char-ranges specially.
+                         (push (cons key item) ranges))
                      (push (cons key item) bindings)))
                  map)))
     ;; Create the new map.
@@ -1896,7 +1905,9 @@ performance impact when running `add-hook' and `remove-hook'."
 	      (set (make-local-variable hook) (list t)))
     ;; Detect the case where make-local-variable was used on a hook
     ;; and do what we used to do.
-    (unless (and (consp (symbol-value hook)) (memq t (symbol-value hook)))
+    (when (and (local-variable-if-set-p hook)
+               (not (and (consp (symbol-value hook))
+                         (memq t (symbol-value hook)))))
       (setq local t)))
   (let ((hook-value (if local (symbol-value hook) (default-value hook))))
     ;; If the hook value is a single function, turn it into a list.
@@ -1904,26 +1915,34 @@ performance impact when running `add-hook' and `remove-hook'."
       (setq hook-value (list hook-value)))
     ;; Do the actual addition if necessary
     (unless (member function hook-value)
-      (when (stringp function)          ;FIXME: Why?
-	(setq function (purecopy function)))
-      ;; All those `equal' tests performed between functions can end up being
-      ;; costly since those functions may be large recursive and even cyclic
-      ;; structures, so we index `hook--depth-alist' with `eq'.  (bug#46326)
-      (when (or (get hook 'hook--depth-alist) (not (zerop depth)))
-        ;; Note: The main purpose of the above `when' test is to avoid running
-        ;; this `setf' before `gv' is loaded during bootstrap.
-        (setf (alist-get function (get hook 'hook--depth-alist) 0) depth))
-      (setq hook-value
-	    (if (< 0 depth)
-		(append hook-value (list function))
-	      (cons function hook-value)))
-      (let ((depth-alist (get hook 'hook--depth-alist)))
-        (when depth-alist
-          (setq hook-value
-                (sort (if (< 0 depth) hook-value (copy-sequence hook-value))
-                      (lambda (f1 f2)
-                        (< (alist-get f1 depth-alist 0 nil #'eq)
-                           (alist-get f2 depth-alist 0 nil #'eq))))))))
+      (let ((depth-sym (get hook 'hook--depth-alist)))
+        ;; While the `member' test above has to use `equal' for historical
+        ;; reasons, `equal' is a performance problem on large/cyclic functions,
+        ;; so we index `hook--depth-alist' with `eql'.  (bug#46326)
+        (unless (zerop depth)
+          (unless depth-sym
+            (setq depth-sym (make-symbol "depth-alist"))
+            (set depth-sym nil)
+            (setf (get hook 'hook--depth-alist) depth-sym))
+          (if local (make-local-variable depth-sym))
+          (setf (alist-get function
+                           (if local (symbol-value depth-sym)
+                             (default-value depth-sym))
+                           0)
+                depth))
+        (setq hook-value
+	      (if (< 0 depth)
+		  (append hook-value (list function))
+		(cons function hook-value)))
+        (when depth-sym
+          (let ((depth-alist (if local (symbol-value depth-sym)
+                               (default-value depth-sym))))
+            (when depth-alist
+              (setq hook-value
+                    (sort (if (< 0 depth) hook-value (copy-sequence hook-value))
+                          (lambda (f1 f2)
+                            (< (alist-get f1 depth-alist 0 nil #'eq)
+                               (alist-get f2 depth-alist 0 nil #'eq))))))))))
     ;; Set the actual variable
     (if local
 	(progn
@@ -1971,7 +1990,7 @@ one will be removed."
                                 (format "%s hook to remove: "
                                         (if local "Buffer-local" "Global"))
                                 fn-alist
-                                nil t)
+                                nil t nil 'set-variable-value-history)
                                fn-alist nil nil #'string=)))
      (list hook function local)))
   (or (boundp hook) (set hook nil))
@@ -1996,9 +2015,14 @@ one will be removed."
       (when old-fun
         ;; Remove auxiliary depth info to avoid leaks (bug#46414)
         ;; and to avoid the list growing too long.
-        (let* ((depths (get hook 'hook--depth-alist))
-               (di (assq old-fun depths)))
-          (when di (put hook 'hook--depth-alist (delq di depths)))))
+        (let* ((depth-sym (get hook 'hook--depth-alist))
+               (depth-alist (if depth-sym (if local (symbol-value depth-sym)
+                                            (default-value depth-sym))))
+               (di (assq old-fun depth-alist)))
+          (when di
+            (setf (if local (symbol-value depth-sym)
+                    (default-value depth-sym))
+                  (remq di depth-alist)))))
       ;; If the function is on the global hook, we need to shadow it locally
       ;;(when (and local (member function (default-value hook))
       ;;	       (not (member (cons 'not function) hook-value)))
@@ -2160,7 +2184,7 @@ can do the job."
               (not (macroexp-const-p append)))
           exp
         (let* ((sym (cadr list-var))
-               (append (eval append))
+               (append (eval append lexical-binding))
                (msg (format-message
                      "`add-to-list' can't use lexical var `%s'; use `push' or `cl-pushnew'"
                      sym))
@@ -2709,7 +2733,7 @@ It can be retrieved with `(process-get PROCESS PROPNAME)'."
 
 (defconst read-key-full-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [t] 'dummy)
+    (define-key map [t] #'ignore)       ;Dummy binding.
 
     ;; ESC needs to be unbound so that escape sequences in
     ;; `input-decode-map' are still processed by `read-key-sequence'.
@@ -3249,6 +3273,15 @@ switch back again to the minibuffer before entering the
 character.  This is not possible when using `read-key', but using
 `read-key' may be less confusing to some users.")
 
+(defvar from--tty-menu-p nil
+  "Non-nil means the current command was invoked from a TTY menu.")
+(defun use-dialog-box-p ()
+  "Say whether the current command should prompt the user via a dialog box."
+  (and last-input-event                 ; not during startup
+       (or (listp last-nonmenu-event)   ; invoked by a mouse event
+           from--tty-menu-p)            ; invoked via TTY menu
+       use-dialog-box))
+
 (defun y-or-n-p (prompt)
   "Ask user a \"y or n\" question.
 Return t if answer is \"y\" and nil if it is \"n\".
@@ -3308,10 +3341,7 @@ like) while `y-or-n-p' is running)."
 		  ((and (member str '("h" "H")) help-form) (print help-form))
 		  (t (setq temp-prompt (concat "Please answer y or n.  "
 					       prompt))))))))
-     ((and (display-popup-menus-p)
-           last-input-event             ; not during startup
-	   (listp last-nonmenu-event)
-	   use-dialog-box)
+     ((use-dialog-box-p)
       (setq prompt (funcall padded prompt t)
 	    answer (x-popup-dialog t `(,prompt ("Yes" . act) ("No" . skip)))))
      (y-or-n-p-use-read-key
@@ -4294,11 +4324,13 @@ in which case `save-window-excursion' cannot help."
 (defmacro with-output-to-temp-buffer (bufname &rest body)
   "Bind `standard-output' to buffer BUFNAME, eval BODY, then show that buffer.
 
-This construct makes buffer BUFNAME empty before running BODY.
-It does not make the buffer current for BODY.
-Instead it binds `standard-output' to that buffer, so that output
-generated with `prin1' and similar functions in BODY goes into
-the buffer.
+This is a convenience macro meant for displaying help buffers and
+the like.  It empties the BUFNAME buffer before evaluating BODY
+and disables undo in that buffer.
+
+It does not make the buffer current for BODY.  Instead it binds
+`standard-output' to that buffer, so that output generated with
+`prin1' and similar functions in BODY goes into the buffer.
 
 At the end of BODY, this marks buffer BUFNAME unmodified and displays
 it in a window, but does not select it.  The normal way to do this is
@@ -4454,7 +4486,7 @@ is allowed once again.  (Immediately, if `inhibit-quit' is nil.)"
 	   ;; Without this, it will not be handled until the next function
 	   ;; call, and that might allow it to exit thru a condition-case
 	   ;; that intends to handle the quit signal next time.
-	   (eval '(ignore nil)))))
+	   (eval '(ignore nil) t))))
 
 (defmacro while-no-input (&rest body)
   "Execute BODY only as long as there's no pending input.
@@ -4514,19 +4546,21 @@ It should contain a single %-sequence; e.g., \"Error: %S\".
 
 If `debug-on-error' is non-nil, run BODY without catching its errors.
 This is to be used around code that is not expected to signal an error
-but that should be robust in the unexpected case that an error is signaled.
-
-For backward compatibility, if FORMAT is not a constant string, it
-is assumed to be part of BODY, in which case the message format
-used is \"Error: %S\"."
+but that should be robust in the unexpected case that an error is signaled."
   (declare (debug t) (indent 1))
-  (let ((err (make-symbol "err"))
-        (format (if (and (stringp format) body) format
-                  (prog1 "Error: %S"
-                    (if format (push format body))))))
-    `(condition-case-unless-debug ,err
-         ,(macroexp-progn body)
-       (error (message ,format ,err) nil))))
+  (let* ((err (make-symbol "err"))
+         (orig-body body)
+         (format (if (and (stringp format) body) format
+                   (prog1 "Error: %S"
+                     (if format (push format body)))))
+         (exp
+          `(condition-case-unless-debug ,err
+               ,(macroexp-progn body)
+             (error (message ,format ,err) nil))))
+    (if (eq orig-body body) exp
+      ;; The use without `format' is obsolete, let's warn when we bump
+      ;; into any such remaining uses.
+      (macroexp-warn-and-return format "Missing format argument" exp))))
 
 (defmacro combine-after-change-calls (&rest body)
   "Execute BODY, but don't call the after-change functions till the end.
@@ -6526,136 +6560,6 @@ not a list, return a one-element list containing OBJECT."
       object
     (list object)))
 
-(defun define-keymap--compile (form &rest args)
-  ;; This compiler macro is only there for compile-time
-  ;; error-checking; it does not change the call in any way.
-  (while (and args
-              (keywordp (car args))
-              (not (eq (car args) :menu)))
-    (unless (memq (car args) '(:full :keymap :parent :suppress :name :prefix))
-      (byte-compile-warn "Invalid keyword: %s" (car args)))
-    (setq args (cdr args))
-    (when (null args)
-      (byte-compile-warn "Uneven number of keywords in %S" form))
-    (setq args (cdr args)))
-  ;; Bindings.
-  (while args
-    (let ((key (pop args)))
-      (when (and (stringp key) (not (key-valid-p key)))
-        (byte-compile-warn "Invalid `kbd' syntax: %S" key)))
-    (when (null args)
-      (byte-compile-warn "Uneven number of key bindings in %S" form))
-    (setq args (cdr args)))
-  form)
-
-(defun define-keymap (&rest definitions)
-  "Create a new keymap and define KEY/DEFEFINITION pairs as key sequences.
-The new keymap is returned.
-
-Options can be given as keywords before the KEY/DEFEFINITION
-pairs.  Available keywords are:
-
-:full      If non-nil, create a chartable alist (see `make-keymap').
-             If nil (i.e., the default), create a sparse keymap (see
-             `make-sparse-keymap').
-
-:suppress  If non-nil, the keymap will be suppressed (see `suppress-keymap').
-             If `nodigits', treat digits like other chars.
-
-:parent    If non-nil, this should be a keymap to use as the parent
-             (see `set-keymap-parent').
-
-:keymap    If non-nil, instead of creating a new keymap, the given keymap
-             will be destructively modified instead.
-
-:name      If non-nil, this should be a string to use as the menu for
-             the keymap in case you use it as a menu with `x-popup-menu'.
-
-:prefix    If non-nil, this should be a symbol to be used as a prefix
-             command (see `define-prefix-command').  If this is the case,
-             this symbol is returned instead of the map itself.
-
-KEY/DEFINITION pairs are as KEY and DEF in `keymap-set'.  KEY can
-also be the special symbol `:menu', in which case DEFINITION
-should be a MENU form as accepted by `easy-menu-define'.
-
-\(fn &key FULL PARENT SUPPRESS NAME PREFIX KEYMAP &rest [KEY DEFINITION]...)"
-  (declare (indent defun)
-           (compiler-macro define-keymap--compile))
-  (let (full suppress parent name prefix keymap)
-    ;; Handle keywords.
-    (while (and definitions
-                (keywordp (car definitions))
-                (not (eq (car definitions) :menu)))
-      (let ((keyword (pop definitions)))
-        (unless definitions
-          (error "Missing keyword value for %s" keyword))
-        (let ((value (pop definitions)))
-          (pcase keyword
-            (:full (setq full value))
-            (:keymap (setq keymap value))
-            (:parent (setq parent value))
-            (:suppress (setq suppress value))
-            (:name (setq name value))
-            (:prefix (setq prefix value))
-            (_ (error "Invalid keyword: %s" keyword))))))
-
-    (when (and prefix
-               (or full parent suppress keymap))
-      (error "A prefix keymap can't be defined with :full/:parent/:suppress/:keymap keywords"))
-
-    (when (and keymap full)
-      (error "Invalid combination: :keymap with :full"))
-
-    (let ((keymap (cond
-                   (keymap keymap)
-                   (prefix (define-prefix-command prefix nil name))
-                   (full (make-keymap name))
-                   (t (make-sparse-keymap name)))))
-      (when suppress
-        (suppress-keymap keymap (eq suppress 'nodigits)))
-      (when parent
-        (set-keymap-parent keymap parent))
-
-      ;; Do the bindings.
-      (while definitions
-        (let ((key (pop definitions)))
-          (unless definitions
-            (error "Uneven number of key/definition pairs"))
-          (let ((def (pop definitions)))
-            (if (eq key :menu)
-                (easy-menu-define nil keymap "" def)
-              (keymap-set keymap key def)))))
-      keymap)))
-
-(defmacro defvar-keymap (variable-name &rest defs)
-  "Define VARIABLE-NAME as a variable with a keymap definition.
-See `define-keymap' for an explanation of the keywords and KEY/DEFINITION.
-
-In addition to the keywords accepted by `define-keymap', this
-macro also accepts a `:doc' keyword, which (if present) is used
-as the variable documentation string.
-
-\(fn VARIABLE-NAME &key DOC FULL PARENT SUPPRESS NAME PREFIX KEYMAP &rest [KEY DEFINITION]...)"
-  (declare (indent 1))
-  (let ((opts nil)
-        doc)
-    (while (and defs
-                (keywordp (car defs))
-                (not (eq (car defs) :menu)))
-      (let ((keyword (pop defs)))
-        (unless defs
-          (error "Uneven number of keywords"))
-        (if (eq keyword :doc)
-            (setq doc (pop defs))
-          (push keyword opts)
-          (push (pop defs) opts))))
-    (unless (zerop (% (length defs) 2))
-      (error "Uneven number of key/definition pairs: %s" defs))
-    `(defvar ,variable-name
-       (define-keymap ,@(nreverse opts) ,@defs)
-       ,@(and doc (list doc)))))
-
 (defmacro with-delayed-message (args &rest body)
   "Like `progn', but display MESSAGE if BODY takes longer than TIMEOUT seconds.
 The MESSAGE form will be evaluated immediately, but the resulting
@@ -6666,5 +6570,47 @@ string will be displayed only if BODY takes longer than TIMEOUT seconds.
   `(funcall-with-delayed-message ,(car args) ,(cadr args)
                                  (lambda ()
                                    ,@body)))
+
+(defun function-alias-p (func &optional noerror)
+  "Return nil if FUNC is not a function alias.
+If FUNC is a function alias, return the function alias chain.
+
+If the function alias chain contains loops, an error will be
+signalled.  If NOERROR, the non-loop parts of the chain is returned."
+  (declare (side-effect-free t))
+  (let ((chain nil)
+        (orig-func func))
+    (nreverse
+     (catch 'loop
+       (while (and (symbolp func)
+                   (setq func (symbol-function func))
+                   (symbolp func))
+         (when (or (memq func chain)
+                   (eq func orig-func))
+           (if noerror
+               (throw 'loop chain)
+             (signal 'cyclic-function-indirection (list orig-func))))
+         (push func chain))
+       chain))))
+
+(defun readablep (object)
+  "Say whether OBJECT has a readable syntax.
+This means that OBJECT can be printed out and then read back
+again by the Lisp reader.  This function returns nil if OBJECT is
+unreadable, and the printed representation (from `prin1') of
+OBJECT if it is readable."
+  (declare (side-effect-free t))
+  (catch 'unreadable
+    (let ((print-unreadable-function
+           (lambda (_object _escape)
+             (throw 'unreadable nil))))
+      (prin1-to-string object))))
+
+(defun delete-line ()
+  "Delete the current line."
+  (delete-region (line-beginning-position)
+                 (progn
+                   (forward-line 1)
+                   (point))))
 
 ;;; subr.el ends here

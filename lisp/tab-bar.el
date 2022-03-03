@@ -1,6 +1,6 @@
 ;;; tab-bar.el --- frame-local tabs with named persistent window configurations -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2019-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2019-2022 Free Software Foundation, Inc.
 
 ;; Author: Juri Linkov <juri@linkov.net>
 ;; Keywords: frames tabs
@@ -474,18 +474,22 @@ you can use the command `toggle-frame-tab-bar'."
 If t, start a new tab with the current buffer, i.e. the buffer
 that was current before calling the command that adds a new tab
 (this is the same what `make-frame' does by default).
+If the value is the symbol `window', then keep the selected
+window as a single window on the new tab, and keep all its
+window parameters except 'window-atom' and 'window-side'.
 If the value is a string, use it as a buffer name to switch to
 if such buffer exists, or switch to a buffer visiting the file or
 directory that the string specifies.  If the value is a function,
 call it with no arguments and switch to the buffer that it returns.
-If nil, duplicate the contents of the tab that was active
+If `clone', duplicate the contents of the tab that was active
 before calling the command that adds a new tab."
   :type '(choice (const     :tag "Current buffer" t)
+                 (const     :tag "Current window" window)
                  (string    :tag "Buffer" "*scratch*")
                  (directory :tag "Directory" :value "~/")
                  (file      :tag "File" :value "~/.emacs")
                  (function  :tag "Function")
-                 (const     :tag "Duplicate tab" nil))
+                 (const     :tag "Duplicate tab" clone))
   :group 'tab-bar
   :version "27.1")
 
@@ -751,9 +755,13 @@ Used by `tab-bar-format-menu-bar'."
                 (menu-bar-keymap))
     (popup-menu menu event)))
 
+(defvar tab-bar-menu-bar-button
+  (propertize "Menu" 'face 'tab-bar-tab-inactive)
+  "Button for the menu bar.")
+
 (defun tab-bar-format-menu-bar ()
   "Produce the Menu button for the tab bar that shows the menu bar."
-  `((menu-bar menu-item (propertize "Menu" 'face 'tab-bar-tab-inactive)
+  `((menu-bar menu-item ,tab-bar-menu-bar-button
      tab-bar-menu-bar :help "Menu Bar")))
 
 (defun tab-bar-format-history ()
@@ -1310,7 +1318,8 @@ configuration."
   (let ((tab-bar-new-tab-choice 'window))
     (tab-bar-new-tab))
   (tab-bar-switch-to-recent-tab)
-  (delete-window)
+  (let ((ignore-window-parameters t))
+    (delete-window))
   (tab-bar-switch-to-recent-tab))
 
 
@@ -1357,12 +1366,23 @@ After the tab is created, the hooks in
       ;; Handle the case when it's called in the active minibuffer.
       (when (minibuffer-selected-window)
         (select-window (minibuffer-selected-window)))
+      ;; Remove window parameters that can cause problems
+      ;; with `delete-other-windows' and `split-window'.
+      (unless (eq tab-bar-new-tab-choice 'clone)
+        (set-window-parameter nil 'window-atom nil)
+        (set-window-parameter nil 'window-side nil))
       (let ((ignore-window-parameters t))
-        (delete-other-windows))
-      (unless (eq tab-bar-new-tab-choice 'window)
-        ;; Create a new window to get rid of old window parameters
-        ;; (e.g. prev/next buffers) of old window.
-        (split-window) (delete-window))
+        (if (eq tab-bar-new-tab-choice 'clone)
+            ;; Create new unique windows with the same layout
+            (window-state-put (window-state-get))
+          (delete-other-windows)
+          (if (eq tab-bar-new-tab-choice 'window)
+              ;; Create new unique window from remaining window
+              (window-state-put (window-state-get))
+            ;; Create a new window to get rid of old window parameters
+            ;; (e.g. prev/next buffers) of old window.
+            (split-window) (delete-window))))
+
       (let ((buffer
              (if (functionp tab-bar-new-tab-choice)
                  (funcall tab-bar-new-tab-choice)
@@ -1440,7 +1460,7 @@ If FROM-NUMBER is a tab number, a new tab is created from that tab."
   "Clone the current tab to ARG positions to the right.
 ARG and FROM-NUMBER have the same meaning as in `tab-bar-new-tab'."
   (interactive "P")
-  (let ((tab-bar-new-tab-choice nil)
+  (let ((tab-bar-new-tab-choice 'clone)
         (tab-bar-new-tab-group t))
     (tab-bar-new-tab arg from-number)))
 
@@ -1883,6 +1903,10 @@ This navigates forward in the history of window configurations."
           (when (and (markerp wc-point) (marker-buffer wc-point))
             (goto-char wc-point)))
       (message "No more tab forward history"))))
+
+(defvar-keymap tab-bar-history-mode-map
+  "C-c <left>"  #'tab-bar-history-back
+  "C-c <right>" #'tab-bar-history-forward)
 
 (define-minor-mode tab-bar-history-mode
   "Toggle tab history mode for the tab bar.

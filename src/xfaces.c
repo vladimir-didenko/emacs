@@ -1,6 +1,6 @@
 /* xfaces.c -- "Face" primitives.
 
-Copyright (C) 1993-1994, 1998-2021 Free Software Foundation, Inc.
+Copyright (C) 1993-1994, 1998-2022 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -3165,14 +3165,15 @@ FRAME 0 means change the face on all frames, and change the default
           */
           valid_p = true;
 
-          while (!NILP (CAR_SAFE(list)))
+          while (!NILP (CAR_SAFE (list)))
             {
               key = CAR_SAFE (list);
               list = CDR_SAFE (list);
               val = CAR_SAFE (list);
               list = CDR_SAFE (list);
 
-              if (NILP (key) || NILP (val))
+              if (NILP (key) || (NILP (val)
+				 && !EQ (key, QCposition)))
                 {
                   valid_p = false;
                   break;
@@ -4150,9 +4151,9 @@ If the optional argument FRAME is given, report on face FACE in that frame.
 If FRAME is t, report on the defaults for face FACE (for new frames).
   The font default for a face is either nil, or a list
   of the form (bold), (italic) or (bold italic).
-If FRAME is omitted or nil, use the selected frame.  And, in this case,
-if the optional third argument CHARACTER is given,
-return the font name used for CHARACTER.  */)
+If FRAME is omitted or nil, use the selected frame.
+If FRAME is anything but t, and the optional third argument CHARACTER
+is given, return the font name used by FACE for CHARACTER on FRAME.  */)
   (Lisp_Object face, Lisp_Object frame, Lisp_Object character)
 {
   if (EQ (frame, Qt))
@@ -4806,7 +4807,7 @@ face_for_font (struct frame *f, Lisp_Object font_object,
                struct face *base_face)
 {
   struct face_cache *cache = FRAME_FACE_CACHE (f);
-  unsigned hash;
+  uintptr_t hash;
   int i;
   struct face *face;
 
@@ -5592,7 +5593,6 @@ realize_basic_faces (struct frame *f)
 
   if (realize_default_face (f))
     {
-      realize_named_face (f, Qmode_line, MODE_LINE_FACE_ID);
       realize_named_face (f, Qmode_line_active, MODE_LINE_ACTIVE_FACE_ID);
       realize_named_face (f, Qmode_line_inactive, MODE_LINE_INACTIVE_FACE_ID);
       realize_named_face (f, Qtool_bar, TOOL_BAR_FACE_ID);
@@ -5978,6 +5978,8 @@ realize_gui_face (struct face_cache *cache, Lisp_Object attrs[LFACE_VECTOR_SIZE]
     }
   else if (CONSP (box))
     {
+      bool set_color = false;
+
       /* `(:width WIDTH :color COLOR :shadow SHADOW)'.  SHADOW
 	 being one of `raised' or `sunken'.  */
       face->box = FACE_SIMPLE_BOX;
@@ -6015,6 +6017,7 @@ realize_gui_face (struct face_cache *cache, Lisp_Object attrs[LFACE_VECTOR_SIZE]
 		  face->box_color = load_color (f, face, value,
 						LFACE_BOX_INDEX);
 		  face->use_box_color_for_shadows_p = true;
+		  set_color = true;
 		}
 	    }
 	  else if (EQ (keyword, QCstyle))
@@ -6026,7 +6029,9 @@ realize_gui_face (struct face_cache *cache, Lisp_Object attrs[LFACE_VECTOR_SIZE]
 	      else if (EQ (value, Qflat_button))
 		{
 		  face->box = FACE_SIMPLE_BOX;
-		  face->box_color = face->background;
+		  /* Don't override colors set in this box. */
+		  if (!set_color)
+		    face->box_color = face->background;
 		}
 	    }
 	}
@@ -6041,6 +6046,8 @@ realize_gui_face (struct face_cache *cache, Lisp_Object attrs[LFACE_VECTOR_SIZE]
       face->underline = FACE_UNDER_LINE;
       face->underline_defaulted_p = true;
       face->underline_color = 0;
+      face->underline_at_descent_line_p = false;
+      face->underline_pixels_above_descent_line = 0;
     }
   else if (STRINGP (underline))
     {
@@ -6050,12 +6057,16 @@ realize_gui_face (struct face_cache *cache, Lisp_Object attrs[LFACE_VECTOR_SIZE]
       face->underline_color
 	= load_color (f, face, underline,
 		      LFACE_UNDERLINE_INDEX);
+      face->underline_at_descent_line_p = false;
+      face->underline_pixels_above_descent_line = 0;
     }
   else if (NILP (underline))
     {
       face->underline = FACE_NO_UNDERLINE;
       face->underline_defaulted_p = false;
       face->underline_color = 0;
+      face->underline_at_descent_line_p = false;
+      face->underline_pixels_above_descent_line = 0;
     }
   else if (CONSP (underline))
     {
@@ -6064,6 +6075,8 @@ realize_gui_face (struct face_cache *cache, Lisp_Object attrs[LFACE_VECTOR_SIZE]
       face->underline = FACE_UNDER_LINE;
       face->underline_color = 0;
       face->underline_defaulted_p = true;
+      face->underline_at_descent_line_p = false;
+      face->underline_pixels_above_descent_line = 0;
 
       /* FIXME?  This is also not robust about checking the precise form.
          See comments in Finternal_set_lisp_face_attribute.  */
@@ -6100,6 +6113,13 @@ realize_gui_face (struct face_cache *cache, Lisp_Object attrs[LFACE_VECTOR_SIZE]
               else if (EQ (value, Qwave))
                 face->underline = FACE_UNDER_WAVE;
             }
+	  else if (EQ (keyword, QCposition))
+	    {
+	      face->underline_at_descent_line_p = !NILP (value);
+
+	      if (FIXNATP (value))
+		face->underline_pixels_above_descent_line = XFIXNAT (value);
+	    }
         }
     }
 
@@ -6408,8 +6428,12 @@ face_at_buffer_position (struct window *w, ptrdiff_t pos,
        cached faces since we've looked up these faces, we need to look
        them up again.  */
     if (!default_face)
-      default_face = FACE_FROM_ID (f,
-				   lookup_basic_face (w, f, DEFAULT_FACE_ID));
+      {
+	if (FRAME_FACE_CACHE (f)->used == 0)
+	  recompute_basic_faces (f);
+	default_face = FACE_FROM_ID (f,
+				     lookup_basic_face (w, f, DEFAULT_FACE_ID));
+      }
   }
 
   /* Optimize common cases where we can use the default face.  */
@@ -6915,6 +6939,7 @@ syms_of_xfaces (void)
   DEFSYM (QCcolor, ":color");
   DEFSYM (QCline_width, ":line-width");
   DEFSYM (QCstyle, ":style");
+  DEFSYM (QCposition, ":position");
   DEFSYM (Qline, "line");
   DEFSYM (Qwave, "wave");
   DEFSYM (Qreleased_button, "released-button");

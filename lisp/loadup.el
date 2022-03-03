@@ -1,6 +1,6 @@
 ;;; loadup.el --- load up standardly loaded Lisp files for Emacs  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1985-1986, 1992, 1994, 2001-2021 Free Software
+;; Copyright (C) 1985-1986, 1992, 1994, 2001-2022 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -128,6 +128,7 @@
 (set-buffer "*scratch*")
 (setq buffer-undo-list t)
 
+(load "emacs-lisp/debug-early")
 (load "emacs-lisp/byte-run")
 (load "emacs-lisp/backquote")
 (load "subr")

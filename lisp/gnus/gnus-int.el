@@ -1,6 +1,6 @@
 ;;; gnus-int.el --- backend interface functions for Gnus  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1996-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1996-2022 Free Software Foundation, Inc.
 
 ;; Author: Lars Magne Ingebrigtsen <larsi@gnus.org>
 ;; Keywords: news
@@ -802,7 +802,7 @@ If GROUP is nil, all groups on COMMAND-METHOD are scanned."
                (when (> min 1)
                  (let* ((range (if (= min 2) 1 (cons 1 (1- min))))
                         (read (gnus-info-read info))
-                        (new-read (gnus-range-add read (list range))))
+                        (new-read (range-concat read (list range))))
                    (setf (gnus-info-read info) new-read)))
                info))))))
 

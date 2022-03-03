@@ -1,6 +1,6 @@
 Known Problems with GNU Emacs
 
-Copyright (C) 1987-1989, 1993-1999, 2001-2021 Free Software Foundation,
+Copyright (C) 1987-1989, 1993-1999, 2001-2022 Free Software Foundation,
 Inc.
 See the end of the file for license conditions.
 
@@ -1236,6 +1236,15 @@ A workaround is to not use 'klipper'/'clipit'.  Upgrading 'klipper' to
 the one coming with KDE 3.3 or later might solve the problem; if it
 doesn't, set 'select-active-regions' to 'only' or nil.
 
+*** Emacs doesn't receive the key "C-.", displaying an input field instead.
+
+This is caused by the IBus Emoji input panel, which is usually bound
+to "C-.".  You can disable that panel by running the following
+command:
+
+  $ gsettings set org.freedesktop.ibus.panel.emoji hotkey "[]"
+
+
 ** Window-manager and toolkit-related problems
 
 *** Emacs built with GTK+ toolkit produces corrupted display on HiDPI screen
@@ -1294,6 +1303,13 @@ or shifting out from X and back again usually cures it (i.e. Ctrl-Alt-F1
 and then Alt-F7).  A bug for it is here:
 https://bugs.launchpad.net/ubuntu/+source/metacity/+bug/231034.
 Note that a permanent fix seems to be to disable "assistive technologies".
+
+*** Enlightenment: Frames not redrawn after switching virtual desktops
+
+With Enlightenment version 0.25, Emacs frames may no be redrawn orderly
+after switching back from another virtual desktop.  Setting the variable
+'x-set-frame-visibility-more-laxly' to one of 'focus-in', 'expose' or
+'t' should fix this.
 
 *** Gnome: Emacs receives input directly from the keyboard, bypassing XIM.
 
@@ -1681,7 +1697,87 @@ This happens on the proprietary X server ASTEC-X when the number of
 monitors is changed after the server has started.  A workaround is to
 restart the X server after the monitor configuration has been changed.
 
-* Runtime problems on character terminals
+*** Touchpad gestures don't work and emit warning messages.
+
+When pinching or swiping on your touchpad, you might see a warning
+message that looks like:
+
+  XInputWireToCookie: Unknown generic event. type 28
+
+This happens when your XInput headers support XInput 2.4, but the
+actual version of libXi installed does not.  The solution is to
+upgrade your libXi binaries to libXi 1.8.0 or later, to correspond
+with your XInput headers.
+
+*** Requesting a private colormap makes Emacs hang.
+
+The part of Xlib that provides this feature is broken in modern
+incarnations of Xlib, so it cannot possibly work.  The solution is to
+remove anything that looks like this:
+
+  Emacs.privateColormap: on
+
+From your X defaults file.  Your X server might also provide a
+different visual class that will do what you want.  You can experiment
+with `TrueColor-8', by placing this:
+
+  Emacs.visualClass: TrueColor-8
+
+in your ~/.Xresources, and loading that file.
+
+*** Colors messed up on Cairo or GTK builds.
+
+If your display defaults to a visual where pixel values cannot be
+directly converted to their corresponding real colors, a build with
+Cairo drawing or GTK will display colors incorrectly.  This is because
+Cairo and GTK foolishly assume that all RGB values can be converted
+directly from their individual components, without asking the X server
+to allocate the color.
+
+Your X server might have a different visual which is decomposed and
+not colormapped.  Try the following in your ~/.Xresources:
+
+  Emacs.visualClass: TrueColor-N
+
+where "N" is the bit depth of the visual your X server defaults to.
+If that does not work, you lose.  Configure Emacs '--without-cairo'
+and '--with-x-toolkit=lucid' instead.
+
+*** GUI widgets don't display on GTK builds, except for scrollbars.
+
+This can happen if your visual does not have a decomposed colormap,
+and your X server has the X rendering extension.
+
+To solve the problem, disable the X rendering extension on your X
+server, or rebuild Emacs without GTK+.
+
+*** On Accelerated X, the GTK 3 menu bar does not select items.
+
+The solution is to run Emacs with the environment variable 'GDK_DEBUG'
+set to "nograbs", like this (where "..." stands for the other
+command-line arguments you intend to pass to Emacs):
+
+  GDK_DEBUG=nograbs emacs ...
+
+Accelerated X is a proprietary X server.  Aside from being
+proprietary, it has many other disadvantages, such as not supporting
+most recent hardware and most modern extensions to the X protocol.
+Consider switching to a free X server, such as X.Org.
+
+If setting GDK_DEBUG causes GTK to complain about not being built with
+support for debugging options, then there is nothing you can do,
+except switch to a free X server.
+
+*** 'set-mouse-position' does not move the pointer on Xwayland.
+
+This is because Wayland does not allow programs to warp the pointer.
+There is nothing that can be done about this problem, except to switch
+to an X session.
+
+Some versions of the Xwayland server will pretend to warp the pointer,
+so mouse-motion events might be sent to the position the mouse was
+supposed to have moved to, even though the cursor displays at the same
+on-screen position.
 
 *** With X forwarding, mouse highlighting can make Emacs slow.
 
@@ -1689,6 +1785,8 @@ If you see slow updates when moving the mouse in an Emacs running on a
 remote X server, try this:
 
     (setq mouse-highlight nil)
+
+* Runtime problems on character terminals
 
 ** The meta key does not work on xterm.
 
@@ -2797,6 +2895,22 @@ file; for example:
     '("/usr/local/opt/gcc/lib/gcc/11"
       "/usr/local/opt/libgccjit/lib/gcc/11"
       "/usr/local/opt/gcc/lib/gcc/11/gcc/x86_64-apple-darwin20/11.2.0") ":"))
+
+* Runtime problems specific to PGTK
+
+** Some modifier keys doesn't work if Emacs is started in a systemd unit file.
+
+Environment variables may be different if there is a difference in the
+behavior of keys between when started in the systemd unit file and
+when started from the command line.
+
+Especially, PGTK Emacs needs environment variables LANG and
+GTK_IM_MODULE.
+
+** 'set-mouse-position' does nothing.
+
+GTK does not allow programs to warp the pointer anymore.  There is
+nothing that can be done about this problem.
 
 * Build-time problems
 

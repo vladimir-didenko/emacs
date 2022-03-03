@@ -1,5 +1,5 @@
 @c This is part of the Emacs manual.
-@c Copyright (C) 1985--1987, 1993--1995, 1997, 2001--2021 Free Software
+@c Copyright (C) 1985--1987, 1993--1995, 1997, 2001--2022 Free Software
 @c Foundation, Inc.
 @c See file emacs.texi for copying conditions.
 @node Emacs Invocation
@@ -328,6 +328,10 @@ option does this too, but other options like @samp{-q} do not.
 @cindex @file{site-lisp} files, not loading
 Do not include the @file{site-lisp} directories in @code{load-path}
 (@pxref{Init File}).  The @samp{-Q} option does this too.
+
+@item --init-directory
+@opindex --init-directory
+Specify the directory to use when looking for the Emacs init files.
 
 @item --no-splash
 @opindex --no-splash

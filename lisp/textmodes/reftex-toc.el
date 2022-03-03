@@ -1,6 +1,6 @@
 ;;; reftex-toc.el --- RefTeX's table of contents mode  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 1997-2000, 2003-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1997-2000, 2003-2022 Free Software Foundation, Inc.
 
 ;; Author: Carsten Dominik <dominik@science.uva.nl>
 ;; Maintainer: auctex-devel@gnu.org
@@ -381,7 +381,7 @@ SPC=view TAB=goto RET=goto+hide [q]uit [r]escan [l]abels [f]ollow [x]r [?]Help
 		 (- (or reftex-last-window-height (window-height))
 		    (window-height)))))
     (when (> count 0)
-      (with-demoted-errors           ;E.g. the window might be the root window!
+      (with-demoted-errors "Enlarge window error: %S"
         (enlarge-window count reftex-toc-split-windows-horizontally)))))
 
 (defun reftex-toc-dframe-p (&optional frame error)

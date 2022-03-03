@@ -1,6 +1,6 @@
 ;;; isearch.el --- incremental search minor mode -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992-1997, 1999-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1992-1997, 1999-2022 Free Software Foundation, Inc.
 
 ;; Author: Daniel LaLiberte <liberte@cs.uiuc.edu>
 ;; Maintainer: emacs-devel@gnu.org
@@ -430,13 +430,13 @@ and doesn't remove full-buffer highlighting after a search."
 
 (defface lazy-highlight
   '((((class color) (min-colors 88) (background light))
-     (:background "paleturquoise"))
+     (:background "paleturquoise" :distant-foreground "black"))
     (((class color) (min-colors 88) (background dark))
-     (:background "paleturquoise4"))
+     (:background "paleturquoise4" :distant-foreground "white"))
     (((class color) (min-colors 16))
-     (:background "turquoise3"))
+     (:background "turquoise3" :distant-foreground "white"))
     (((class color) (min-colors 8))
-     (:background "turquoise3"))
+     (:background "turquoise3" :distant-foreground "white"))
     (t (:underline t)))
   "Face for lazy highlighting of matches other than the current one."
   :group 'lazy-highlight
@@ -668,6 +668,7 @@ This is like `describe-bindings', but displays only Isearch keys."
     ;; The key translations defined in the C-x 8 prefix should add
     ;; characters to the search string.  See iso-transl.el.
     (define-key map "\C-x8\r" 'isearch-char-by-name)
+    (define-key map "\C-x8e\r" 'isearch-emoji-by-name)
     map)
   "Keymap for `isearch-mode'.")
 
@@ -758,6 +759,8 @@ This is like `describe-bindings', but displays only Isearch keys."
      :help "Search for literal char"]
     ["Search for char by name" isearch-char-by-name
      :help "Search for character by name"]
+    ["Search for Emoji by name" isearch-emoji-by-name
+     :help "Search for Emoji by its Unicode name"]
     "---"
     ["Toggle input method" isearch-toggle-input-method
      :help "Toggle input method for search"]
@@ -2747,6 +2750,24 @@ With argument, add COUNT copies of the character."
 					   (mapconcat 'isearch-text-char-description
 						      string ""))))))))
 
+(defun isearch-emoji-by-name (&optional count)
+  "Read an Emoji name and add it to the search string COUNT times.
+COUNT (interactively, the prefix argument) defaults to 1.
+The command accepts Unicode names like \"smiling face\" or
+\"heart with arrow\", and completion is available."
+  (interactive "p")
+  (with-isearch-suspended
+   (let ((emoji (with-temp-buffer
+                  (emoji-search)
+                  (if (and (integerp count) (> count 1))
+                      (apply 'concat (make-list count (buffer-string)))
+                    (buffer-string)))))
+     (when emoji
+       (setq isearch-new-string (concat isearch-string emoji)
+             isearch-new-message (concat isearch-message
+					   (mapconcat 'isearch-text-char-description
+						      emoji "")))))))
+
 (defun isearch-search-and-update ()
   "Do the search and update the display."
   (when (or isearch-success
@@ -2913,6 +2934,7 @@ to the barrier."
 (put 'scroll-other-window-down 'isearch-scroll t)
 (put 'beginning-of-buffer-other-window 'isearch-scroll t)
 (put 'end-of-buffer-other-window 'isearch-scroll t)
+(put 'recenter-other-window 'isearch-scroll t)
 
 ;; Commands which change the window layout
 (put 'delete-other-windows 'isearch-scroll t)
@@ -2926,6 +2948,9 @@ to the barrier."
 ;; The next two commands don't exit Isearch in isearch-mouse-leave-buffer
 (put 'mouse-drag-mode-line 'isearch-scroll t)
 (put 'mouse-drag-vertical-line 'isearch-scroll t)
+
+;; For context menu with isearch submenu
+(put 'context-menu-open 'isearch-scroll t)
 
 ;; Aliases for split-window-*
 (put 'split-window-vertically 'isearch-scroll t)

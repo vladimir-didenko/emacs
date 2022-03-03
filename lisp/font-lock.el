@@ -1,6 +1,6 @@
 ;;; font-lock.el --- Electric font lock mode  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1992-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1992-2022 Free Software Foundation, Inc.
 
 ;; Author: Jamie Zawinski
 ;;	Richard Stallman
@@ -1906,8 +1906,9 @@ preserve `hi-lock-mode' highlighting patterns."
 Sets various variables using `font-lock-defaults' and
 `font-lock-maximum-decoration'."
   ;; Set fontification defaults if not previously set for correct major mode.
-  (unless (and font-lock-set-defaults
-	       (eq font-lock-major-mode major-mode))
+  (when (or (not font-lock-set-defaults)
+	    (not font-lock-major-mode)
+            (not (derived-mode-p font-lock-major-mode)))
     (setq font-lock-major-mode major-mode)
     (setq font-lock-set-defaults t)
     (let* ((defaults font-lock-defaults)

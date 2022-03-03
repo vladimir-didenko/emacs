@@ -1,6 +1,6 @@
 ;;; subr-tests.el --- Tests for subr.el  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2015-2021 Free Software Foundation, Inc.
+;; Copyright (C) 2015-2022 Free Software Foundation, Inc.
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>,
 ;;         Nicolas Petton <nicolas@petton.fr>
@@ -1006,6 +1006,27 @@ final or penultimate step during initialization."))
   (should (equal (ensure-list nil) nil))
   (should (equal (ensure-list :foo) '(:foo)))
   (should (equal (ensure-list '(1 2 3)) '(1 2 3))))
+
+(ert-deftest test-alias-p ()
+  (should-not (function-alias-p 1))
+
+  (defun subr-tests--fun ())
+  (should-not (function-alias-p 'subr-tests--fun))
+
+  (defalias 'subr-tests--a 'subr-tests--b)
+  (defalias 'subr-tests--b 'subr-tests--c)
+  (should (equal (function-alias-p 'subr-tests--a)
+                 '(subr-tests--b subr-tests--c)))
+
+  (defalias 'subr-tests--d 'subr-tests--e)
+  (defalias 'subr-tests--e 'subr-tests--d)
+  (should-error (function-alias-p 'subr-tests--d))
+  (should (equal (function-alias-p 'subr-tests--d t)
+                 '(subr-tests--e))))
+
+(ert-deftest test-readablep ()
+  (should (readablep "foo"))
+  (should-not (readablep (list (make-marker)))))
 
 (provide 'subr-tests)
 ;;; subr-tests.el ends here

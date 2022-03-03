@@ -1,6 +1,6 @@
 /* Emacs regular expression matching and search
 
-   Copyright (C) 1993-2021 Free Software Foundation, Inc.
+   Copyright (C) 1993-2022 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -3963,7 +3963,7 @@ re_match_2_internal (struct re_pattern_buffer *bufp,
 
   INIT_FAIL_STACK ();
 
-  ptrdiff_t count = SPECPDL_INDEX ();
+  specpdl_ref count = SPECPDL_INDEX ();
 
   /* Prevent shrinking and relocation of buffer text if GC happens
      while we are inside this function.  The calls to

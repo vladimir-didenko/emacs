@@ -1,6 +1,6 @@
 ;;; byte-run.el --- byte-compiler support for inlining  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992, 2001-2021 Free Software Foundation, Inc.
+;; Copyright (C) 1992, 2001-2022 Free Software Foundation, Inc.
 
 ;; Author: Jamie Zawinski <jwz@lucid.com>
 ;;	Hallvard Furuseth <hbf@ulrik.uio.no>
@@ -30,6 +30,76 @@
 
 ;;; Code:
 
+(defvar byte-run--ssp-seen nil
+  "Which conses/vectors/records have been processed in strip-symbol-positions?
+The value is a hash table, the key being the old element and the value being
+the corresponding new element of the same type.
+
+The purpose of this is to detect circular structures.")
+
+(defalias 'byte-run--strip-list
+  #'(lambda (arg)
+      "Strip the positions from symbols with position in the list ARG.
+This is done by destructively modifying ARG.  Return ARG."
+      (let ((a arg))
+        (while
+            (and
+             (not (gethash a byte-run--ssp-seen))
+             (progn
+               (puthash a t byte-run--ssp-seen)
+               (cond
+                ((symbol-with-pos-p (car a))
+                 (setcar a (bare-symbol (car a))))
+                ((consp (car a))
+                 (byte-run--strip-list (car a)))
+                ((or (vectorp (car a)) (recordp (car a)))
+                 (byte-run--strip-vector/record (car a))))
+               (consp (cdr a))))
+          (setq a (cdr a)))
+        (cond
+         ((symbol-with-pos-p (cdr a))
+          (setcdr a (bare-symbol (cdr a))))
+         ((or (vectorp (cdr a)) (recordp (cdr a)))
+          (byte-run--strip-vector/record (cdr a))))
+        arg)))
+
+(defalias 'byte-run--strip-vector/record
+  #'(lambda (arg)
+      "Strip the positions from symbols with position in the vector/record ARG.
+This is done by destructively modifying ARG.  Return ARG."
+      (unless (gethash arg byte-run--ssp-seen)
+        (let ((len (length arg))
+              (i 0)
+              elt)
+          (puthash arg t byte-run--ssp-seen)
+          (while (< i len)
+            (setq elt (aref arg i))
+            (cond
+             ((symbol-with-pos-p elt)
+              (aset arg i elt))
+             ((consp elt)
+              (byte-run--strip-list elt))
+             ((or (vectorp elt) (recordp elt))
+              (byte-run--strip-vector/record elt))))))
+      arg))
+
+(defalias 'byte-run-strip-symbol-positions
+  #'(lambda (arg)
+      "Strip all positions from symbols in ARG.
+This modifies destructively then returns ARG.
+
+ARG is any Lisp object, but is usually a list or a vector or a
+record, containing symbols with position."
+      (setq byte-run--ssp-seen (make-hash-table :test 'eq))
+      (cond
+       ((symbol-with-pos-p arg)
+        (bare-symbol arg))
+       ((consp arg)
+        (byte-run--strip-list arg))
+       ((or (vectorp arg) (recordp arg))
+        (byte-run--strip-vector/record arg))
+       (t arg))))
+
 (defalias 'function-put
   ;; We don't want people to just use `put' because we can't conveniently
   ;; hook into `put' to remap old properties to new ones.  But for now, there's
@@ -38,7 +108,7 @@
       "Set FUNCTION's property PROP to VALUE.
 The namespace for PROP is shared with symbols.
 So far, FUNCTION can only be a symbol, not a lambda expression."
-      (put function prop value)))
+      (put (bare-symbol function) prop value)))
 (function-put 'defmacro 'doc-string-elt 3)
 (function-put 'defmacro 'lisp-indent-function 2)
 
@@ -254,11 +324,11 @@ The return value is undefined.
 		  #'(lambda (x)
 		      (let ((f (cdr (assq (car x) macro-declarations-alist))))
 			(if f (apply (car f) name arglist (cdr x))
-			  (macroexp-warn-and-return
+                          (macroexp-warn-and-return
 			   (format-message
 			    "Unknown macro property %S in %S"
 			    (car x) name)
-			   nil))))
+			   nil nil nil (car x)))))
 		  decls)))
 	   ;; Refresh font-lock if this is a new macro, or it is an
 	   ;; existing macro whose 'no-font-lock-keyword declaration
@@ -330,7 +400,7 @@ The return value is undefined.
                     (macroexp-warn-and-return
                      (format-message "Unknown defun property `%S' in %S"
                                      (car x) name)
-                     nil)))))
+                     nil nil nil (car x))))))
             decls))
           (def (list 'defalias
                      (list 'quote name)
@@ -575,7 +645,7 @@ For the `mapcar' case, only the `mapcar' function can be used in
 the symbol list.  For `suspicious', only `set-buffer' can be used."
   ;; Note: during compilation, this definition is overridden by the one in
   ;; byte-compile-initial-macro-environment.
-  (declare (debug (sexp &optional body)) (indent 1))
+  (declare (debug (sexp body)) (indent 1))
   (if (not (and (featurep 'macroexp)
                 (boundp 'byte-compile--suppressed-warnings)))
       ;; If `macroexp' is not yet loaded, we're in the middle of

@@ -1,6 +1,6 @@
 /* Basic character support.
 
-Copyright (C) 2001-2021 Free Software Foundation, Inc.
+Copyright (C) 2001-2022 Free Software Foundation, Inc.
 Copyright (C) 1995, 1997, 1998, 2001 Electrotechnical Laboratory, JAPAN.
   Licensed to the Free Software Foundation.
 Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
@@ -654,15 +654,14 @@ str_as_multibyte (unsigned char *str, ptrdiff_t len, ptrdiff_t nbytes,
 ptrdiff_t
 count_size_as_multibyte (const unsigned char *str, ptrdiff_t len)
 {
-  const unsigned char *endp = str + len;
+  /* Count the number of non-ASCII (raw) bytes, since they will occupy
+     two bytes in a multibyte string.  */
+  ptrdiff_t nonascii = 0;
+  for (ptrdiff_t i = 0; i < len; i++)
+    nonascii += str[i] >> 7;
   ptrdiff_t bytes;
-
-  for (bytes = 0; str < endp; str++)
-    {
-      int n = *str < 0x80 ? 1 : 2;
-      if (INT_ADD_WRAPV (bytes, n, &bytes))
-        string_overflow ();
-    }
+  if (INT_ADD_WRAPV (len, nonascii, &bytes))
+    string_overflow ();
   return bytes;
 }
 
