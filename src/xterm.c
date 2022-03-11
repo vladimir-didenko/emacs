@@ -765,6 +765,10 @@ static void x_initialize (void);
 static bool x_get_current_wm_state (struct frame *, Window, int *, bool *, bool *);
 static void x_update_opaque_region (struct frame *, XEvent *);
 
+#if !defined USE_TOOLKIT_SCROLL_BARS && defined HAVE_XDBE
+static void x_scroll_bar_end_update (struct x_display_info *, struct scroll_bar *);
+#endif
+
 /* Flush display of frame F.  */
 
 static void
@@ -856,7 +860,6 @@ record_event (char *locus, int type)
 
 #endif
 
-#if defined USE_X_TOOLKIT || USE_GTK
 static void
 x_toolkit_position (struct frame *f, int x, int y,
 		    bool *menu_bar_p, bool *tool_bar_p)
@@ -884,12 +887,15 @@ x_toolkit_position (struct frame *f, int x, int y,
       *tool_bar_p = gtk_widget_intersect (FRAME_X_OUTPUT (f)->toolbar_widget,
 					  &test_rect, NULL);
     }
-#else
+#elif defined USE_X_TOOLKIT
   *menu_bar_p = (x > 0 && x < FRAME_PIXEL_WIDTH (f)
 		 && (y < 0 && y >= -FRAME_MENUBAR_HEIGHT (f)));
+#else
+  *menu_bar_p = (WINDOWP (f->menu_bar_window)
+		 && (x > 0 && x < FRAME_PIXEL_WIDTH (f)
+		     && (y > 0 && y < FRAME_MENU_BAR_HEIGHT (f))));
 #endif
 }
-#endif
 
 static void
 x_update_opaque_region (struct frame *f, XEvent *configure)
@@ -2640,7 +2646,9 @@ x_draw_fringe_bitmap (struct window *w, struct glyph_row *row, struct draw_fring
     }
 
 #ifdef USE_CAIRO
-  if (p->which && p->which < max_fringe_bmp)
+  if (p->which
+      && p->which < max_fringe_bmp
+      && p->which < max_used_fringe_bitmap)
     {
       XGCValues gcv;
 
@@ -2650,6 +2658,16 @@ x_draw_fringe_bitmap (struct window *w, struct glyph_row *row, struct draw_fring
 				       : f->output_data.x->cursor_pixel)
 				    : face->foreground));
       XSetBackground (display, gc, face->background);
+      if (!fringe_bmp[p->which])
+	{
+	  /* This fringe bitmap is known to fringe.c, but lacks the
+	     cairo_pattern_t pattern which shadows that bitmap.  This
+	     is typical to define-fringe-bitmap being called when the
+	     selected frame was not a GUI frame, for example, when
+	     packages that define fringe bitmaps are loaded by a
+	     daemon Emacs.  Create the missing pattern now.  */
+	  gui_define_fringe_bitmap (f, p->which);
+	}
       x_cr_draw_image (f, gc, fringe_bmp[p->which], 0, p->dh,
 		       p->wd, p->h, p->x, p->y, p->overlay_p);
       XSetForeground (display, gc, gcv.foreground);
@@ -3623,8 +3641,7 @@ x_color_cells (Display *dpy, int *ncells)
 
   if (dpyinfo->color_cells == NULL)
     {
-      Screen *screen = dpyinfo->screen;
-      int ncolor_cells = XDisplayCells (dpy, XScreenNumberOfScreen (screen));
+      int ncolor_cells = dpyinfo->visual_info.colormap_size;
       int i;
 
       dpyinfo->color_cells = xnmalloc (ncolor_cells,
@@ -3823,7 +3840,7 @@ x_alloc_nearest_color_1 (Display *dpy, Colormap cmap, XColor *color)
   eassume (dpyinfo);
   rc = XAllocColor (dpy, cmap, color) != 0;
 
-  if (dpyinfo->visual->class == DirectColor)
+  if (dpyinfo->visual_info.class == DirectColor)
     return rc;
 
   if (rc == 0)
@@ -3839,8 +3856,14 @@ x_alloc_nearest_color_1 (Display *dpy, Colormap cmap, XColor *color)
       long nearest_delta, trial_delta;
       int x;
       Status status;
+      bool retry = false;
+      int ncolor_cells, i;
+      bool temp_allocated;
+      XColor temp;
 
+    start:
       cells = x_color_cells (dpy, &no_cells);
+      temp_allocated = false;
 
       nearest = 0;
       /* I'm assuming CSE so I'm not going to condense this. */
@@ -3860,13 +3883,21 @@ x_alloc_nearest_color_1 (Display *dpy, Colormap cmap, XColor *color)
 			    * ((color->blue >> 8) - (cells[x].blue >> 8))));
 	  if (trial_delta < nearest_delta)
 	    {
-	      XColor temp;
+	      /* We didn't decide to use this color, so free it.  */
+	      if (temp_allocated)
+		{
+		  XFreeColors (dpy, cmap, &temp.pixel, 1, 0);
+		  temp_allocated = false;
+		}
+
 	      temp.red = cells[x].red;
 	      temp.green = cells[x].green;
 	      temp.blue = cells[x].blue;
 	      status = XAllocColor (dpy, cmap, &temp);
+
 	      if (status)
 		{
+		  temp_allocated = true;
 		  nearest = x;
 		  nearest_delta = trial_delta;
 		}
@@ -3875,7 +3906,38 @@ x_alloc_nearest_color_1 (Display *dpy, Colormap cmap, XColor *color)
       color->red = cells[nearest].red;
       color->green = cells[nearest].green;
       color->blue = cells[nearest].blue;
-      status = XAllocColor (dpy, cmap, color);
+
+      if (!temp_allocated)
+	status = XAllocColor (dpy, cmap, color);
+      else
+	{
+	  *color = temp;
+	  status = 1;
+	}
+
+      if (status == 0 && !retry)
+	{
+	  /* Our private cache of color cells is probably out of date.
+	     Refresh it here, and try to allocate the nearest color
+	     from the new colormap.  */
+
+	  retry = true;
+	  xfree (dpyinfo->color_cells);
+
+	  ncolor_cells = dpyinfo->visual_info.colormap_size;
+
+	  dpyinfo->color_cells = xnmalloc (ncolor_cells,
+					   sizeof *dpyinfo->color_cells);
+	  dpyinfo->ncolor_cells = ncolor_cells;
+
+	  for (i = 0; i < ncolor_cells; ++i)
+	    dpyinfo->color_cells[i].pixel = i;
+
+	  XQueryColors (dpy, dpyinfo->cmap,
+			dpyinfo->color_cells, ncolor_cells);
+
+	  goto start;
+	}
 
       rc = status != 0;
     }
@@ -3948,7 +4010,7 @@ x_copy_color (struct frame *f, unsigned long pixel)
      necessary and some servers don't allow it.  Since we won't free a
      color once we've allocated it, we don't need to re-allocate it to
      maintain the server's reference count.  */
-  if (!x_mutable_colormap (FRAME_X_VISUAL (f)))
+  if (!x_mutable_colormap (FRAME_X_VISUAL_INFO (f)))
     return pixel;
 
   color.pixel = pixel;
@@ -5697,7 +5759,7 @@ XTflash (struct frame *f)
 
   block_input ();
 
-  if (FRAME_X_VISUAL (f)->class == TrueColor)
+  if (FRAME_X_VISUAL_INFO (f)->class == TrueColor)
     {
       values.function = GXxor;
       values.foreground = (FRAME_FOREGROUND_PIXEL (f)
@@ -5783,7 +5845,7 @@ XTflash (struct frame *f)
 		    flash_left, FRAME_INTERNAL_BORDER_WIDTH (f),
 		    width, height - 2 * FRAME_INTERNAL_BORDER_WIDTH (f));
 
-  if (FRAME_X_VISUAL (f)->class == TrueColor)
+  if (FRAME_X_VISUAL_INFO (f)->class == TrueColor)
     XFreeGC (FRAME_X_DISPLAY (f), gc);
   x_flush (f);
 
@@ -5970,6 +6032,12 @@ x_scroll_run (struct window *w, struct run *run)
       XFree (children);
     }
 #endif
+
+  /* Some of the following code depends on `normal_gc' being
+     up-to-date on the X server, but doesn't call a routine that will
+     flush it first.  So do this ourselves instead.  */
+  XFlushGC (FRAME_X_DISPLAY (f),
+	    f->output_data.x->normal_gc);
 
 #ifdef USE_CAIRO
   if (FRAME_CR_CONTEXT (f))
@@ -6412,7 +6480,8 @@ x_detect_focus_change (struct x_display_info *dpyinfo, struct frame *frame,
 #ifdef HAVE_XINPUT2
     case GenericEvent:
       {
-	XIEvent *xi_event = (XIEvent *) event->xcookie.data;
+	XIEvent *xi_event = event->xcookie.data;
+	XIEnterEvent *enter_or_focus = event->xcookie.data;
 
         struct frame *focus_frame = dpyinfo->x_focus_event_frame;
         int focus_state
@@ -6422,13 +6491,14 @@ x_detect_focus_change (struct x_display_info *dpyinfo, struct frame *frame,
 	    || xi_event->evtype == XI_FocusOut)
 	  x_focus_changed ((xi_event->evtype == XI_FocusIn
 			    ? FocusIn : FocusOut),
-			   FOCUS_EXPLICIT,
-			   dpyinfo, frame, bufp);
+			   ((enter_or_focus->detail
+			     == XINotifyPointer)
+			    ? FOCUS_IMPLICIT : FOCUS_EXPLICIT),
+			     dpyinfo, frame, bufp);
 	else if ((xi_event->evtype == XI_Enter
 		  || xi_event->evtype == XI_Leave)
-		 && (((XIEnterEvent *) xi_event)->detail
-		     != XINotifyInferior)
-		 && ((XIEnterEvent *) xi_event)->focus
+		 && (enter_or_focus->detail != XINotifyInferior)
+		 && enter_or_focus->focus
 		 && !(focus_state & FOCUS_EXPLICIT))
 	  x_focus_changed ((xi_event->evtype == XI_Enter
 			    ? FocusIn : FocusOut),
@@ -6794,13 +6864,26 @@ get_keysym_name (int keysym)
 /* Prepare a mouse-event in *RESULT for placement in the input queue.
 
    If the event is a button press, then note that we have grabbed
-   the mouse.  */
+   the mouse.
+
+   The XButtonEvent structure passed as EVENT might not come from the
+   X server, and instead be artificially constructed from input
+   extension events.  In these special events, the only fields that
+   are initialized are `time', `button', `state', `type', `window' and
+   `x' and `y'.  This function should not access any other fields in
+   EVENT without also initializing the corresponding fields in `bv'
+   under the XI_ButtonPress and XI_ButtonRelease labels inside
+   `handle_one_xevent'.  */
 
 static Lisp_Object
 x_construct_mouse_click (struct input_event *result,
                          const XButtonEvent *event,
                          struct frame *f)
 {
+  int x = event->x;
+  int y = event->y;
+  Window dummy;
+
   /* Make the event type NO_EVENT; we'll change that when we decide
      otherwise.  */
   result->kind = MOUSE_CLICK_EVENT;
@@ -6812,8 +6895,16 @@ x_construct_mouse_click (struct input_event *result,
 			  ? up_modifier
 			  : down_modifier));
 
-  XSETINT (result->x, event->x);
-  XSETINT (result->y, event->y);
+  /* If result->window is not the frame's edit widget (which can
+     happen with GTK+ scroll bars, for example), translate the
+     coordinates so they appear at the correct position.  */
+  if (event->window != FRAME_X_WINDOW (f))
+    XTranslateCoordinates (FRAME_X_DISPLAY (f),
+			   event->window, FRAME_X_WINDOW (f),
+			   x, y, &x, &y, &dummy);
+
+  XSETINT (result->x, x);
+  XSETINT (result->y, y);
   XSETFRAME (result->frame_or_window, f);
   result->arg = Qnil;
   return Qnil;
@@ -6825,7 +6916,15 @@ x_construct_mouse_click (struct input_event *result,
    We have received a mouse movement event, which is given in *event.
    If the mouse is over a different glyph than it was last time, tell
    the mainstream emacs code by setting mouse_moved.  If not, ask for
-   another motion event, so we can check again the next time it moves.  */
+   another motion event, so we can check again the next time it moves.
+
+   The XMotionEvent structure passed as EVENT might not come from the
+   X server, and instead be artificially constructed from input
+   extension events.  In these special events, the only fields that
+   are initialized are `time', `window', and `x' and `y'.  This
+   function should not access any other fields in EVENT without also
+   initializing the corresponding fields in `ev' under the XI_Motion,
+   XI_Enter and XI_Leave labels inside `handle_one_xevent'.  */
 
 static bool
 x_note_mouse_movement (struct frame *frame, const XMotionEvent *event)
@@ -8498,6 +8597,9 @@ x_scroll_bar_create (struct window *w, int top, int left,
     XSetWindowAttributes a;
     unsigned long mask;
     Window window;
+#ifdef HAVE_XDBE
+    Drawable drawable;
+#endif
 
     a.background_pixel = f->output_data.x->scroll_bar_background_pixel;
     if (a.background_pixel == -1)
@@ -8526,6 +8628,22 @@ x_scroll_bar_create (struct window *w, int top, int left,
 			    CopyFromParent,
 			     /* Attributes.  */
 			    mask, &a);
+#ifdef HAVE_XDBE
+    if (FRAME_DISPLAY_INFO (f)->supports_xdbe
+	&& FRAME_X_DOUBLE_BUFFERED_P (f))
+      {
+	x_catch_errors (FRAME_X_DISPLAY (f));
+	drawable = XdbeAllocateBackBufferName (FRAME_X_DISPLAY (f),
+					       window, XdbeCopied);
+	if (x_had_errors_p (FRAME_X_DISPLAY (f)))
+	  drawable = window;
+	else
+	  XSetWindowBackgroundPixmap (FRAME_X_DISPLAY (f), window, None);
+	x_uncatch_errors_after_check ();
+      }
+    else
+      drawable = window;
+#endif
 
 #ifdef HAVE_XINPUT2
   /* Ask for input extension button and motion events.  This lets us
@@ -8550,7 +8668,11 @@ x_scroll_bar_create (struct window *w, int top, int left,
       XISelectEvents (FRAME_X_DISPLAY (f), window, &mask, 1);
     }
 #endif
+
     bar->x_window = window;
+#ifdef HAVE_XDBE
+    bar->x_drawable = drawable;
+#endif
   }
 #endif /* not USE_TOOLKIT_SCROLL_BARS */
 
@@ -8624,7 +8746,11 @@ x_scroll_bar_set_handle (struct scroll_bar *bar, int start, int end,
 			 bool rebuild)
 {
   bool dragging = bar->dragging != -1;
+#ifndef HAVE_XDBE
   Window w = bar->x_window;
+#else
+  Drawable w = bar->x_drawable;
+#endif
   struct frame *f = XFRAME (WINDOW_FRAME (XWINDOW (bar->window)));
   GC gc = f->output_data.x->normal_gc;
 
@@ -8674,10 +8800,22 @@ x_scroll_bar_set_handle (struct scroll_bar *bar, int start, int end,
     /* Draw the empty space above the handle.  Note that we can't clear
        zero-height areas; that means "clear to end of window."  */
     if ((inside_width > 0) && (start > 0))
-      x_clear_area1 (FRAME_X_DISPLAY (f), w,
-		    VERTICAL_SCROLL_BAR_LEFT_BORDER,
-		    VERTICAL_SCROLL_BAR_TOP_BORDER,
-		    inside_width, start, False);
+      {
+	if (f->output_data.x->scroll_bar_background_pixel != -1)
+	  XSetForeground (FRAME_X_DISPLAY (f), gc,
+			  f->output_data.x->scroll_bar_background_pixel);
+	else
+	  XSetForeground (FRAME_X_DISPLAY (f), gc,
+			  FRAME_BACKGROUND_PIXEL (f));
+
+	XFillRectangle (FRAME_X_DISPLAY (f), w, gc,
+			VERTICAL_SCROLL_BAR_LEFT_BORDER,
+			VERTICAL_SCROLL_BAR_TOP_BORDER,
+			inside_width, start);
+
+	XSetForeground (FRAME_X_DISPLAY (f), gc,
+			FRAME_FOREGROUND_PIXEL (f));
+      }
 
     /* Change to proper foreground color if one is specified.  */
     if (f->output_data.x->scroll_bar_foreground_pixel != -1)
@@ -8691,19 +8829,37 @@ x_scroll_bar_set_handle (struct scroll_bar *bar, int start, int end,
 		    VERTICAL_SCROLL_BAR_TOP_BORDER + start,
 		    inside_width, end - start);
 
-    /* Restore the foreground color of the GC if we changed it above.  */
-    if (f->output_data.x->scroll_bar_foreground_pixel != -1)
-      XSetForeground (FRAME_X_DISPLAY (f), gc,
-		      FRAME_FOREGROUND_PIXEL (f));
 
     /* Draw the empty space below the handle.  Note that we can't
        clear zero-height areas; that means "clear to end of window." */
     if ((inside_width > 0) && (end < inside_height))
-      x_clear_area1 (FRAME_X_DISPLAY (f), w,
-		    VERTICAL_SCROLL_BAR_LEFT_BORDER,
-		    VERTICAL_SCROLL_BAR_TOP_BORDER + end,
-		    inside_width, inside_height - end, False);
+      {
+	if (f->output_data.x->scroll_bar_background_pixel != -1)
+	  XSetForeground (FRAME_X_DISPLAY (f), gc,
+			  f->output_data.x->scroll_bar_background_pixel);
+	else
+	  XSetForeground (FRAME_X_DISPLAY (f), gc,
+			  FRAME_BACKGROUND_PIXEL (f));
+
+	XFillRectangle (FRAME_X_DISPLAY (f), w, gc,
+			VERTICAL_SCROLL_BAR_LEFT_BORDER,
+			VERTICAL_SCROLL_BAR_TOP_BORDER + end,
+			inside_width, inside_height - end);
+
+	XSetForeground (FRAME_X_DISPLAY (f), gc,
+			FRAME_FOREGROUND_PIXEL (f));
+      }
+
+    /* Restore the foreground color of the GC if we changed it above.  */
+    if (f->output_data.x->scroll_bar_foreground_pixel != -1)
+      XSetForeground (FRAME_X_DISPLAY (f), gc,
+		      FRAME_FOREGROUND_PIXEL (f));
   }
+
+#ifdef HAVE_XDBE
+  if (!rebuild)
+    x_scroll_bar_end_update (FRAME_DISPLAY_INFO (f), bar);
+#endif
 
   unblock_input ();
 }
@@ -8726,6 +8882,11 @@ x_scroll_bar_remove (struct scroll_bar *bar)
   XtDestroyWidget (SCROLL_BAR_X_WIDGET (FRAME_X_DISPLAY (f), bar));
 #endif /* not USE_GTK */
 #else
+#ifdef HAVE_XDBE
+  if (bar->x_window != bar->x_drawable)
+    XdbeDeallocateBackBufferName (FRAME_X_DISPLAY (f),
+				  bar->x_drawable);
+#endif
   XDestroyWindow (FRAME_X_DISPLAY (f), bar->x_window);
 #endif
 
@@ -9146,11 +9307,38 @@ XTjudge_scroll_bars (struct frame *f)
 static void
 x_scroll_bar_expose (struct scroll_bar *bar, const XEvent *event)
 {
+#ifndef HAVE_XDBE
   Window w = bar->x_window;
+#else
+  Drawable w = bar->x_drawable;
+#endif
+
   struct frame *f = XFRAME (WINDOW_FRAME (XWINDOW (bar->window)));
   GC gc = f->output_data.x->normal_gc;
 
   block_input ();
+
+#ifdef HAVE_XDBE
+  if (w != bar->x_window)
+    {
+      if (f->output_data.x->scroll_bar_background_pixel != -1)
+	XSetForeground (FRAME_X_DISPLAY (f), gc,
+			f->output_data.x->scroll_bar_background_pixel);
+      else
+	XSetForeground (FRAME_X_DISPLAY (f), gc,
+			FRAME_BACKGROUND_PIXEL (f));
+
+      XFillRectangle (FRAME_X_DISPLAY (f),
+		      bar->x_drawable,
+		      gc, event->xexpose.x,
+		      event->xexpose.y,
+		      event->xexpose.width,
+		      event->xexpose.height);
+
+      XSetForeground (FRAME_X_DISPLAY (f), gc,
+		      FRAME_FOREGROUND_PIXEL (f));
+    }
+#endif
 
   x_scroll_bar_set_handle (bar, bar->start, bar->end, true);
 
@@ -9171,6 +9359,10 @@ x_scroll_bar_expose (struct scroll_bar *bar, const XEvent *event)
   if (f->output_data.x->scroll_bar_foreground_pixel != -1)
     XSetForeground (FRAME_X_DISPLAY (f), gc,
 		    FRAME_FOREGROUND_PIXEL (f));
+
+#ifdef HAVE_XDBE
+  x_scroll_bar_end_update (FRAME_DISPLAY_INFO (f), bar);
+#endif
 
    unblock_input ();
 
@@ -9302,6 +9494,24 @@ x_scroll_bar_note_movement (struct scroll_bar *bar,
 	}
     }
 }
+
+#ifdef HAVE_XDBE
+static void
+x_scroll_bar_end_update (struct x_display_info *dpyinfo,
+			 struct scroll_bar *bar)
+{
+  XdbeSwapInfo swap_info;
+
+  /* This means the scroll bar is double-buffered.  */
+  if (bar->x_drawable != bar->x_window)
+    {
+      memset (&swap_info, 0, sizeof swap_info);
+      swap_info.swap_window = bar->x_window;
+      swap_info.swap_action = XdbeCopied;
+      XdbeSwapBuffers (dpyinfo->display, &swap_info, 1);
+    }
+}
+#endif
 
 #endif /* !USE_TOOLKIT_SCROLL_BARS */
 
@@ -9453,6 +9663,16 @@ x_scroll_bar_clear (struct frame *f)
 {
 #ifndef USE_TOOLKIT_SCROLL_BARS
   Lisp_Object bar;
+#ifdef HAVE_XDBE
+  GC gc = f->output_data.x->normal_gc;
+
+  if (f->output_data.x->scroll_bar_background_pixel != -1)
+    XSetForeground (FRAME_X_DISPLAY (f), gc,
+		    f->output_data.x->scroll_bar_background_pixel);
+  else
+    XSetForeground (FRAME_X_DISPLAY (f), gc,
+		    FRAME_BACKGROUND_PIXEL (f));
+#endif
 
   /* We can have scroll bars even if this is 0,
      if we just turned off scroll bar mode.
@@ -9460,9 +9680,27 @@ x_scroll_bar_clear (struct frame *f)
   if (FRAME_HAS_VERTICAL_SCROLL_BARS (f))
     for (bar = FRAME_SCROLL_BARS (f); VECTORP (bar);
 	 bar = XSCROLL_BAR (bar)->next)
-      XClearArea (FRAME_X_DISPLAY (f),
-		  XSCROLL_BAR (bar)->x_window,
-		  0, 0, 0, 0, True);
+      {
+#ifdef HAVE_XDBE
+	if (XSCROLL_BAR (bar)->x_window
+	    == XSCROLL_BAR (bar)->x_drawable)
+#endif
+	  XClearArea (FRAME_X_DISPLAY (f),
+		      XSCROLL_BAR (bar)->x_window,
+		      0, 0, 0, 0, True);
+#ifdef HAVE_XDBE
+	else
+	  XFillRectangle (FRAME_X_DISPLAY (f),
+			  XSCROLL_BAR (bar)->x_drawable,
+			  gc, 0, 0, XSCROLL_BAR (bar)->width,
+			  XSCROLL_BAR (bar)->height);
+#endif
+      }
+
+#ifdef HAVE_XDBE
+  XSetForeground (FRAME_X_DISPLAY (f), gc,
+		  FRAME_FOREGROUND_PIXEL (f));
+#endif
 #endif /* not USE_TOOLKIT_SCROLL_BARS */
 }
 
@@ -9699,23 +9937,18 @@ x_net_wm_state (struct frame *f, Window window)
   store_frame_param (f, Qshaded, shaded ? Qt : Qnil);
 }
 
-/* Flip back buffers on any frames with undrawn content.  */
+/* Flip back buffers on FRAME if it has undrawn content.  */
 static void
-flush_dirty_back_buffers (void)
+flush_dirty_back_buffer_on (struct frame *f)
 {
   block_input ();
-  Lisp_Object tail, frame;
-  FOR_EACH_FRAME (tail, frame)
-    {
-      struct frame *f = XFRAME (frame);
-      if (FRAME_LIVE_P (f) &&
-          FRAME_X_P (f) &&
-          FRAME_X_WINDOW (f) &&
-          !FRAME_GARBAGED_P (f) &&
-          !buffer_flipping_blocked_p () &&
-          FRAME_X_NEED_BUFFER_FLIP (f))
-        show_back_buffer (f);
-    }
+  if (FRAME_LIVE_P (f) &&
+      FRAME_X_P (f) &&
+      FRAME_X_WINDOW (f) &&
+      !FRAME_GARBAGED_P (f) &&
+      !buffer_flipping_blocked_p () &&
+      FRAME_X_NEED_BUFFER_FLIP (f))
+    show_back_buffer (f);
   unblock_input ();
 }
 
@@ -9788,6 +10021,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
      being passed to XtDispatchEvent.  */
   bool use_copy = false;
   XEvent copy;
+#elif defined USE_GTK && !defined HAVE_GTK3 && defined HAVE_XINPUT2
+  GdkEvent *copy = NULL;
+  GdkDisplay *gdpy = gdk_x11_lookup_xdisplay (dpyinfo->display);
 #endif
 
   *finish = X_EVENT_NORMAL;
@@ -10314,6 +10550,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
     case NoExpose:		/* This occurs when an XCopyArea's
                                    source area was completely
                                    available.  */
+#ifdef USE_X_TOOLKIT
+      *finish = X_EVENT_DROP;
+#endif
       break;
 
     case UnmapNotify:
@@ -10710,6 +10949,18 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 #endif
 #ifdef XK_dead_semivoiced_sound
 	       || orig_keysym == XK_dead_semivoiced_sound
+#endif
+#ifdef XK_dead_hook
+	       || orig_keysym == XK_dead_hook
+#endif
+#ifdef XK_dead_horn
+	       || orig_keysym == XK_dead_horn
+#endif
+#ifdef XK_dead_stroke
+	       || orig_keysym == XK_dead_stroke
+#endif
+#ifdef XK_dead_abovecomma
+	       || orig_keysym == XK_dead_abovecomma
 #endif
 	       || IsKeypadKey (keysym) /* 0xff80 <= x < 0xffbe */
 	       || IsFunctionKey (keysym) /* 0xffbe <= x < 0xffe1 */
@@ -11263,6 +11514,35 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	  }
 
 #ifdef USE_GTK
+	if (!f)
+	  {
+	    f = x_any_window_to_frame (dpyinfo, event->xbutton.window);
+
+	    if (event->xbutton.button > 3
+		&& event->xbutton.button < 9
+		&& f)
+	      {
+		if (ignore_next_mouse_click_timeout)
+		  {
+		    if (event->type == ButtonPress
+			&& event->xbutton.time > ignore_next_mouse_click_timeout)
+		      {
+			ignore_next_mouse_click_timeout = 0;
+			x_construct_mouse_click (&inev.ie, &event->xbutton, f);
+		      }
+		    if (event->type == ButtonRelease)
+		      ignore_next_mouse_click_timeout = 0;
+		  }
+		else
+		  x_construct_mouse_click (&inev.ie, &event->xbutton, f);
+
+		*finish = X_EVENT_DROP;
+		goto OTHER;
+	      }
+	    else
+	      f = NULL;
+	  }
+
         if (f && xg_event_is_for_scrollbar (f, event, false))
           f = 0;
 #endif
@@ -11372,11 +11652,10 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 #if defined (USE_X_TOOLKIT) || defined (USE_GTK)
         f = x_menubar_window_to_frame (dpyinfo, event);
-        /* For a down-event in the menu bar,
-           don't pass it to Xt right now.
-           Instead, save it away
-           and we will pass it to Xt from kbd_buffer_get_event.
-           That way, we can run some Lisp code first.  */
+        /* For a down-event in the menu bar, don't pass it to Xt or
+           GTK right away.  Instead, save it and pass it to Xt or GTK
+           from kbd_buffer_get_event.  That way, we can run some Lisp
+           code first.  */
         if (! popup_activated ()
 #ifdef USE_GTK
             /* Gtk+ menus only react to the first three buttons. */
@@ -11454,9 +11733,11 @@ handle_one_xevent (struct x_display_info *dpyinfo,
       {
 	if (!dpyinfo->supports_xi2)
 	  goto OTHER;
+
 	if (event->xgeneric.extension != dpyinfo->xi2_opcode)
 	  /* Not an XI2 event. */
 	  goto OTHER;
+
 	bool must_free_data = false;
 	XIEvent *xi_event = (XIEvent *) event->xcookie.data;
 	/* Sometimes the event is already claimed by GTK, which
@@ -11468,16 +11749,6 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	  }
 
 	XIDeviceEvent *xev = (XIDeviceEvent *) xi_event;
-#ifdef HAVE_XINPUT2_1
-	XIValuatorState *states;
-	double *values;
-	bool found_valuator = false;
-#endif
-
-	/* A fake XMotionEvent for x_note_mouse_movement. */
-	XMotionEvent ev;
-	/* A fake XButtonEvent for x_construct_mouse_click. */
-	XButtonEvent bv;
 
 	if (!xi_event)
 	  {
@@ -11535,11 +11806,14 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	  case XI_Enter:
 	    {
 	      XIEnterEvent *enter = (XIEnterEvent *) xi_event;
+	      XMotionEvent ev;
 
 	      any = x_top_window_to_frame (dpyinfo, enter->event);
 	      ev.x = lrint (enter->event_x);
 	      ev.y = lrint (enter->event_y);
 	      ev.window = enter->event;
+	      ev.time = enter->time;
+
 	      x_display_set_last_user_time (dpyinfo, xi_event->time);
 
 #ifdef USE_MOTIF
@@ -11615,10 +11889,15 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	  case XI_Leave:
 	    {
 	      XILeaveEvent *leave = (XILeaveEvent *) xi_event;
+#ifdef USE_GTK
+	      XMotionEvent ev;
 
 	      ev.x = lrint (leave->event_x);
 	      ev.y = lrint (leave->event_y);
 	      ev.window = leave->event;
+	      ev.time = leave->time;
+#endif
+
 	      any = x_top_window_to_frame (dpyinfo, leave->event);
 
 	      /* This allows us to catch LeaveNotify events generated by
@@ -11731,6 +12010,13 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	  case XI_Motion:
 	    {
 	      struct xi_device_t *device;
+#ifdef HAVE_XINPUT2_1
+	      XIValuatorState *states;
+	      double *values;
+	      bool found_valuator = false;
+#endif
+	      /* A fake XMotionEvent for x_note_mouse_movement. */
+	      XMotionEvent ev;
 
 #ifdef HAVE_XINPUT2_1
 	      states = &xev->valuators;
@@ -11902,6 +12188,20 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		    {
 		      x_display_set_last_user_time (dpyinfo, xev->time);
 
+#if defined USE_GTK && !defined HAVE_GTK3
+		      /* Unlike on Motif, we can't select for XI
+			 events on the scroll bar window under GTK+ 2.
+			 So instead of that, just ignore XI wheel
+			 events which land on a scroll bar.
+
+		        Here we assume anything which isn't the edit
+		        widget window is a scroll bar.  */
+
+		      if (xev->child != None
+			  && xev->child != FRAME_X_WINDOW (f))
+			goto OTHER;
+#endif
+
 		      if (fabs (total_x) > 0 || fabs (total_y) > 0)
 			{
 			  inev.ie.kind = (fabs (total_y) >= fabs (total_x)
@@ -12069,6 +12369,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 #ifdef HAVE_XWIDGETS
 	      struct xwidget_view *xvw;
 #endif
+	      /* A fake XButtonEvent for x_construct_mouse_click. */
+	      XButtonEvent bv;
 
 #ifdef USE_MOTIF
 #ifdef USE_TOOLKIT_SCROLL_BARS
@@ -12104,6 +12406,46 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		  if (XIMaskIsSet (xev->buttons.mask, 3))
 		    copy.xbutton.state |= Button3Mask;
 		}
+#elif defined USE_GTK && !defined HAVE_GTK3
+	      copy = gdk_event_new (xev->evtype == XI_ButtonPress
+				    ? GDK_BUTTON_PRESS : GDK_BUTTON_RELEASE);
+
+	      copy->button.window = gdk_x11_window_lookup_for_display (gdpy, xev->event);
+	      copy->button.send_event = xev->send_event;
+	      copy->button.time = xev->time;
+	      copy->button.x = xev->event_x;
+	      copy->button.y = xev->event_y;
+	      copy->button.x_root = xev->root_x;
+	      copy->button.y_root = xev->root_y;
+	      copy->button.state = xev->mods.effective;
+	      copy->button.button = xev->detail;
+
+	      if (xev->buttons.mask_len)
+		{
+		  if (XIMaskIsSet (xev->buttons.mask, 1))
+		    copy->button.state |= GDK_BUTTON1_MASK;
+		  if (XIMaskIsSet (xev->buttons.mask, 2))
+		    copy->button.state |= GDK_BUTTON2_MASK;
+		  if (XIMaskIsSet (xev->buttons.mask, 3))
+		    copy->button.state |= GDK_BUTTON3_MASK;
+		}
+
+	      if (!copy->button.window)
+		emacs_abort ();
+
+	      g_object_ref (copy->button.window);
+
+	      if (popup_activated ()
+		  && xev->evtype == XI_ButtonRelease)
+		{
+		  *finish = X_EVENT_DROP;
+		  gtk_main_do_event (copy);
+		  gdk_event_free (copy);
+		  goto XI_OTHER;
+		}
+
+	      gtk_main_do_event (copy);
+	      gdk_event_free (copy);
 #endif
 
 #ifdef HAVE_XINPUT2_1
@@ -12183,6 +12525,48 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		}
 
 #ifdef USE_GTK
+	      if (!f)
+		{
+		  int real_x = lrint (xev->event_x);
+		  int real_y = lrint (xev->event_y);
+		  Window child;
+
+		  f = x_any_window_to_frame (dpyinfo, xev->event);
+
+		  if (xev->detail > 3 && xev->detail < 9 && f)
+		    {
+		      if (xev->evtype == XI_ButtonRelease)
+			{
+			  if (FRAME_X_WINDOW (f) != xev->event)
+			    XTranslateCoordinates (dpyinfo->display, xev->event,
+						   FRAME_X_WINDOW (f), real_x,
+						   real_y, &real_x, &real_y, &child);
+
+			  if (xev->detail <= 5)
+			    inev.ie.kind = WHEEL_EVENT;
+			  else
+			    inev.ie.kind = HORIZ_WHEEL_EVENT;
+
+			  inev.ie.timestamp = xev->time;
+
+			  XSETINT (inev.ie.x, real_x);
+			  XSETINT (inev.ie.y, real_y);
+			  XSETFRAME (inev.ie.frame_or_window, f);
+
+			  inev.ie.modifiers
+			    |= x_x_to_emacs_modifiers (dpyinfo,
+						       xev->mods.effective);
+
+			  inev.ie.modifiers |= xev->detail % 2 ? down_modifier : up_modifier;
+			}
+
+		      *finish = X_EVENT_DROP;
+		      goto XI_OTHER;
+		    }
+		  else
+		    f = NULL;
+		}
+
 	      if (f && xg_event_is_for_scrollbar (f, event, false))
 		f = 0;
 #endif
@@ -12276,17 +12660,25 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		    xembed_send_message (f, xev->time,
 					 XEMBED_REQUEST_FOCUS, 0, 0, 0);
 		}
-#ifndef USE_TOOLKIT_SCROLL_BARS
 	      else
 		{
 		  struct scroll_bar *bar
 		    = x_window_to_scroll_bar (dpyinfo->display,
 					      xev->event, 2);
 
+#ifndef USE_TOOLKIT_SCROLL_BARS
 		  if (bar)
 		    x_scroll_bar_handle_click (bar, (XEvent *) &bv, &inev.ie);
-		}
+#else
+		  /* Make the "Ctrl-Mouse-2 splits window" work for toolkit
+		     scroll bars.  */
+		  if (bar && xev->mods.effective & ControlMask)
+		    {
+		      x_scroll_bar_handle_click (bar, (XEvent *) &bv, &inev.ie);
+		      *finish = X_EVENT_DROP;
+		    }
 #endif
+		}
 
 	      if (xev->evtype == XI_ButtonPress)
 		{
@@ -12426,7 +12818,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		    {
 		      for (i = 0; i < 8 * dpyinfo->modmap->max_keypermod; i++)
 			{
-			  if (xkey.keycode == dpyinfo->modmap->modifiermap[xev->detail])
+			  if (xev->detail == dpyinfo->modmap->modifiermap[i])
 			    goto xi_done_keysym;
 			}
 		    }
@@ -12660,6 +13052,18 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 #endif
 #ifdef XK_dead_semivoiced_sound
 		       || keysym == XK_dead_semivoiced_sound
+#endif
+#ifdef XK_dead_hook
+		       || keysym == XK_dead_hook
+#endif
+#ifdef XK_dead_horn
+		       || keysym == XK_dead_horn
+#endif
+#ifdef XK_dead_stroke
+		       || keysym == XK_dead_stroke
+#endif
+#ifdef XK_dead_abovecomma
+		       || keysym == XK_dead_abovecomma
 #endif
 		       || IsKeypadKey (keysym) /* 0xff80 <= x < 0xffbe */
 		       || IsFunctionKey (keysym) /* 0xffbe <= x < 0xffe1 */
@@ -13219,20 +13623,29 @@ handle_one_xevent (struct x_display_info *dpyinfo,
       count++;
     }
 
-  /* Sometimes event processing draws to the frame outside redisplay.
-     To ensure that these changes become visible, draw them here.  */
-  flush_dirty_back_buffers ();
+  /* Sometimes event processing draws to either F or ANY outside
+     redisplay.  To ensure that these changes become visible, draw
+     them here.  */
+
+  if (f)
+    flush_dirty_back_buffer_on (f);
+
+  if (any && any != f)
+    flush_dirty_back_buffer_on (any);
   return count;
 }
-
-#if defined USE_X_TOOLKIT || defined USE_MOTIF || defined USE_GTK
 
 /* Handles the XEvent EVENT on display DISPLAY.
    This is used for event loops outside the normal event handling,
    i.e. looping while a popup menu or a dialog is posted.
 
    Returns the value handle_one_xevent sets in the finish argument.  */
+
+#ifdef USE_GTK
+static int
+#else
 int
+#endif
 x_dispatch_event (XEvent *event, Display *display)
 {
   struct x_display_info *dpyinfo;
@@ -13245,7 +13658,6 @@ x_dispatch_event (XEvent *event, Display *display)
 
   return finish;
 }
-#endif
 
 /* Read events coming from the X server.
    Return as soon as there are no more events to be read.
@@ -13690,11 +14102,19 @@ x_bitmap_icon (struct frame *f, Lisp_Object file)
             }
 
 #elif defined (HAVE_XPM) && defined (HAVE_X_WINDOWS)
-
-	  rc = x_create_bitmap_from_xpm_data (f, gnu_xpm_bits);
-	  if (rc != -1)
-	    FRAME_DISPLAY_INFO (f)->icon_bitmap_id = rc;
-
+	  /* This allocates too many colors.  */
+	  if ((FRAME_X_VISUAL_INFO (f)->class == TrueColor
+	       || FRAME_X_VISUAL_INFO (f)->class == StaticColor
+	       || FRAME_X_VISUAL_INFO (f)->class == StaticGray)
+	      /* That pixmap needs about 240 colors, and we should
+		 also leave some more space for other colors as
+		 well.  */
+	      || FRAME_X_VISUAL_INFO (f)->colormap_size >= (240 * 4))
+	    {
+	      rc = x_create_bitmap_from_xpm_data (f, gnu_xpm_bits);
+	      if (rc != -1)
+		FRAME_DISPLAY_INFO (f)->icon_bitmap_id = rc;
+	    }
 #endif
 
 	  /* If all else fails, use the (black and white) xbm image. */
@@ -16159,6 +16579,14 @@ x_free_frame_resources (struct frame *f)
       XFlush (FRAME_X_DISPLAY (f));
     }
 
+#ifdef HAVE_GTK3
+  if (FRAME_OUTPUT_DATA (f)->scrollbar_background_css_provider)
+    g_object_unref (FRAME_OUTPUT_DATA (f)->scrollbar_background_css_provider);
+
+  if (FRAME_OUTPUT_DATA (f)->scrollbar_foreground_css_provider)
+    g_object_unref (FRAME_OUTPUT_DATA (f)->scrollbar_foreground_css_provider);
+#endif
+
   xfree (f->output_data.x->saved_menu_event);
   xfree (f->output_data.x);
   f->output_data.x = NULL;
@@ -17010,7 +17438,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
   /* See if a private colormap is requested.  */
   if (dpyinfo->visual == DefaultVisualOfScreen (dpyinfo->screen))
     {
-      if (dpyinfo->visual->class == PseudoColor)
+      if (dpyinfo->visual_info.class == PseudoColor)
 	{
 	  AUTO_STRING (privateColormap, "privateColormap");
 	  AUTO_STRING (PrivateColormap, "PrivateColormap");
@@ -17028,13 +17456,13 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
                                      dpyinfo->visual, AllocNone);
 
   /* See if we can construct pixel values from RGB values.  */
-  if (dpyinfo->visual->class == TrueColor)
+  if (dpyinfo->visual_info.class == TrueColor)
     {
-      get_bits_and_offset (dpyinfo->visual->red_mask,
+      get_bits_and_offset (dpyinfo->visual_info.red_mask,
                            &dpyinfo->red_bits, &dpyinfo->red_offset);
-      get_bits_and_offset (dpyinfo->visual->blue_mask,
+      get_bits_and_offset (dpyinfo->visual_info.blue_mask,
                            &dpyinfo->blue_bits, &dpyinfo->blue_offset);
-      get_bits_and_offset (dpyinfo->visual->green_mask,
+      get_bits_and_offset (dpyinfo->visual_info.green_mask,
                            &dpyinfo->green_bits, &dpyinfo->green_offset);
 
 #ifdef HAVE_XRENDER
@@ -17061,9 +17489,9 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 	  if (XAllocColor (dpyinfo->display,
 			   dpyinfo->cmap, &xc) != 0)
 	    {
-	      alpha_mask = xc.pixel & ~(dpyinfo->visual->red_mask
-					| dpyinfo->visual->blue_mask
-					| dpyinfo->visual->green_mask);
+	      alpha_mask = xc.pixel & ~(dpyinfo->visual_info.red_mask
+					| dpyinfo->visual_info.blue_mask
+					| dpyinfo->visual_info.green_mask);
 
 	      if (alpha_mask)
 		get_bits_and_offset (alpha_mask, &dpyinfo->alpha_bits,
@@ -17855,9 +18283,7 @@ x_create_terminal (struct x_display_info *dpyinfo)
   terminal->free_pixmap = x_free_pixmap;
   terminal->delete_frame_hook = x_destroy_window;
   terminal->delete_terminal_hook = x_delete_terminal;
-#if defined USE_X_TOOLKIT || defined USE_GTK
   terminal->toolkit_position_hook = x_toolkit_position;
-#endif
   /* Other hooks are NULL by default.  */
 
   return terminal;

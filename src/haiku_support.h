@@ -628,7 +628,8 @@ extern "C"
   BView_move_frame (void *view, int x, int y, int x1, int y1);
 
   extern void
-  BView_scroll_bar_update (void *sb, int portion, int whole, int position);
+  BView_scroll_bar_update (void *sb, int portion, int whole, int position,
+			   bool dragging);
 
   extern int
   BScrollBar_default_size (int horizontal_p);
@@ -744,7 +745,7 @@ extern "C"
 	     void (*run_help_callback) (void *, void *),
 	     void (*block_input_function) (void),
 	     void (*unblock_input_function) (void),
-	     void (*process_pending_signals_function) (void),
+	     struct timespec (*process_pending_signals_function) (void),
 	     void *run_help_callback_data);
 
   extern void
@@ -938,6 +939,9 @@ extern "C"
 
   extern haiku_font_family_or_style *
   be_list_font_families (size_t *length);
+
+  extern void
+  BWindow_dimensions (void *window, int *width, int *height);
 
 #ifdef __cplusplus
   extern void *

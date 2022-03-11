@@ -1571,16 +1571,30 @@ public:
     vw->SetResizingMode (B_FOLLOW_NONE);
     horizontal = horizontal_p;
     get_scroll_bar_info (&info);
+    SetSteps (5000, 10000);
   }
 
   void
   MessageReceived (BMessage *msg)
   {
+    int32 portion, range;
+    double proportion;
+
     if (msg->what == SCROLL_BAR_UPDATE)
       {
 	old_value = msg->GetInt32 ("emacs:units", 0);
-	this->SetRange (0, msg->GetInt32 ("emacs:range", 0));
-	this->SetValue (msg->GetInt32 ("emacs:units", 0));
+	portion = msg->GetInt32 ("emacs:portion", 0);
+	range = msg->GetInt32 ("emacs:range", 0);
+	proportion = (double) portion / range;
+
+	if (!msg->GetBool ("emacs:dragging", false))
+	  {
+	    /* Unlike on Motif, PORTION isn't included in the total
+	       range of the scroll bar.  */
+	    this->SetRange (0, std::floor ((double) range - (range * proportion)));
+	    this->SetValue (old_value);
+	    this->SetProportion (proportion);
+	  }
       }
 
     BScrollBar::MessageReceived (msg);
@@ -1612,11 +1626,15 @@ public:
 	return;
       }
 
-    rq.scroll_bar = this;
-    rq.window = Window ();
-    rq.position = new_value;
+    if (new_value != old_value)
+      {
+	rq.scroll_bar = this;
+	rq.window = Window ();
+	rq.position = new_value;
+	old_value = new_value;
 
-    haiku_write (SCROLL_BAR_VALUE_EVENT, &rq);
+	haiku_write (SCROLL_BAR_VALUE_EVENT, &rq);
+      }
   }
 
   BRegion
@@ -2080,6 +2098,16 @@ BWindow_set_offset (void *window, int x, int y)
     wn->MoveTo (x, y);
 }
 
+void
+BWindow_dimensions (void *window, int *width, int *height)
+{
+  BWindow *w = (BWindow *) window;
+  BRect frame = w->Frame ();
+
+  *width = BE_RECT_WIDTH (frame);
+  *height = BE_RECT_HEIGHT (frame);
+}
+
 /* Iconify WINDOW.  */
 void
 BWindow_iconify (void *window)
@@ -2259,13 +2287,16 @@ BView_move_frame (void *view, int x, int y, int x1, int y1)
 }
 
 void
-BView_scroll_bar_update (void *sb, int portion, int whole, int position)
+BView_scroll_bar_update (void *sb, int portion, int whole, int position,
+			 bool dragging)
 {
   BScrollBar *bar = (BScrollBar *) sb;
   BMessage msg = BMessage (SCROLL_BAR_UPDATE);
   BMessenger mr = BMessenger (bar);
   msg.AddInt32 ("emacs:range", whole);
   msg.AddInt32 ("emacs:units", position);
+  msg.AddInt32 ("emacs:portion", portion);
+  msg.AddBool ("emacs:dragging", dragging);
 
   mr.SendMessage (&msg);
 }
@@ -2687,7 +2718,7 @@ BMenu_run (void *menu, int x, int y,
 	   void (*run_help_callback) (void *, void *),
 	   void (*block_input_function) (void),
 	   void (*unblock_input_function) (void),
-	   void (*process_pending_signals_function) (void),
+	   struct timespec (*process_pending_signals_function) (void),
 	   void *run_help_callback_data)
 {
   BPopUpMenu *mn = (BPopUpMenu *) menu;
@@ -2695,10 +2726,12 @@ BMenu_run (void *menu, int x, int y,
   void *buf;
   void *ptr = NULL;
   struct be_popup_menu_data data;
-  struct object_wait_info infos[2];
+  struct object_wait_info infos[3];
   struct haiku_menu_bar_help_event *event;
   BMessage *msg;
   ssize_t stat;
+  struct timespec next_time;
+  bigtime_t timeout;
 
   block_input_function ();
   port_popup_menu_to_emacs = create_port (1800, "popup menu port");
@@ -2723,6 +2756,10 @@ BMenu_run (void *menu, int x, int y,
 				  (void *) &data);
   infos[1].type = B_OBJECT_TYPE_THREAD;
   infos[1].events = B_EVENT_INVALID;
+
+  infos[2].object = port_application_to_emacs;
+  infos[2].type = B_OBJECT_TYPE_PORT;
+  infos[2].events = B_EVENT_READ;
   unblock_input_function ();
 
   if (infos[1].object < B_OK)
@@ -2739,12 +2776,19 @@ BMenu_run (void *menu, int x, int y,
 
   while (true)
     {
-      process_pending_signals_function ();
+      next_time = process_pending_signals_function ();
 
-      if ((stat = wait_for_objects_etc ((object_wait_info *) &infos, 2,
-					B_RELATIVE_TIMEOUT, 10000)) < B_OK)
+      if (next_time.tv_nsec < 0)
+	timeout = 100000;
+      else
+	timeout = (next_time.tv_sec * 1000000
+		   + next_time.tv_nsec / 1000);
+
+      if ((stat = wait_for_objects_etc ((object_wait_info *) &infos, 3,
+					B_RELATIVE_TIMEOUT, timeout)) < B_OK)
 	{
-	  if (stat == B_INTERRUPTED || stat == B_TIMED_OUT)
+	  if (stat == B_INTERRUPTED || stat == B_TIMED_OUT
+	      || stat == B_WOULD_BLOCK)
 	    continue;
 	  else
 	    gui_abort ("Failed to wait for popup");
@@ -2782,6 +2826,7 @@ BMenu_run (void *menu, int x, int y,
 
       infos[0].events = B_EVENT_READ;
       infos[1].events = B_EVENT_INVALID;
+      infos[2].events = B_EVENT_READ;
     }
 }
 

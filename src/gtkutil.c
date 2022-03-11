@@ -266,6 +266,7 @@ xg_display_open (char *display_name, GdkDisplay **dpy)
 static int
 xg_get_gdk_scale (void)
 {
+#ifdef HAVE_GTK3
   const char *sscale = getenv ("GDK_SCALE");
 
   if (sscale)
@@ -274,6 +275,7 @@ xg_get_gdk_scale (void)
       if (0 < scale)
 	return min (scale, INT_MAX);
     }
+#endif
 
   return 1;
 }
@@ -1610,10 +1612,7 @@ xg_create_frame_widgets (struct frame *f)
      with regular X drawing primitives, so from a GTK/GDK point of
      view, the widget is totally blank.  When an expose comes, this
      will make the widget blank, and then Emacs redraws it.  This flickers
-     a lot, so we turn off double buffering.
-     FIXME: gtk_widget_set_double_buffered is deprecated and might stop
-     working in the future.  We need to migrate away from combining
-     X and GTK+ drawing to a pure GTK+ build.  */
+     a lot, so we turn off double buffering.  */
 
 #ifndef HAVE_PGTK
   gtk_widget_set_double_buffered (wfixed, FALSE);
@@ -3280,8 +3279,13 @@ menu_bar_button_pressed_cb (GtkWidget *widget, GdkEvent *event,
 {
   struct frame *f = user_data;
 
-  if (event->button.button < 4)
-    set_frame_menubar (f, true);
+  if (event->button.button < 4
+      && event->button.window != gtk_widget_get_window (widget)
+      && !popup_activated ())
+    {
+      pgtk_menu_set_in_use (true);
+      set_frame_menubar (f, true);
+    }
 
   return false;
 }
@@ -4223,13 +4227,13 @@ xg_event_is_for_menubar (struct frame *f, const XEvent *event)
     }
   else
     {
-#else
+#endif
       rec.x = event->xbutton.x / scale;
       rec.y = event->xbutton.y / scale;
-#endif
 #ifdef HAVE_XINPUT2
     }
 #endif
+
   rec.width = 1;
   rec.height = 1;
 
@@ -4441,6 +4445,10 @@ xg_finish_scroll_bar_creation (struct frame *f,
                                const char *scroll_bar_name)
 {
   GtkWidget *webox = gtk_event_box_new ();
+#ifdef HAVE_GTK3
+  GtkCssProvider *foreground_provider;
+  GtkCssProvider *background_provider;
+#endif
 
   gtk_widget_set_name (wscroll, scroll_bar_name);
 #ifndef HAVE_GTK3
@@ -4489,15 +4497,14 @@ xg_finish_scroll_bar_creation (struct frame *f,
   /* Set the cursor to an arrow.  */
   xg_set_cursor (webox, FRAME_DISPLAY_INFO (f)->xg_cursor);
 
-#ifdef HAVE_PGTK
+#ifdef HAVE_GTK3
   GtkStyleContext *ctxt = gtk_widget_get_style_context (wscroll);
-  gtk_style_context_add_provider (ctxt,
-				  GTK_STYLE_PROVIDER (FRAME_OUTPUT_DATA (f)->
-						      scrollbar_foreground_css_provider),
+  foreground_provider = FRAME_OUTPUT_DATA (f)->scrollbar_foreground_css_provider;
+  background_provider = FRAME_OUTPUT_DATA (f)->scrollbar_background_css_provider;
+
+  gtk_style_context_add_provider (ctxt, GTK_STYLE_PROVIDER (foreground_provider),
 				  GTK_STYLE_PROVIDER_PRIORITY_USER);
-  gtk_style_context_add_provider (ctxt,
-				  GTK_STYLE_PROVIDER (FRAME_OUTPUT_DATA (f)->
-						      scrollbar_background_css_provider),
+  gtk_style_context_add_provider (ctxt, GTK_STYLE_PROVIDER (background_provider),
 				  GTK_STYLE_PROVIDER_PRIORITY_USER);
 #endif
 
@@ -6251,6 +6258,13 @@ xg_widget_key_press_event_cb (GtkWidget *widget, GdkEvent *event,
 
   if (event->key.is_modifier)
     goto done;
+
+#ifndef HAVE_GTK3
+  /* FIXME: event->key.is_modifier is not accurate on GTK 2.  */
+
+  if (keysym >= GDK_KEY_Shift_L && keysym <= GDK_KEY_Hyper_R)
+    goto done;
+#endif
 
   /* First deal with keysyms which have defined
      translations to characters.  */
