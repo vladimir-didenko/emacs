@@ -23,6 +23,15 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include <cstdio>
 #endif
 
+#include <SupportDefs.h>
+
+enum haiku_clipboard
+  {
+    CLIPBOARD_PRIMARY,
+    CLIPBOARD_SECONDARY,
+    CLIPBOARD_CLIPBOARD
+  };
+
 #ifdef __cplusplus
 #include <stdio.h>
 extern "C"
@@ -72,11 +81,40 @@ extern "C"
   extern bool
   BClipboard_owns_primary (void);
 
-  extern bool
-  BClipboard_owns_secondary (void);
+  extern bool BClipboard_owns_secondary (void);
 
   /* Free the returned data.  */
   extern void BClipboard_free_data (void *ptr);
+
+  extern int be_enum_message (void *message, int32 *tc, int32 index,
+			      int32 *count, const char **name_return);
+  extern int be_get_message_data (void *message, const char *name,
+				  int32 type_code, int32 index,
+				  const void **buf_return,
+				  ssize_t *size_return);
+  extern int be_get_refs_data (void *message, const char *name,
+			       int32 index, char **path_buffer);
+  extern int be_get_point_data (void *message, const char *name,
+				int32 index, float *x, float *y);
+  extern uint32 be_get_message_type (void *message);
+  extern void be_set_message_type (void *message, uint32 what);
+  extern void *be_get_message_message (void *message, const char *name,
+				       int32 index);
+  extern void *be_create_simple_message (void);
+  extern int be_add_message_data (void *message, const char *name,
+				  int32 type_code, const void *buf,
+				  ssize_t buf_size);
+  extern int be_add_refs_data (void *message, const char *name,
+			       const char *filename);
+  extern int be_add_point_data (void *message, const char *name,
+				float x, float y);
+  extern int be_add_message_message (void *message, const char *name,
+				     void *data);
+  extern int be_lock_clipboard_message (enum haiku_clipboard clipboard,
+					void **message_return,
+					bool clear);
+  extern void be_unlock_clipboard (enum haiku_clipboard clipboard,
+				   bool discard);
 #ifdef __cplusplus
 };
 #endif

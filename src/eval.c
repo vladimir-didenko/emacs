@@ -223,8 +223,8 @@ init_eval_once_for_pdumper (void)
 {
   enum { size = 50 };
   union specbinding *pdlvec = malloc ((size + 1) * sizeof *specpdl);
-  specpdl_size = size;
   specpdl = specpdl_ptr = pdlvec + 1;
+  specpdl_end = specpdl + size;
 }
 
 void
@@ -266,8 +266,6 @@ restore_stack_limits (Lisp_Object data)
   integer_to_intmax (XCAR (data), &max_specpdl_size);
   integer_to_intmax (XCDR (data), &max_lisp_eval_depth);
 }
-
-static void grow_specpdl (void);
 
 /* Call the Lisp debugger, giving it argument ARG.  */
 
@@ -561,6 +559,10 @@ usage: (function ARG)  */)
 	{ /* Handle the special (:documentation <form>) to build the docstring
 	     dynamically.  */
 	  Lisp_Object docstring = eval_sub (Fcar (XCDR (tmp)));
+	  if (SYMBOLP (docstring) && !NILP (docstring))
+	    /* Hack for OClosures: Allow the docstring to be a symbol
+             * (the OClosure's type).  */
+	    docstring = Fsymbol_name (docstring);
 	  CHECK_STRING (docstring);
 	  cdr = Fcons (XCAR (cdr), Fcons (docstring, XCDR (XCDR (cdr))));
 	}
@@ -1235,6 +1237,7 @@ unwind_to_catch (struct handler *catch, enum nonlocal_exit type,
   eassert (handlerlist == catch);
 
   lisp_eval_depth = catch->f_lisp_eval_depth;
+  set_act_rec (current_thread, catch->act_rec);
 
   sys_longjmp (catch->jmp, 1);
 }
@@ -1502,90 +1505,6 @@ internal_condition_case_2 (Lisp_Object (*bfun) (Lisp_Object, Lisp_Object),
     }
 }
 
-/* Like internal_condition_case_1 but call BFUN with ARG1, ARG2, ARG3 as
-   its arguments.  */
-
-Lisp_Object
-internal_condition_case_3 (Lisp_Object (*bfun) (Lisp_Object, Lisp_Object,
-                                                Lisp_Object),
-                           Lisp_Object arg1, Lisp_Object arg2, Lisp_Object arg3,
-                           Lisp_Object handlers,
-                           Lisp_Object (*hfun) (Lisp_Object))
-{
-  struct handler *c = push_handler (handlers, CONDITION_CASE);
-  if (sys_setjmp (c->jmp))
-    {
-      Lisp_Object val = handlerlist->val;
-      clobbered_eassert (handlerlist == c);
-      handlerlist = handlerlist->next;
-      return hfun (val);
-    }
-  else
-    {
-      Lisp_Object val = bfun (arg1, arg2, arg3);
-      eassert (handlerlist == c);
-      handlerlist = c->next;
-      return val;
-    }
-}
-
-/* Like internal_condition_case_1 but call BFUN with ARG1, ARG2, ARG3, ARG4 as
-   its arguments.  */
-
-Lisp_Object
-internal_condition_case_4 (Lisp_Object (*bfun) (Lisp_Object, Lisp_Object,
-                                                Lisp_Object, Lisp_Object),
-                           Lisp_Object arg1, Lisp_Object arg2,
-                           Lisp_Object arg3, Lisp_Object arg4,
-                           Lisp_Object handlers,
-                           Lisp_Object (*hfun) (Lisp_Object))
-{
-  struct handler *c = push_handler (handlers, CONDITION_CASE);
-  if (sys_setjmp (c->jmp))
-    {
-      Lisp_Object val = handlerlist->val;
-      clobbered_eassert (handlerlist == c);
-      handlerlist = handlerlist->next;
-      return hfun (val);
-    }
-  else
-    {
-      Lisp_Object val = bfun (arg1, arg2, arg3, arg4);
-      eassert (handlerlist == c);
-      handlerlist = c->next;
-      return val;
-    }
-}
-
-/* Like internal_condition_case_1 but call BFUN with ARG1, ARG2, ARG3,
-   ARG4, ARG5 as its arguments.  */
-
-Lisp_Object
-internal_condition_case_5 (Lisp_Object (*bfun) (Lisp_Object, Lisp_Object,
-                                                Lisp_Object, Lisp_Object,
-						Lisp_Object),
-                           Lisp_Object arg1, Lisp_Object arg2,
-                           Lisp_Object arg3, Lisp_Object arg4,
-			   Lisp_Object arg5, Lisp_Object handlers,
-                           Lisp_Object (*hfun) (Lisp_Object))
-{
-  struct handler *c = push_handler (handlers, CONDITION_CASE);
-  if (sys_setjmp (c->jmp))
-    {
-      Lisp_Object val = handlerlist->val;
-      clobbered_eassert (handlerlist == c);
-      handlerlist = handlerlist->next;
-      return hfun (val);
-    }
-  else
-    {
-      Lisp_Object val = bfun (arg1, arg2, arg3, arg4, arg5);
-      eassert (handlerlist == c);
-      handlerlist = c->next;
-      return val;
-    }
-}
-
 /* Like internal_condition_case but call BFUN with NARGS as first,
    and ARGS as second argument.  */
 
@@ -1675,6 +1594,7 @@ push_handler_nosignal (Lisp_Object tag_ch_val, enum handlertype handlertype)
   c->next = handlerlist;
   c->f_lisp_eval_depth = lisp_eval_depth;
   c->pdlcount = SPECPDL_INDEX ();
+  c->act_rec = get_act_rec (current_thread);
   c->poll_suppress_count = poll_suppress_count;
   c->interrupt_input_blocked = interrupt_input_blocked;
   handlerlist = c;
@@ -1773,7 +1693,7 @@ signal_or_quit (Lisp_Object error_symbol, Lisp_Object data, bool keyboard_quit)
       && ! NILP (error_symbol)
       /* Don't try to call a lisp function if we've already overflowed
          the specpdl stack.  */
-      && specpdl_ptr < specpdl + specpdl_size)
+      && specpdl_ptr < specpdl_end)
     {
       /* Edebug takes care of restoring these variables when it exits.  */
       max_ensure_room (&max_lisp_eval_depth, lisp_eval_depth, 20);
@@ -2320,60 +2240,27 @@ alist mapping symbols to their value.  */)
   return unbind_to (count, eval_sub (form));
 }
 
-static void
+void
 grow_specpdl_allocation (void)
 {
-  eassert (specpdl_ptr == specpdl + specpdl_size);
+  eassert (specpdl_ptr == specpdl_end);
 
   specpdl_ref count = SPECPDL_INDEX ();
   ptrdiff_t max_size = min (max_specpdl_size, PTRDIFF_MAX - 1000);
   union specbinding *pdlvec = specpdl - 1;
-  ptrdiff_t pdlvecsize = specpdl_size + 1;
-  if (max_size <= specpdl_size)
+  ptrdiff_t size = specpdl_end - specpdl;
+  ptrdiff_t pdlvecsize = size + 1;
+  if (max_size <= size)
     {
       if (max_specpdl_size < 400)
 	max_size = max_specpdl_size = 400;
-      if (max_size <= specpdl_size)
+      if (max_size <= size)
 	xsignal0 (Qexcessive_variable_binding);
     }
   pdlvec = xpalloc (pdlvec, &pdlvecsize, 1, max_size + 1, sizeof *specpdl);
   specpdl = pdlvec + 1;
-  specpdl_size = pdlvecsize - 1;
+  specpdl_end = specpdl + pdlvecsize - 1;
   specpdl_ptr = specpdl_ref_to_ptr (count);
-}
-
-/* Grow the specpdl stack by one entry.
-   The caller should have already initialized the entry.
-   Signal an error on stack overflow.
-
-   Make sure that there is always one unused entry past the top of the
-   stack, so that the just-initialized entry is safely unwound if
-   memory exhausted and an error is signaled here.  Also, allocate a
-   never-used entry just before the bottom of the stack; sometimes its
-   address is taken.  */
-
-INLINE void
-grow_specpdl (void)
-{
-  specpdl_ptr++;
-  if (specpdl_ptr == specpdl + specpdl_size)
-    grow_specpdl_allocation ();
-}
-
-specpdl_ref
-record_in_backtrace (Lisp_Object function, Lisp_Object *args, ptrdiff_t nargs)
-{
-  specpdl_ref count = SPECPDL_INDEX ();
-
-  eassert (nargs >= UNEVALLED);
-  specpdl_ptr->bt.kind = SPECPDL_BACKTRACE;
-  specpdl_ptr->bt.debug_on_exit = false;
-  specpdl_ptr->bt.function = function;
-  current_thread->stack_top = specpdl_ptr->bt.args = args;
-  specpdl_ptr->bt.nargs = nargs;
-  grow_specpdl ();
-
-  return count;
 }
 
 /* Eval a sub-expression of the current expression (i.e. in the same
@@ -3140,10 +3027,7 @@ fetch_and_exec_byte_code (Lisp_Object fun, ptrdiff_t args_template,
   if (CONSP (AREF (fun, COMPILED_BYTECODE)))
     Ffetch_bytecode (fun);
 
-  return exec_byte_code (AREF (fun, COMPILED_BYTECODE),
-			 AREF (fun, COMPILED_CONSTANTS),
-			 AREF (fun, COMPILED_STACK_DEPTH),
-			 args_template, nargs, args);
+  return exec_byte_code (fun, args_template, nargs, args);
 }
 
 static Lisp_Object

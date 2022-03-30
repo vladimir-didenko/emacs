@@ -248,6 +248,28 @@ The target is used in the prompt for file copy, rename etc."
           (other :tag "Try to guess" t))
   :group 'dired)
 
+
+(defcustom dired-mouse-drag-files nil
+  "If non-nil, allow the mouse to drag files from inside a Dired buffer.
+Dragging the mouse and then releasing it over the window of
+another program will result in that program opening the file, or
+creating a copy of it.  This feature is supported only on X
+Windows and Haiku.
+
+If the value is `link', then a symbolic link will be created to
+the file instead by the other program (usually a file manager)."
+  :set (lambda (option value)
+         (set-default option value)
+         (dolist (buffer (buffer-list))
+           (with-current-buffer buffer
+             (when (derived-mode-p 'dired-mode)
+               (revert-buffer nil t)))))
+  :type '(choice (const :tag "Don't allow dragging" nil)
+                 (const :tag "Copy file to other window" t)
+                 (const :tag "Create symbolic link to file" link))
+  :group 'dired
+  :version "29.1")
+
 (defcustom dired-copy-preserve-time t
   "If non-nil, Dired preserves the last-modified time in a file copy.
 \(This works on only some systems.)"
@@ -1260,39 +1282,42 @@ The return value is the target column for the file names."
   ;; This differs from dired-buffers-for-dir in that it does not consider
   ;; subdirs of default-directory and searches for the first match only.
   ;; Also, the major mode must be MODE.
-  (if (and (featurep 'dired-x)
-           dired-find-subdir
-           ;; Don't try to find a wildcard as a subdirectory.
-	   (string-equal dirname (file-name-directory dirname)))
-      (let* ((cur-buf (current-buffer))
-	     (buffers (nreverse (dired-buffers-for-dir dirname)))
-	     (cur-buf-matches (and (memq cur-buf buffers)
-				   ;; Wildcards must match, too:
-				   (equal dired-directory dirname))))
-	;; We don't want to switch to the same buffer---
-	(setq buffers (delq cur-buf buffers))
-	(or (car (sort buffers #'dired-buffer-more-recently-used-p))
-	    ;; ---unless it's the only possibility:
-	    (and cur-buf-matches cur-buf)))
-    ;; No dired-x, or dired-find-subdir nil.
-    (setq dirname (expand-file-name dirname))
-    (let (found (blist dired-buffers))    ; was (buffer-list)
-      (or mode (setq mode 'dired-mode))
-      (while blist
-        (if (null (buffer-name (cdr (car blist))))
-            (setq blist (cdr blist))
-          (with-current-buffer (cdr (car blist))
-            (if (and (eq major-mode mode)
-                     dired-directory  ;; nil during find-alternate-file
-                     (equal dirname
-                            (expand-file-name
-                             (if (consp dired-directory)
-                                 (car dired-directory)
-                               dired-directory))))
-                (setq found (cdr (car blist))
-                      blist nil)
-              (setq blist (cdr blist))))))
-      found)))
+  ;; We bind `non-essential' in order to avoid hangs in remote buffers
+  ;; with a blocked connection.  (Bug#54542)
+  (let ((non-essential t))
+    (if (and (featurep 'dired-x)
+             dired-find-subdir
+             ;; Don't try to find a wildcard as a subdirectory.
+	     (string-equal dirname (file-name-directory dirname)))
+        (let* ((cur-buf (current-buffer))
+	       (buffers (nreverse (dired-buffers-for-dir dirname)))
+	       (cur-buf-matches (and (memq cur-buf buffers)
+				     ;; Wildcards must match, too:
+				     (equal dired-directory dirname))))
+	  ;; We don't want to switch to the same buffer---
+	  (setq buffers (delq cur-buf buffers))
+	  (or (car (sort buffers #'dired-buffer-more-recently-used-p))
+	      ;; ---unless it's the only possibility:
+	      (and cur-buf-matches cur-buf)))
+      ;; No dired-x, or dired-find-subdir nil.
+      (setq dirname (expand-file-name dirname))
+      (let (found (blist dired-buffers))    ; was (buffer-list)
+        (or mode (setq mode 'dired-mode))
+        (while blist
+          (if (null (buffer-name (cdr (car blist))))
+              (setq blist (cdr blist))
+            (with-current-buffer (cdr (car blist))
+              (if (and (eq major-mode mode)
+                       dired-directory  ;; nil during find-alternate-file
+                       (equal dirname
+                              (expand-file-name
+                               (if (consp dired-directory)
+                                   (car dired-directory)
+                                 dired-directory))))
+                  (setq found (cdr (car blist))
+                        blist nil)
+                (setq blist (cdr blist))))))
+        found))))
 
 
 ;;; Read in a new dired buffer
@@ -1674,6 +1699,70 @@ see `dired-use-ls-dired' for more details.")
           beg))
         beg))))
 
+(defvar dired-last-dragged-remote-file nil
+  "If non-nil, the name of a local copy of the last remote file that was dragged.
+It can't be removed immediately after the drag-and-drop operation
+completes, since there is no way to determine when the drop
+target has finished opening it.  So instead, this file is removed
+when Emacs exits or the user drags another file.")
+
+(declare-function x-begin-drag "xfns.c")
+
+(defun dired-remove-last-dragged-local-file ()
+  "Remove the local copy of the last remote file to be dragged."
+  (when dired-last-dragged-remote-file
+    (unwind-protect
+        (delete-file dired-last-dragged-remote-file)
+      (setq dired-last-dragged-remote-file nil)))
+  (remove-hook 'kill-emacs-hook #'dired-remove-last-dragged-local-file))
+
+(defun dired-mouse-drag (event)
+  "Begin a drag-and-drop operation for the file at EVENT."
+  (interactive "e")
+  (when mark-active
+    (deactivate-mark))
+  (dired-remove-last-dragged-local-file)
+  (save-excursion
+    (with-selected-window (posn-window (event-end event))
+      (goto-char (posn-point (event-end event))))
+    (track-mouse
+      (let ((new-event (read-event)))
+        (if (not (eq (event-basic-type new-event) 'mouse-movement))
+            (when (eq (event-basic-type new-event) 'mouse-1)
+              (push new-event unread-command-events))
+          ;; We can get an error if there's by some chance no file
+          ;; name at point.
+          (condition-case nil
+              (let ((filename (with-selected-window (posn-window
+                                                     (event-end event))
+                                (dired-file-name-at-point))))
+                (when filename
+                  ;; In theory x-dnd-username combined with a proper
+                  ;; file URI containing the hostname of the remote
+                  ;; server could be used here instead of creating a
+                  ;; local copy of the remote file, but no program
+                  ;; actually implements file DND according to the
+                  ;; spec.
+                  (when (file-remote-p filename)
+                    (setq filename (file-local-copy filename))
+                    (setq dired-last-dragged-remote-file filename)
+                    (add-hook 'kill-emacs-hook
+                              #'dired-remove-last-dragged-local-file))
+                  (gui-backend-set-selection 'XdndSelection filename)
+                  (x-begin-drag '("text/uri-list"
+                                  "text/x-dnd-username")
+                                (if (eq 'dired-mouse-drag-files 'link)
+                                    'XdndActionLink
+                                  'XdndActionCopy)
+                                nil nil t)))
+            (error (when (eq (event-basic-type new-event) 'mouse-1)
+                     (push new-event unread-command-events)))))))))
+
+(defvar dired-mouse-drag-files-map (let ((keymap (make-sparse-keymap)))
+                                     (define-key keymap [down-mouse-1] #'dired-mouse-drag)
+                                     keymap)
+  "Keymap applied to file names when `dired-mouse-drag-files' is enabled.")
+
 (defun dired-insert-set-properties (beg end)
   "Add various text properties to the lines in the region, from BEG to END."
   (save-excursion
@@ -1688,15 +1777,27 @@ see `dired-use-ls-dired' for more details.")
 				 'invisible 'dired-hide-details-information))
 	  (put-text-property (+ (line-beginning-position) 1) (1- (point))
 			     'invisible 'dired-hide-details-detail)
+          (when (and dired-mouse-drag-files (fboundp 'x-begin-drag))
+            (put-text-property (point)
+	                       (save-excursion
+	                         (dired-move-to-end-of-filename)
+                                 (backward-char)
+	                         (point))
+                               'keymap
+                               dired-mouse-drag-files-map))
 	  (add-text-properties
 	   (point)
 	   (progn
 	     (dired-move-to-end-of-filename)
 	     (point))
-	   '(mouse-face
+	   `(mouse-face
 	     highlight
 	     dired-filename t
-	     help-echo "mouse-2: visit this file in other window"))
+	     help-echo ,(if (and dired-mouse-drag-files
+                                 (fboundp 'x-begin-drag))
+                            "down-mouse-1: drag this file to another program
+mouse-2: visit this file in other window"
+                          "mouse-2: visit this file in other window")))
 	  (when (< (+ (point) 4) (line-end-position))
 	    (put-text-property (+ (point) 4) (line-end-position)
 			       'invisible 'dired-hide-details-link))))

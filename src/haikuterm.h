@@ -35,6 +35,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #define HAVE_CHAR_CACHE_MAX 65535
 
 extern int popup_activated_p;
+extern bool haiku_dnd_in_progress;
 
 extern void be_app_quit (void);
 
@@ -107,6 +108,23 @@ struct haiku_display_info
   Time last_mouse_movement_time;
 
   Window root_window;
+
+  Emacs_Cursor text_cursor;
+  Emacs_Cursor nontext_cursor;
+  Emacs_Cursor modeline_cursor;
+  Emacs_Cursor hand_cursor;
+  Emacs_Cursor hourglass_cursor;
+  Emacs_Cursor horizontal_drag_cursor;
+  Emacs_Cursor vertical_drag_cursor;
+  Emacs_Cursor left_edge_cursor;
+  Emacs_Cursor top_left_corner_cursor;
+  Emacs_Cursor top_edge_cursor;
+  Emacs_Cursor top_right_corner_cursor;
+  Emacs_Cursor right_edge_cursor;
+  Emacs_Cursor bottom_right_corner_cursor;
+  Emacs_Cursor bottom_edge_cursor;
+  Emacs_Cursor bottom_left_corner_cursor;
+  Emacs_Cursor no_cursor;
 };
 
 struct haiku_output
@@ -150,11 +168,6 @@ struct haiku_output
   int menu_up_to_date_p;
   int zoomed_p;
 
-  int pending_zoom_x;
-  int pending_zoom_y;
-  int pending_zoom_width;
-  int pending_zoom_height;
-
   int menu_bar_open_p;
 
   struct font *font;
@@ -165,6 +178,10 @@ struct haiku_output
 
   /* The pending position we're waiting for. */
   int pending_top, pending_left;
+
+  /* Whether or not adjust_frame_size and haiku_set_offset have yet
+     been called by haiku_create_frame.  */
+  bool configury_done;
 };
 
 struct x_output
@@ -255,6 +272,7 @@ extern void haiku_free_frame_resources (struct frame *f);
 extern void haiku_scroll_bar_remove (struct scroll_bar *bar);
 extern void haiku_clear_under_internal_border (struct frame *f);
 extern void haiku_set_name (struct frame *f, Lisp_Object name, bool explicit_p);
+extern Lisp_Object haiku_message_to_lisp (void *);
 
 extern struct haiku_display_info *haiku_term_init (void);
 

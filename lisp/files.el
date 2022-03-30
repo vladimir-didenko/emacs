@@ -987,10 +987,7 @@ one or more of those symbols."
 	  (logior (if (memq 'executable predicate) 1 0)
 		  (if (memq 'writable predicate) 2 0)
 		  (if (memq 'readable predicate) 4 0))))
-  (let ((file (locate-file-internal filename path suffixes predicate)))
-    (if (and file (string-match "\\.eln\\'" file))
-        (gethash (file-name-nondirectory file) comp-eln-to-el-h)
-      file)))
+  (locate-file-internal filename path suffixes predicate))
 
 (defun locate-file-completion-table (dirs suffixes string pred action)
   "Do completion for file names passed to `locate-file'."
@@ -3744,8 +3741,8 @@ return as the symbol specifying the mode."
 	       (while (not (or (and (eq handle-mode t) result)
                                (>= (point) end)))
 		 (unless (looking-at hack-local-variable-regexp)
-		   (message "Malformed mode-line: %S"
-                            (buffer-substring-no-properties (point) end))
+		   (message "Malformed mode-line: %S in buffer %S"
+                            (buffer-substring-no-properties (point) end) (buffer-name))
 		   (throw 'malformed-line nil))
 		 (goto-char (match-end 0))
 		 ;; There used to be a downcase here,

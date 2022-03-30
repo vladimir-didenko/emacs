@@ -867,7 +867,7 @@ x_set_undecorated (struct frame *f, Lisp_Object new_value, Lisp_Object old_value
 #else
       Display *dpy = FRAME_X_DISPLAY (f);
       PropMotifWmHints hints;
-      Atom prop = XInternAtom (dpy, "_MOTIF_WM_HINTS", False);
+      Atom prop = FRAME_DISPLAY_INFO (f)->Xatom_MOTIF_WM_HINTS;
 
       memset (&hints, 0, sizeof(hints));
       hints.flags = MWM_HINTS_DECORATIONS;
@@ -979,7 +979,7 @@ x_set_no_focus_on_map (struct frame *f, Lisp_Object new_value, Lisp_Object old_v
       xg_set_no_focus_on_map (f, new_value);
 #else /* not USE_GTK */
       Display *dpy = FRAME_X_DISPLAY (f);
-      Atom prop = XInternAtom (dpy, "_NET_WM_USER_TIME", False);
+      Atom prop = FRAME_DISPLAY_INFO (f)->Xatom_net_wm_user_time;
       Time timestamp = NILP (new_value) ? CurrentTime : 0;
 
       XChangeProperty (dpy, FRAME_OUTER_WINDOW (f), prop,
@@ -3642,9 +3642,9 @@ setup_xi_event_mask (struct frame *f)
 #ifndef USE_GTK
   XISetMask (m, XI_FocusIn);
   XISetMask (m, XI_FocusOut);
-#endif
   XISetMask (m, XI_KeyPress);
   XISetMask (m, XI_KeyRelease);
+#endif
   XISelectEvents (FRAME_X_DISPLAY (f),
 		  FRAME_X_WINDOW (f),
 		  &mask, 1);
@@ -3918,7 +3918,7 @@ x_window (struct frame *f, long window_prompting)
     {
       Display *dpy = FRAME_X_DISPLAY (f);
       PropMotifWmHints hints;
-      Atom prop = XInternAtom (dpy, "_MOTIF_WM_HINTS", False);
+      Atom prop = FRAME_DISPLAY_INFO (f)->Xatom_MOTIF_WM_HINTS;
 
       memset (&hints, 0, sizeof(hints));
       hints.flags = MWM_HINTS_DECORATIONS;
@@ -4097,7 +4097,7 @@ x_window (struct frame *f)
     {
       Display *dpy = FRAME_X_DISPLAY (f);
       PropMotifWmHints hints;
-      Atom prop = XInternAtom (dpy, "_MOTIF_WM_HINTS", False);
+      Atom prop = FRAME_DISPLAY_INFO (f)->Xatom_MOTIF_WM_HINTS;
 
       memset (&hints, 0, sizeof(hints));
       hints.flags = MWM_HINTS_DECORATIONS;
@@ -4435,9 +4435,7 @@ set_machine_and_pid_properties (struct frame *f)
       unsigned long xpid = pid;
       XChangeProperty (FRAME_X_DISPLAY (f),
 		       FRAME_OUTER_WINDOW (f),
-		       XInternAtom (FRAME_X_DISPLAY (f),
-				    "_NET_WM_PID",
-				    False),
+		       FRAME_DISPLAY_INFO (f)->Xatom_net_wm_pid,
 		       XA_CARDINAL, 32, PropModeReplace,
 		       (unsigned char *) &xpid, 1);
     }
@@ -5461,6 +5459,7 @@ On MS Windows, this just returns nil.  */)
 static bool
 x_get_net_workarea (struct x_display_info *dpyinfo, XRectangle *rect)
 {
+#ifndef USE_XCB
   Display *dpy = dpyinfo->display;
   long offset, max_len;
   Atom target_type, actual_type;
@@ -5514,6 +5513,69 @@ x_get_net_workarea (struct x_display_info *dpyinfo, XRectangle *rect)
   x_uncatch_errors ();
 
   return result;
+#else
+  xcb_get_property_cookie_t current_desktop_cookie;
+  xcb_get_property_cookie_t workarea_cookie;
+  xcb_get_property_reply_t *reply;
+  xcb_generic_error_t *error;
+  bool rc;
+  uint32_t current_workspace, *values;
+
+  current_desktop_cookie
+    = xcb_get_property (dpyinfo->xcb_connection, 0,
+			(xcb_window_t) dpyinfo->root_window,
+			(xcb_atom_t) dpyinfo->Xatom_net_current_desktop,
+			XCB_ATOM_CARDINAL, 0, 1);
+
+  workarea_cookie
+    = xcb_get_property (dpyinfo->xcb_connection, 0,
+			(xcb_window_t) dpyinfo->root_window,
+			(xcb_atom_t) dpyinfo->Xatom_net_workarea,
+			XCB_ATOM_CARDINAL, 0, UINT32_MAX);
+
+  reply = xcb_get_property_reply (dpyinfo->xcb_connection,
+				  current_desktop_cookie, &error);
+  rc = true;
+
+  if (!reply)
+    free (error), rc = false;
+  else
+    {
+      if (xcb_get_property_value_length (reply) != 4
+	  || reply->type != XCB_ATOM_CARDINAL || reply->format != 32)
+	rc = false;
+      else
+	current_workspace = *(uint32_t *) xcb_get_property_value (reply);
+
+      free (reply);
+    }
+
+  reply = xcb_get_property_reply (dpyinfo->xcb_connection,
+				  workarea_cookie, &error);
+
+  if (!reply)
+    free (error), rc = false;
+  else
+    {
+      if (rc && reply->type == XCB_ATOM_CARDINAL && reply->format == 32
+	  && (xcb_get_property_value_length (reply) / sizeof (uint32_t)
+	      >= current_workspace + 4))
+	{
+	  values = xcb_get_property_value (reply);
+
+	  rect->x = values[current_workspace];
+	  rect->y = values[current_workspace + 1];
+	  rect->width = values[current_workspace + 2];
+	  rect->height = values[current_workspace + 3];
+	}
+      else
+	rc = false;
+
+      free (reply);
+    }
+
+  return rc;
+#endif
 }
 #endif /* !(USE_GTK && HAVE_GTK3) */
 
@@ -5706,6 +5768,12 @@ x_get_monitor_attributes_xrandr (struct x_display_info *dpyinfo)
 
 #if RANDR_MAJOR > 1 || (RANDR_MAJOR == 1 && RANDR_MINOR >= 5)
   XRRMonitorInfo *rr_monitors;
+#ifdef USE_XCB
+  xcb_get_atom_name_cookie_t *atom_name_cookies;
+  xcb_get_atom_name_reply_t *reply;
+  xcb_generic_error_t *error;
+  int length;
+#endif
 
   /* If RandR 1.5 or later is available, use that instead, as some
      video drivers don't report correct dimensions via other versions
@@ -5724,6 +5792,9 @@ x_get_monitor_attributes_xrandr (struct x_display_info *dpyinfo)
 	goto fallback;
 
       monitors = xzalloc (n_monitors * sizeof *monitors);
+#ifdef USE_XCB
+      atom_name_cookies = alloca (n_monitors * sizeof *atom_name_cookies);
+#endif
 
       for (int i = 0; i < n_monitors; ++i)
 	{
@@ -5734,6 +5805,7 @@ x_get_monitor_attributes_xrandr (struct x_display_info *dpyinfo)
 	  monitors[i].mm_width = rr_monitors[i].mwidth;
 	  monitors[i].mm_height = rr_monitors[i].mheight;
 
+#ifndef USE_XCB
 	  name = XGetAtomName (dpyinfo->display, rr_monitors[i].name);
 	  if (name)
 	    {
@@ -5742,6 +5814,11 @@ x_get_monitor_attributes_xrandr (struct x_display_info *dpyinfo)
 	    }
 	  else
 	    monitors[i].name = xstrdup ("Unknown Monitor");
+#else
+	  atom_name_cookies[i]
+	    = xcb_get_atom_name (dpyinfo->xcb_connection,
+				 (xcb_atom_t) rr_monitors[i].name);
+#endif
 
 	  if (rr_monitors[i].primary)
 	    primary = i;
@@ -5758,6 +5835,29 @@ x_get_monitor_attributes_xrandr (struct x_display_info *dpyinfo)
 	  else
 	    monitors[i].work = monitors[i].geom;
 	}
+
+#ifdef USE_XCB
+      for (int i = 0; i < n_monitors; ++i)
+	{
+	  reply = xcb_get_atom_name_reply (dpyinfo->xcb_connection,
+					   atom_name_cookies[i], &error);
+
+	  if (!reply)
+	    {
+	      monitors[i].name = xstrdup ("Unknown monitor");
+	      free (error);
+	    }
+	  else
+	    {
+	      length = xcb_get_atom_name_name_length (reply);
+	      name = xmalloc (length + 1);
+	      memcpy (name, xcb_get_atom_name_name (reply), length);
+	      name[length] = '\0';
+	      monitors[i].name = name;
+	      free (reply);
+	    }
+	}
+#endif
 
       XRRFreeMonitors (rr_monitors);
       randr15_p = true;
@@ -6547,7 +6647,7 @@ DEFUN ("x-set-mouse-absolute-pixel-position", Fx_set_mouse_absolute_pixel_positi
 The coordinates X and Y are interpreted in pixels relative to a position
 \(0, 0) of the selected frame's display.  */)
   (Lisp_Object x, Lisp_Object y)
-  {
+{
   struct frame *f = SELECTED_FRAME ();
 
   if (FRAME_INITIAL_P (f) || !FRAME_X_P (f))
@@ -6580,6 +6680,160 @@ The coordinates X and Y are interpreted in pixels relative to a position
   unblock_input ();
 
   return Qnil;
+}
+
+DEFUN ("x-begin-drag", Fx_begin_drag, Sx_begin_drag, 1, 5, 0,
+       doc: /* Begin dragging contents on FRAME, with targets TARGETS.
+TARGETS is a list of strings, which defines the X selection targets
+that will be available to the drop target.  Block until the mouse
+buttons are released, then return the action chosen by the target, or
+`nil' if the drop was not accepted by the drop target.  Dragging
+starts when the mouse is pressed on FRAME, and the contents of the
+selection `XdndSelection' will be sent to the X window underneath the
+mouse pointer (the drop target) when the mouse button is released.
+ACTION is a symbol which tells the target what the source will do, and
+can be one of the following:
+
+ - `XdndActionCopy', which means to copy the contents from the drag
+   source (FRAME) to the drop target.
+
+ - `XdndActionMove', which means to first take the contents of
+   `XdndSelection', and to delete whatever was saved into that
+   selection afterwards.
+
+`XdndActionPrivate' is also a valid return value, and means that the
+drop target chose to perform an unspecified or unknown action.
+
+There are also some other valid values of ACTION that depend on
+details of both the drop target's implementation details and that of
+Emacs.  For that reason, they are not mentioned here.  Consult
+"Drag-and-Drop Protocol for the X Window System" for more details:
+https://freedesktop.org/wiki/Specifications/XDND/.
+
+If RETURN-FRAME is non-nil, this function will return the frame if the
+mouse pointer moves onto an Emacs frame, after first moving out of
+FRAME.  (This is not guaranteed to work on some systems.)
+
+If ACTION is a list and not nil, its elements are assumed to be a cons
+of (ITEM . STRING), where ITEM is the name of an action, and STRING is
+a string describing ITEM to the user.  The drop target is expected to
+prompt the user to choose between any of the actions in the list.
+
+If ACTION is not specified or nil, `XdndActionCopy' is used
+instead.
+
+If ALLOW-CURRENT-FRAME is not specified or nil, then the drop target
+is allowed to be FRAME.  Otherwise, no action will be taken if the
+mouse buttons are released on top of FRAME.  */)
+  (Lisp_Object targets, Lisp_Object action, Lisp_Object frame,
+   Lisp_Object return_frame, Lisp_Object allow_current_frame)
+{
+  struct frame *f = decode_window_system_frame (frame);
+  int ntargets = 0, nnames = 0;
+  ptrdiff_t len;
+  char *target_names[2048];
+  Atom *target_atoms;
+  Lisp_Object lval, original, tem, t1, t2;
+  Atom xaction;
+  Atom action_list[2048];
+  char *name_list[2048];
+  char *scratch;
+
+  USE_SAFE_ALLOCA;
+
+  CHECK_LIST (targets);
+  original = targets;
+
+  for (; CONSP (targets); targets = XCDR (targets))
+    {
+      CHECK_STRING (XCAR (targets));
+      maybe_quit ();
+
+      if (ntargets < 2048)
+	{
+	  scratch = SSDATA (XCAR (targets));
+	  len = strlen (scratch);
+	  target_names[ntargets] = SAFE_ALLOCA (len + 1);
+	  strncpy (target_names[ntargets], scratch, len + 1);
+	  ntargets++;
+	}
+      else
+	error ("Too many targets");
+    }
+
+  CHECK_LIST_END (targets, original);
+
+  if (NILP (action) || EQ (action, QXdndActionCopy))
+    xaction = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionCopy;
+  else if (EQ (action, QXdndActionMove))
+    xaction = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionMove;
+  else if (EQ (action, QXdndActionLink))
+    xaction = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionLink;
+  else if (EQ (action, QXdndActionPrivate))
+    xaction = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionPrivate;
+  else if (EQ (action, QXdndActionAsk))
+    xaction = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionAsk;
+  else if (CONSP (action))
+    {
+      xaction = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionAsk;
+      original = action;
+
+      CHECK_LIST (action);
+      for (; CONSP (action); action = XCDR (action))
+	{
+	  maybe_quit ();
+	  tem = XCAR (action);
+	  CHECK_CONS (tem);
+	  t1 = XCAR (tem);
+	  t2 = XCDR (tem);
+	  CHECK_SYMBOL (t1);
+	  CHECK_STRING (t2);
+
+	  if (nnames < 2048)
+	    {
+	      if (EQ (t1, QXdndActionCopy))
+		action_list[nnames] = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionCopy;
+	      else if (EQ (t1, QXdndActionMove))
+		action_list[nnames] = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionMove;
+	      else if (EQ (t1, QXdndActionLink))
+		action_list[nnames] = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionLink;
+	      else if (EQ (t1, QXdndActionAsk))
+		action_list[nnames] = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionAsk;
+	      else if (EQ (t1, QXdndActionPrivate))
+		action_list[nnames] = FRAME_DISPLAY_INFO (f)->Xatom_XdndActionPrivate;
+	      else
+		signal_error ("Invalid drag-and-drop action", tem);
+
+	      scratch = SSDATA (ENCODE_UTF_8 (t2));
+	      len = strlen (scratch);
+	      name_list[nnames] = SAFE_ALLOCA (len + 1);
+	      strncpy (name_list[nnames], scratch, len + 1);
+
+	      nnames++;
+	    }
+	  else
+	    error ("Too many actions");
+	}
+      CHECK_LIST_END (action, original);
+    }
+  else
+    signal_error ("Invalid drag-and-drop action", action);
+
+  target_atoms = xmalloc (ntargets * sizeof *target_atoms);
+
+  block_input ();
+  XInternAtoms (FRAME_X_DISPLAY (f), target_names,
+		ntargets, False, target_atoms);
+  unblock_input ();
+
+  x_set_dnd_targets (target_atoms, ntargets);
+  lval = x_dnd_begin_drag_and_drop (f, FRAME_DISPLAY_INFO (f)->last_user_time,
+				    xaction, !NILP (return_frame), action_list,
+				    (const char **) &name_list, nnames,
+				    !NILP (allow_current_frame));
+
+  SAFE_FREE ();
+  return lval;
 }
 
 /************************************************************************
@@ -6919,6 +7173,13 @@ If WINDOW-ID is non-nil, change the property of that window instead
   unsigned char *data;
   int nelements;
   Window target_window;
+#ifdef USE_XCB
+  xcb_intern_atom_cookie_t prop_atom_cookie;
+  xcb_intern_atom_cookie_t target_type_cookie;
+  xcb_intern_atom_reply_t *reply;
+  xcb_generic_error_t *generic_error;
+  bool rc;
+#endif
 
   CHECK_STRING (prop);
 
@@ -6982,12 +7243,61 @@ If WINDOW-ID is non-nil, change the property of that window instead
     }
 
   block_input ();
+#ifndef USE_XCB
   prop_atom = XInternAtom (FRAME_X_DISPLAY (f), SSDATA (prop), False);
   if (! NILP (type))
     {
       CHECK_STRING (type);
       target_type = XInternAtom (FRAME_X_DISPLAY (f), SSDATA (type), False);
     }
+#else
+  rc = true;
+  prop_atom_cookie
+    = xcb_intern_atom (FRAME_DISPLAY_INFO (f)->xcb_connection,
+		       0, SBYTES (prop), SSDATA (prop));
+
+  if (!NILP (type))
+    {
+      CHECK_STRING (type);
+      target_type_cookie
+	= xcb_intern_atom (FRAME_DISPLAY_INFO (f)->xcb_connection,
+			   0, SBYTES (type), SSDATA (type));
+    }
+
+  reply = xcb_intern_atom_reply (FRAME_DISPLAY_INFO (f)->xcb_connection,
+				 prop_atom_cookie, &generic_error);
+
+  if (reply)
+    {
+      prop_atom = (Atom) reply->atom;
+      free (reply);
+    }
+  else
+    {
+      free (generic_error);
+      rc = false;
+    }
+
+  if (!NILP (type))
+    {
+      reply = xcb_intern_atom_reply (FRAME_DISPLAY_INFO (f)->xcb_connection,
+				     target_type_cookie, &generic_error);
+
+      if (reply)
+	{
+	  target_type = (Atom) reply->atom;
+	  free (reply);
+	}
+      else
+	{
+	  free (generic_error);
+	  rc = false;
+	}
+    }
+
+  if (!rc)
+    error ("Failed to intern type or property atom");
+#endif
 
   XChangeProperty (FRAME_X_DISPLAY (f), target_window,
 		   prop_atom, target_type, element_format, PropModeReplace,
@@ -9150,6 +9460,12 @@ syms_of_xfns (void)
   DEFSYM (Qreverse_landscape, "reverse-landscape");
 #endif
 
+  DEFSYM (QXdndActionCopy, "XdndActionCopy");
+  DEFSYM (QXdndActionMove, "XdndActionMove");
+  DEFSYM (QXdndActionLink, "XdndActionLink");
+  DEFSYM (QXdndActionAsk, "XdndActionAsk");
+  DEFSYM (QXdndActionPrivate, "XdndActionPrivate");
+
   Fput (Qundefined_color, Qerror_conditions,
 	pure_list (Qundefined_color, Qerror));
   Fput (Qundefined_color, Qerror_message,
@@ -9423,6 +9739,7 @@ eliminated in future versions of Emacs.  */);
   defsubr (&Sx_show_tip);
   defsubr (&Sx_hide_tip);
   defsubr (&Sx_double_buffered_p);
+  defsubr (&Sx_begin_drag);
   tip_timer = Qnil;
   staticpro (&tip_timer);
   tip_frame = Qnil;

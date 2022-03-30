@@ -3357,6 +3357,8 @@ if test "${with_toolkit_scroll_bars}" != "no"; then
     AC_DEFINE(USE_TOOLKIT_SCROLL_BARS)
     USE_TOOLKIT_SCROLL_BARS=yes
   fi
+elif test "${window_system}" != "x11"; then
+  AC_MSG_ERROR(Non-toolkit scroll bars are not implemented for your system)
 fi
 
 dnl See if XIM is available.
@@ -3747,6 +3749,14 @@ if test "${HAVE_X11}" = "yes"; then
 [Define to 1 if you have the XCB library and X11-XCB library for mixed
   X11/XCB programming.])
         XCB_LIBS="-lX11-xcb -lxcb -lxcb-util"
+      else
+        AC_CHECK_LIB(xcb-aux, xcb_aux_sync, HAVE_XCB_AUX=yes)
+        if test "${HAVE_XCB_AUX}" = "yes"; then
+          AC_DEFINE(USE_XCB, 1,
+[Define to 1 if you have the XCB library and X11-XCB library for mixed
+ X11/XCB programming.])
+          XCB_LIBS="-lX11-xcb -lxcb -lxcb-aux"
+        fi
       fi
     fi
   fi
@@ -3940,6 +3950,16 @@ case "${opsys}" in
   darwin) MODULES_SECONDARY_SUFFIX='.so' ;;
   *) MODULES_SECONDARY_SUFFIX='' ;;
 esac
+
+# pgtkterm.c uses dlsym
+if test $window_system = pgtk; then
+  case $opsys in
+    gnu|gnu-linux)
+    LIBMODULES="-ldl"
+    ;;
+  esac
+fi
+
 if test "${with_modules}" != "no"; then
   case $opsys in
     gnu|gnu-linux)
@@ -4527,6 +4547,51 @@ if test "${HAVE_X11}" = "yes"; then
 fi
 AC_SUBST(XDBE_CFLAGS)
 AC_SUBST(XDBE_LIBS)
+
+### Use the Nonrectangular Window Shape extension if available.
+HAVE_XSHAPE=no
+HAVE_XCB_SHAPE=no
+if test "${HAVE_X11}" = "yes"; then
+  AC_CHECK_HEADER(X11/extensions/shape.h,
+    [AC_CHECK_LIB(Xext, XShapeQueryVersion, HAVE_XSHAPE=yes)],
+    [],
+    [#include <X11/extensions/shape.h>
+    ])
+  if test $HAVE_XSHAPE = yes; then
+    XSHAPE_LIBS=-lXext
+    AC_CHECK_HEADER(xcb/shape.h,
+      [AC_CHECK_LIB(xcb-shape, xcb_shape_combine, HAVE_XCB_SHAPE=yes)], [],
+      [#include <xcb/shape.h>])
+
+    if test $HAVE_XCB_SHAPE = yes && test "$XCB_LIBS" != ""; then
+      XSHAPE_LIBS="$XSHAPE_LIBS -lxcb-shape"
+      AC_DEFINE(HAVE_XCB_SHAPE, 1, [Define to 1 if XCB supports the Nonrectangular Window Shape extension.])
+    fi
+  fi
+  if test $HAVE_XSHAPE = yes; then
+    AC_DEFINE(HAVE_XSHAPE, 1, [Define to 1 if you have the Nonrectangular Window Shape extension.])
+  fi
+fi
+AC_SUBST(XSHAPE_CFLAGS)
+AC_SUBST(XSHAPE_LIBS)
+
+### Use Xcomposite (-lXcomposite) if available
+HAVE_XCOMPOSITE=no
+if test "${HAVE_X11}" = "yes"; then
+  AC_CHECK_HEADER(X11/extensions/Xcomposite.h,
+    [AC_CHECK_LIB(Xcomposite, XCompositeRedirectWindow, HAVE_XCOMPOSITE=yes)],
+    [],
+    [#include <X11/extensions/Xcomposite.h>
+    ])
+  if test $HAVE_XCOMPOSITE = yes; then
+    XCOMPOSITE_LIBS=-lXcomposite
+  fi
+  if test $HAVE_XCOMPOSITE = yes; then
+    AC_DEFINE(HAVE_XCOMPOSITE, 1, [Define to 1 if you have the XCOMPOSITE extension.])
+  fi
+fi
+AC_SUBST(XCOMPOSITE_CFLAGS)
+AC_SUBST(XCOMPOSITE_LIBS)
 
 ### Use libxml (-lxml2) if available
 ### mingw32 doesn't use -lxml2, since it loads the library dynamically.

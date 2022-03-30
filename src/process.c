@@ -6420,7 +6420,7 @@ send_process (Lisp_Object proc, const char *buf, ptrdiff_t len,
   if (p->raw_status_new)
     update_status (p);
   if (! EQ (p->status, Qrun))
-    error ("Process %s not running", SDATA (p->name));
+    error ("Process %s not running: %s", SDATA (p->name), SDATA (status_message (p)));
   if (p->outfd < 0)
     error ("Output file descriptor of %s is closed", SDATA (p->name));
 
@@ -7034,14 +7034,13 @@ abbr_to_signal (char const *name)
   return -1;
 }
 
-DEFUN ("signal-process", Fsignal_process, Ssignal_process,
-       2, 2, "sProcess (name or number): \nnSignal code: ",
-       doc: /* Send PROCESS the signal with code SIGCODE.
-PROCESS may also be a number specifying the process id of the
-process to signal; in this case, the process need not be a child of
-this Emacs.
-SIGCODE may be an integer, or a symbol whose name is a signal name.  */)
-  (Lisp_Object process, Lisp_Object sigcode)
+DEFUN ("internal-default-signal-process",
+       Finternal_default_signal_process,
+       Sinternal_default_signal_process, 2, 3, 0,
+       doc: /* Default function to send PROCESS the signal with code SIGCODE.
+It shall be the last element in list `signal-process-functions'.
+See function `signal-process' for more details on usage.  */)
+  (Lisp_Object process, Lisp_Object sigcode, Lisp_Object remote)
 {
   pid_t pid;
   int signo;
@@ -7091,6 +7090,23 @@ SIGCODE may be an integer, or a symbol whose name is a signal name.  */)
   return make_fixnum (kill (pid, signo));
 }
 
+DEFUN ("signal-process", Fsignal_process, Ssignal_process,
+       2, 3, "sProcess (name or number): \nnSignal code: ",
+       doc: /* Send PROCESS the signal with code SIGCODE.
+PROCESS may also be a number specifying the process id of the
+process to signal; in this case, the process need not be a child of
+this Emacs.
+If PROCESS is a process object which contains the property
+`remote-pid', or PROCESS is a number and REMOTE is a remote file name,
+PROCESS is interpreted as process on the respective remote host, which
+will be the process to signal.
+SIGCODE may be an integer, or a symbol whose name is a signal name.  */)
+  (Lisp_Object process, Lisp_Object sigcode, Lisp_Object remote)
+{
+  return CALLN (Frun_hook_with_args_until_success, Qsignal_process_functions,
+		process, sigcode, remote);
+}
+
 DEFUN ("process-send-eof", Fprocess_send_eof, Sprocess_send_eof, 0, 1, 0,
        doc: /* Make PROCESS see end-of-file in its input.
 EOF comes after any text already sent to it.
@@ -7125,7 +7141,7 @@ process has been transmitted to the serial port.  */)
   if (XPROCESS (proc)->raw_status_new)
     update_status (XPROCESS (proc));
   if (! EQ (XPROCESS (proc)->status, Qrun))
-    error ("Process %s not running", SDATA (XPROCESS (proc)->name));
+    error ("Process %s not running: %s", SDATA (XPROCESS (proc)->name), SDATA (status_message (XPROCESS (proc))));
 
   if (coding && CODING_REQUIRE_FLUSHING (coding))
     {
@@ -8580,6 +8596,13 @@ These functions are called in the order of the list, until one of them
 returns non-nil.  */);
   Vinterrupt_process_functions = list1 (Qinternal_default_interrupt_process);
 
+  DEFVAR_LISP ("signal-process-functions", Vsignal_process_functions,
+	       doc: /* List of functions to be called for `signal-process'.
+The arguments of the functions are the same as for `signal-process'.
+These functions are called in the order of the list, until one of them
+returns non-nil.  */);
+  Vsignal_process_functions = list1 (Qinternal_default_signal_process);
+
   DEFVAR_LISP ("internal--daemon-sockname", Vinternal__daemon_sockname,
 	       doc: /* Name of external socket passed to Emacs, or nil if none.  */);
   Vinternal__daemon_sockname = Qnil;
@@ -8599,6 +8622,10 @@ sentinel or a process filter function has an error.  */);
   DEFSYM (Qinternal_default_interrupt_process,
 	  "internal-default-interrupt-process");
   DEFSYM (Qinterrupt_process_functions, "interrupt-process-functions");
+
+  DEFSYM (Qinternal_default_signal_process,
+	  "internal-default-signal-process");
+  DEFSYM (Qsignal_process_functions, "signal-process-functions");
 
   DEFSYM (Qnull, "null");
   DEFSYM (Qpipe_process_p, "pipe-process-p");
@@ -8654,6 +8681,7 @@ sentinel or a process filter function has an error.  */);
   defsubr (&Scontinue_process);
   defsubr (&Sprocess_running_child_p);
   defsubr (&Sprocess_send_eof);
+  defsubr (&Sinternal_default_signal_process);
   defsubr (&Ssignal_process);
   defsubr (&Swaiting_for_user_input_p);
   defsubr (&Sprocess_type);

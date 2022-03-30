@@ -58,7 +58,7 @@ struct unhandled_event
   uint8_t buffer[200];
 };
 
-static bool any_help_event_p = false;
+static bool any_help_event_p;
 
 char *
 get_keysym_name (int keysym)
@@ -115,7 +115,44 @@ haiku_toolkit_position (struct frame *f, int x, int y,
 static void
 haiku_delete_terminal (struct terminal *terminal)
 {
-  emacs_abort ();
+  struct haiku_display_info *dpyinfo = terminal->display_info.haiku;
+  struct terminal *t;
+
+  if (!terminal->name)
+    return;
+
+  block_input ();
+
+  be_app_quit ();
+  delete_port (port_application_to_emacs);
+
+  BCursor_delete (dpyinfo->text_cursor);
+  BCursor_delete (dpyinfo->nontext_cursor);
+  BCursor_delete (dpyinfo->modeline_cursor);
+  BCursor_delete (dpyinfo->hand_cursor);
+  BCursor_delete (dpyinfo->hourglass_cursor);
+  BCursor_delete (dpyinfo->horizontal_drag_cursor);
+  BCursor_delete (dpyinfo->vertical_drag_cursor);
+  BCursor_delete (dpyinfo->left_edge_cursor);
+  BCursor_delete (dpyinfo->top_left_corner_cursor);
+  BCursor_delete (dpyinfo->top_edge_cursor);
+  BCursor_delete (dpyinfo->top_right_corner_cursor);
+  BCursor_delete (dpyinfo->right_edge_cursor);
+  BCursor_delete (dpyinfo->bottom_right_corner_cursor);
+  BCursor_delete (dpyinfo->bottom_edge_cursor);
+  BCursor_delete (dpyinfo->bottom_left_corner_cursor);
+  BCursor_delete (dpyinfo->no_cursor);
+
+  /* Close all frames and delete the generic struct terminal.  */
+  for (t = terminal_list; t; t = t->next_terminal)
+    {
+      if (t->type == output_haiku && t->display_info.haiku == dpyinfo)
+	{
+	  delete_terminal (t);
+	  break;
+	}
+    }
+  unblock_input ();
 }
 
 static const char *
@@ -455,37 +492,35 @@ haiku_set_scroll_bar_thumb (struct scroll_bar *bar, int portion,
       /* When the thumb is at the bottom, position == whole.  So we
          need to increase `whole' to make space for the thumb.  */
       whole += portion;
-
-      if (whole <= 0)
-	top = 0, shown = 1;
-      else
-	{
-	  top = (double) position / whole;
-	  shown = (double) portion / whole;
-	}
-
-      /* Slider size.  Must be in the range [1 .. MAX - MIN] where MAX
-	 is the scroll bar's maximum and MIN is the scroll bar's minimum
-	 value.  */
-      size = clip_to_bounds (1, shown * BE_SB_MAX, BE_SB_MAX);
-
-      /* Position.  Must be in the range [MIN .. MAX - SLIDER_SIZE].  */
-      value = top * BE_SB_MAX;
-      value = min (value, BE_SB_MAX - size);
-
-      if (!bar->dragging)
-	bar->page_size = size;
     }
   else
-    {
-      bar->page_size = 0;
+    bar->page_size = 0;
 
-      size = (((double) portion / whole) * BE_SB_MAX);
-      value = (((double) position / whole) * BE_SB_MAX);
+  if (whole <= 0)
+    top = 0, shown = 1;
+  else
+    {
+      top = (double) position / whole;
+      shown = (double) portion / whole;
     }
 
+  /* Slider size.  Must be in the range [1 .. MAX - MIN] where MAX
+     is the scroll bar's maximum and MIN is the scroll bar's minimum
+     value.  */
+  size = clip_to_bounds (1, shown * BE_SB_MAX, BE_SB_MAX);
+
+  /* Position.  Must be in the range [MIN .. MAX - SLIDER_SIZE].  */
+  value = top * BE_SB_MAX;
+  value = min (value, BE_SB_MAX - size);
+
+  if (!bar->dragging && scroll_bar_adjust_thumb_portion_p)
+    bar->page_size = size;
+
   BView_scroll_bar_update (scroll_bar, lrint (size),
-			   BE_SB_MAX, lrint (value), bar->dragging);
+			   BE_SB_MAX, ceil (value),
+			   (scroll_bar_adjust_thumb_portion_p
+			    ? bar->dragging : bar->dragging ? -1 : 0),
+			   !scroll_bar_adjust_thumb_portion_p);
 }
 
 static void
@@ -493,20 +528,19 @@ haiku_set_horizontal_scroll_bar_thumb (struct scroll_bar *bar, int portion,
 				       int position, int whole)
 {
   void *scroll_bar = bar->scroll_bar;
-  float shown, top;
-  int size, value;
+  double size, value, shown, top;
 
-  shown = (float) portion / whole;
-  top = (float) position / (whole - portion);
+  shown = (double) portion / whole;
+  top = (double) position / whole;
 
-  size = clip_to_bounds (1, shown * BE_SB_MAX, BE_SB_MAX);
-  value = clip_to_bounds (0, top * (BE_SB_MAX - size), BE_SB_MAX - size);
+  size = shown * BE_SB_MAX;
+  value = top * BE_SB_MAX;
 
   if (!bar->dragging)
     bar->page_size = size;
 
-  BView_scroll_bar_update (scroll_bar, shown, BE_SB_MAX, value,
-			   bar->dragging);
+  BView_scroll_bar_update (scroll_bar, lrint (size), BE_SB_MAX,
+			   ceil (value), bar->dragging ? -1 : 0, true);
 }
 
 static struct scroll_bar *
@@ -1820,6 +1854,22 @@ static void
 haiku_set_window_size (struct frame *f, bool change_gravity,
 		       int width, int height)
 {
+  Lisp_Object frame;
+
+  /* On X Windows, window managers typically disallow resizing a
+     window when it is fullscreen.  Do the same here.  */
+
+  XSETFRAME (frame, f);
+  if (!NILP (Fframe_parameter (frame, Qfullscreen))
+      /* Only do this if the fullscreen status has actually been
+	 applied.  */
+      && f->want_fullscreen == FULLSCREEN_NONE
+      /* And if the configury during frame completion has been
+	 completed.  Otherwise, there will be no valid "old size" to
+	 go back to.  */
+      && FRAME_OUTPUT_DATA (f)->configury_done)
+    return;
+
   haiku_update_size_hints (f);
 
   if (FRAME_HAIKU_WINDOW (f))
@@ -2820,19 +2870,6 @@ haiku_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 		cancel_mouse_face (f);
 		haiku_clear_under_internal_border (f);
 	      }
-
-	    if (FRAME_OUTPUT_DATA (f)->pending_zoom_width != width ||
-		FRAME_OUTPUT_DATA (f)->pending_zoom_height != height)
-	      {
-		FRAME_OUTPUT_DATA (f)->zoomed_p = 0;
-		haiku_make_fullscreen_consistent (f);
-	      }
-	    else
-	      {
-		FRAME_OUTPUT_DATA (f)->zoomed_p = 1;
-		FRAME_OUTPUT_DATA (f)->pending_zoom_width = INT_MIN;
-		FRAME_OUTPUT_DATA (f)->pending_zoom_height = INT_MIN;
-	      }
 	    break;
 	  }
 	case FRAME_EXPOSED:
@@ -3083,7 +3120,8 @@ haiku_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 		  do_help = 1;
 	      }
 
-	    need_flush = FRAME_DIRTY_P (f);
+	    if (FRAME_DIRTY_P (f))
+	      need_flush = 1;
 	    break;
 	  }
 	case BUTTON_UP:
@@ -3217,16 +3255,6 @@ haiku_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 
 	    if (!f)
 	      continue;
-
-	    if (FRAME_OUTPUT_DATA (f)->pending_zoom_x != b->x ||
-		FRAME_OUTPUT_DATA (f)->pending_zoom_y != b->y)
-	      FRAME_OUTPUT_DATA (f)->zoomed_p = 0;
-	    else
-	      {
-		FRAME_OUTPUT_DATA (f)->zoomed_p = 1;
-		FRAME_OUTPUT_DATA (f)->pending_zoom_x = INT_MIN;
-		FRAME_OUTPUT_DATA (f)->pending_zoom_y = INT_MIN;
-	      }
 
 	    if (FRAME_PARENT_FRAME (f))
 	      haiku_coords_from_parent (f, &b->x, &b->y);
@@ -3539,36 +3567,29 @@ haiku_read_socket (struct terminal *terminal, struct input_event *hold_quit)
 	    if (!f)
 	      continue;
 
-	    FRAME_OUTPUT_DATA (f)->pending_zoom_height = b->height;
-	    FRAME_OUTPUT_DATA (f)->pending_zoom_width = b->width;
-	    FRAME_OUTPUT_DATA (f)->pending_zoom_x = b->x;
-	    FRAME_OUTPUT_DATA (f)->pending_zoom_y = b->y;
-
-	    FRAME_OUTPUT_DATA (f)->zoomed_p = 1;
+	    FRAME_OUTPUT_DATA (f)->zoomed_p = b->zoomed;
 	    haiku_make_fullscreen_consistent (f);
 	    break;
 	  }
-	case REFS_EVENT:
+	case DRAG_AND_DROP_EVENT:
 	  {
-	    struct haiku_refs_event *b = buf;
+	    struct haiku_drag_and_drop_event *b = buf;
 	    struct frame *f = haiku_window_to_frame (b->window);
 
 	    if (!f)
 	      {
-		free (b->ref);
+		BMessage_delete (b->message);
 		continue;
 	      }
 
 	    inev.kind = DRAG_N_DROP_EVENT;
-	    inev.arg = build_string_from_utf8 (b->ref);
+	    inev.arg = haiku_message_to_lisp (b->message);
 
 	    XSETINT (inev.x, b->x);
 	    XSETINT (inev.y, b->y);
 	    XSETFRAME (inev.frame_or_window, f);
 
-	    /* There should be no problem with calling free here.
-	       free on Haiku is thread-safe.  */
-	    free (b->ref);
+	    BMessage_delete (b->message);
 	    break;
 	  }
 	case APP_QUIT_REQUESTED_EVENT:
@@ -3784,14 +3805,18 @@ haiku_toggle_invisible_pointer (struct frame *f, bool invisible_p)
 static void
 haiku_fullscreen (struct frame *f)
 {
+  /* When FRAME_OUTPUT_DATA (f)->configury_done is false, the frame is
+     being created, and its regular width and height have not yet been
+     set.  This function will be called again by haiku_create_frame,
+     so do nothing.  */
+  if (!FRAME_OUTPUT_DATA (f)->configury_done)
+    return;
+
   if (f->want_fullscreen == FULLSCREEN_MAXIMIZED)
-    {
-      EmacsWindow_make_fullscreen (FRAME_HAIKU_WINDOW (f), 0);
-      BWindow_zoom (FRAME_HAIKU_WINDOW (f));
-    }
+    BWindow_zoom (FRAME_HAIKU_WINDOW (f));
   else if (f->want_fullscreen == FULLSCREEN_BOTH)
     EmacsWindow_make_fullscreen (FRAME_HAIKU_WINDOW (f), 1);
-  else if (f->want_fullscreen == FULLSCREEN_NONE)
+  else
     {
       EmacsWindow_make_fullscreen (FRAME_HAIKU_WINDOW (f), 0);
       EmacsWindow_unzoom (FRAME_HAIKU_WINDOW (f));
@@ -3906,6 +3931,37 @@ haiku_term_init (void)
   dpyinfo->smallest_char_width = 1;
 
   gui_init_fringe (terminal->rif);
+
+#define ASSIGN_CURSOR(cursor, be_cursor) (dpyinfo->cursor = be_cursor)
+  ASSIGN_CURSOR (text_cursor, BCursor_create_i_beam ());
+  ASSIGN_CURSOR (nontext_cursor, BCursor_create_default ());
+  ASSIGN_CURSOR (modeline_cursor, BCursor_create_modeline ());
+  ASSIGN_CURSOR (hand_cursor, BCursor_create_grab ());
+  ASSIGN_CURSOR (hourglass_cursor, BCursor_create_progress_cursor ());
+  ASSIGN_CURSOR (horizontal_drag_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_EAST_WEST));
+  ASSIGN_CURSOR (vertical_drag_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_NORTH_SOUTH));
+  ASSIGN_CURSOR (left_edge_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_WEST));
+  ASSIGN_CURSOR (top_left_corner_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_NORTH_WEST));
+  ASSIGN_CURSOR (top_edge_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_NORTH));
+  ASSIGN_CURSOR (top_right_corner_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_NORTH_EAST));
+  ASSIGN_CURSOR (right_edge_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_EAST));
+  ASSIGN_CURSOR (bottom_right_corner_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_SOUTH_EAST));
+  ASSIGN_CURSOR (bottom_edge_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_SOUTH));
+  ASSIGN_CURSOR (bottom_left_corner_cursor,
+		 BCursor_from_id (CURSOR_ID_RESIZE_SOUTH_WEST));
+  ASSIGN_CURSOR (no_cursor,
+		 BCursor_from_id (CURSOR_ID_NO_CURSOR));
+#undef ASSIGN_CURSOR
+
   unblock_input ();
 
   return dpyinfo;

@@ -622,6 +622,7 @@ extern AVOID args_out_of_range_3 (Lisp_Object, Lisp_Object, Lisp_Object);
 extern AVOID wrong_type_argument (Lisp_Object, Lisp_Object);
 extern Lisp_Object default_value (Lisp_Object symbol);
 extern void defalias (Lisp_Object symbol, Lisp_Object definition);
+extern char *fixnum_to_string (EMACS_INT number, char *buffer, char *end);
 
 
 /* Defined in emacs.c.  */
@@ -2153,6 +2154,7 @@ struct Lisp_Subr
       const char *intspec;
       Lisp_Object native_intspec;
     };
+    Lisp_Object command_modes;
     EMACS_INT doc;
 #ifdef HAVE_NATIVE_COMP
     Lisp_Object native_comp_u;
@@ -3454,6 +3456,41 @@ backtrace_debug_on_exit (union specbinding *pdl)
   return pdl->bt.debug_on_exit;
 }
 
+void grow_specpdl_allocation (void);
+
+/* Grow the specpdl stack by one entry.
+   The caller should have already initialized the entry.
+   Signal an error on stack overflow.
+
+   Make sure that there is always one unused entry past the top of the
+   stack, so that the just-initialized entry is safely unwound if
+   memory exhausted and an error is signaled here.  Also, allocate a
+   never-used entry just before the bottom of the stack; sometimes its
+   address is taken.  */
+INLINE void
+grow_specpdl (void)
+{
+  specpdl_ptr++;
+  if (specpdl_ptr == specpdl_end)
+    grow_specpdl_allocation ();
+}
+
+INLINE specpdl_ref
+record_in_backtrace (Lisp_Object function, Lisp_Object *args, ptrdiff_t nargs)
+{
+  specpdl_ref count = SPECPDL_INDEX ();
+
+  eassert (nargs >= UNEVALLED);
+  specpdl_ptr->bt.kind = SPECPDL_BACKTRACE;
+  specpdl_ptr->bt.debug_on_exit = false;
+  specpdl_ptr->bt.function = function;
+  current_thread->stack_top = specpdl_ptr->bt.args = args;
+  specpdl_ptr->bt.nargs = nargs;
+  grow_specpdl ();
+
+  return count;
+}
+
 /* This structure helps implement the `catch/throw' and `condition-case/signal'
    control structures.  A struct handler contains all the information needed to
    restore the state of the interpreter after a non-local jump.
@@ -3511,6 +3548,7 @@ struct handler
   sys_jmp_buf jmp;
   EMACS_INT f_lisp_eval_depth;
   specpdl_ref pdlcount;
+  struct bc_frame *act_rec;
   int poll_suppress_count;
   int interrupt_input_blocked;
 };
@@ -3872,8 +3910,6 @@ extern void hexbuf_digest (char *, void const *, int);
 extern char *extract_data_from_object (Lisp_Object, ptrdiff_t *, ptrdiff_t *);
 EMACS_UINT hash_string (char const *, ptrdiff_t);
 EMACS_UINT sxhash (Lisp_Object);
-Lisp_Object hashfn_eql (Lisp_Object, struct Lisp_Hash_Table *);
-Lisp_Object hashfn_equal (Lisp_Object, struct Lisp_Hash_Table *);
 Lisp_Object hashfn_user_defined (Lisp_Object, struct Lisp_Hash_Table *);
 Lisp_Object make_hash_table (struct hash_table_test, EMACS_INT, float, float,
                              Lisp_Object, bool);
@@ -3889,7 +3925,6 @@ extern Lisp_Object substring_both (Lisp_Object, ptrdiff_t, ptrdiff_t,
 extern Lisp_Object merge (Lisp_Object, Lisp_Object, Lisp_Object);
 extern Lisp_Object merge_c (Lisp_Object, Lisp_Object, bool (*) (Lisp_Object, Lisp_Object));
 extern Lisp_Object do_yes_or_no_p (Lisp_Object);
-extern int string_version_cmp (Lisp_Object, Lisp_Object);
 extern Lisp_Object concat2 (Lisp_Object, Lisp_Object);
 extern Lisp_Object concat3 (Lisp_Object, Lisp_Object, Lisp_Object);
 extern bool equal_no_quit (Lisp_Object, Lisp_Object);
@@ -4052,6 +4087,7 @@ extern void alloc_unexec_pre (void);
 extern void alloc_unexec_post (void);
 extern void mark_stack (char const *, char const *);
 extern void flush_stack_call_func1 (void (*func) (void *arg), void *arg);
+extern void mark_memory (void const *start, void const *end);
 
 /* Force callee-saved registers and register windows onto the stack,
    so that conservative garbage collection can see their values.  */
@@ -4427,9 +4463,6 @@ extern Lisp_Object internal_lisp_condition_case (Lisp_Object, Lisp_Object, Lisp_
 extern Lisp_Object internal_condition_case (Lisp_Object (*) (void), Lisp_Object, Lisp_Object (*) (Lisp_Object));
 extern Lisp_Object internal_condition_case_1 (Lisp_Object (*) (Lisp_Object), Lisp_Object, Lisp_Object, Lisp_Object (*) (Lisp_Object));
 extern Lisp_Object internal_condition_case_2 (Lisp_Object (*) (Lisp_Object, Lisp_Object), Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object (*) (Lisp_Object));
-extern Lisp_Object internal_condition_case_3 (Lisp_Object (*) (Lisp_Object, Lisp_Object, Lisp_Object), Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object (*) (Lisp_Object));
-extern Lisp_Object internal_condition_case_4 (Lisp_Object (*) (Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object), Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object (*) (Lisp_Object));
-extern Lisp_Object internal_condition_case_5 (Lisp_Object (*) (Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object), Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object, Lisp_Object (*) (Lisp_Object));
 extern Lisp_Object internal_condition_case_n
     (Lisp_Object (*) (ptrdiff_t, Lisp_Object *), ptrdiff_t, Lisp_Object *,
      Lisp_Object, Lisp_Object (*) (Lisp_Object, ptrdiff_t, Lisp_Object *));
@@ -4469,7 +4502,6 @@ extern Lisp_Object safe_call2 (Lisp_Object, Lisp_Object, Lisp_Object);
 extern void init_eval (void);
 extern void syms_of_eval (void);
 extern void prog_ignore (Lisp_Object);
-extern specpdl_ref record_in_backtrace (Lisp_Object, Lisp_Object *, ptrdiff_t);
 extern void mark_specpdl (union specbinding *first, union specbinding *ptr);
 extern void get_backtrace (Lisp_Object array);
 Lisp_Object backtrace_top_function (void);
@@ -4818,9 +4850,24 @@ extern int read_bytecode_char (bool);
 
 /* Defined in bytecode.c.  */
 extern void syms_of_bytecode (void);
-extern Lisp_Object exec_byte_code (Lisp_Object, Lisp_Object, Lisp_Object,
-				   ptrdiff_t, ptrdiff_t, Lisp_Object *);
+extern Lisp_Object exec_byte_code (Lisp_Object, ptrdiff_t,
+				   ptrdiff_t, Lisp_Object *);
 extern Lisp_Object get_byte_code_arity (Lisp_Object);
+extern void init_bc_thread (struct bc_thread_state *bc);
+extern void free_bc_thread (struct bc_thread_state *bc);
+extern void mark_bytecode (struct bc_thread_state *bc);
+
+INLINE struct bc_frame *
+get_act_rec (struct thread_state *th)
+{
+  return th->bc.fp;
+}
+
+INLINE void
+set_act_rec (struct thread_state *th, struct bc_frame *act_rec)
+{
+  th->bc.fp = act_rec;
+}
 
 /* Defined in macros.c.  */
 extern void init_macros (void);
@@ -4875,6 +4922,7 @@ extern void child_setup_tty (int);
 extern void setup_pty (int);
 extern int set_window_size (int, int, int);
 extern EMACS_INT get_random (void);
+extern unsigned long int get_random_ulong (void);
 extern void seed_random (void *, ptrdiff_t);
 extern void init_random (void);
 extern void emacs_backtrace (int);

@@ -13209,9 +13209,12 @@ prepare_menu_bars (void)
 	    {
 	      Lisp_Object this = XCAR (ws);
 	      struct window *w = XWINDOW (this);
+	      /* Cf. conditions for redisplaying a window at the
+		 beginning of redisplay_window.  */
 	      if (w->redisplay
 		  || XFRAME (w->frame)->redisplay
-		  || XBUFFER (w->contents)->text->redisplay)
+		  || XBUFFER (w->contents)->text->redisplay
+		  || BUF_PT (XBUFFER (w->contents)) != w->last_point)
 		{
 		  windows = Fcons (this, windows);
 		}
@@ -25009,7 +25012,10 @@ function `get-char-code-property' for a way to inquire about the
 directionality is weak or neutral, such as numbers or punctuation
 characters, can be forced to display in a very different place with
 respect of its surrounding characters, so as to make the surrounding
-text confuse the user regarding what the text says.  */)
+text confuse the user regarding what the text says.
+
+Also see the `highlight-confusing-reorderings' function, which can be
+useful in similar circumstances as this function.  */)
   (Lisp_Object from, Lisp_Object to, Lisp_Object object, Lisp_Object base_dir)
 {
   struct buffer *buf = current_buffer;
@@ -34241,7 +34247,7 @@ note_mouse_highlight (struct frame *f, int x, int y)
 #endif
 
 #if defined (HAVE_HAIKU)
-  if (popup_activated_p)
+  if (popup_activated_p || haiku_dnd_in_progress)
     return;
 #endif
 

@@ -542,6 +542,18 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include <X11/extensions/Xinerama.h>
 #endif
 
+#ifdef HAVE_XCOMPOSITE
+#include <X11/extensions/Xcomposite.h>
+#endif
+
+#ifdef HAVE_XSHAPE
+#include <X11/extensions/shape.h>
+#endif
+
+#ifdef HAVE_XCB_SHAPE
+#include <xcb/shape.h>
+#endif
+
 /* Load sys/types.h if not already loaded.
    In some systems loading it twice is suicidal.  */
 #ifndef makedev
@@ -578,6 +590,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #ifdef USE_X_TOOLKIT
 #include <X11/Shell.h>
+#include <X11/ShellP.h>
 #endif
 
 #include <unistd.h>
@@ -649,6 +662,12 @@ bool use_xim = true;
 bool use_xim = false;  /* configure --without-xim */
 #endif
 
+#if XCB_SHAPE_MAJOR_VERSION > 1	      \
+  || (XCB_SHAPE_MAJOR_VERSION == 1 && \
+      XCB_SHAPE_MINOR_VERSION >= 1)
+#define HAVE_XCB_SHAPE_INPUT_RECTS
+#endif
+
 #ifdef USE_GTK
 /* GTK can't tolerate a call to `handle_interrupt' inside an event
    signal handler, but we have to store input events inside the
@@ -700,6 +719,19 @@ static Lisp_Object xg_default_icon_file;
 /* Some functions take this as char *, not const char *.  */
 static char emacs_class[] = EMACS_CLASS;
 #endif
+
+#ifdef USE_GTK
+static int current_count;
+static int current_finish;
+static struct input_event *current_hold_quit;
+#endif
+
+enum
+{
+  X_EVENT_NORMAL,
+  X_EVENT_GOTO_OUT,
+  X_EVENT_DROP
+};
 
 enum xembed_info
   {
@@ -768,6 +800,1230 @@ static void x_update_opaque_region (struct frame *, XEvent *);
 #if !defined USE_TOOLKIT_SCROLL_BARS && defined HAVE_XDBE
 static void x_scroll_bar_end_update (struct x_display_info *, struct scroll_bar *);
 #endif
+
+#ifdef HAVE_X_I18N
+static int x_filter_event (struct x_display_info *, XEvent *);
+#endif
+
+static bool x_dnd_in_progress;
+static bool x_dnd_waiting_for_finish;
+static Window x_dnd_pending_finish_target;
+static int x_dnd_waiting_for_finish_proto;
+static bool x_dnd_allow_current_frame;
+
+/* Whether or not to return a frame from `x_dnd_begin_drag_and_drop'.
+
+   0 means to do nothing.  1 means to wait for the mouse to first exit
+   `x_dnd_frame'.  2 means to wait for the mouse to move onto a frame,
+   and 3 means to `x_dnd_return_frame_object'.  */
+static int x_dnd_return_frame;
+static struct frame *x_dnd_return_frame_object;
+
+static Window x_dnd_last_seen_window;
+static Window x_dnd_end_window;
+static int x_dnd_last_protocol_version;
+static Time x_dnd_selection_timestamp;
+
+static Window x_dnd_mouse_rect_target;
+static XRectangle x_dnd_mouse_rect;
+static Atom x_dnd_action;
+static Atom x_dnd_wanted_action;
+
+static Atom *x_dnd_targets = NULL;
+static int x_dnd_n_targets;
+static struct frame *x_dnd_frame;
+static XWindowAttributes x_dnd_old_window_attrs;
+static bool x_dnd_unwind_flag;
+
+struct x_client_list_window
+{
+  Window window;
+  Display *dpy;
+  int x, y;
+  int width, height;
+  bool mapped_p;
+  long previous_event_mask;
+  unsigned long wm_state;
+
+  struct x_client_list_window *next;
+
+#ifdef HAVE_XSHAPE
+  int border_width;
+
+  XRectangle *input_rects;
+  int n_input_rects;
+
+  XRectangle *bounding_rects;
+  int n_bounding_rects;
+#endif
+};
+
+static struct x_client_list_window *x_dnd_toplevels = NULL;
+static bool x_dnd_use_toplevels;
+
+static void
+x_dnd_free_toplevels (void)
+{
+  struct x_client_list_window *last;
+  struct x_client_list_window *tem = x_dnd_toplevels;
+
+  while (tem)
+    {
+      last = tem;
+      tem = tem->next;
+
+      x_catch_errors (last->dpy);
+      XSelectInput (last->dpy, last->window,
+		    last->previous_event_mask);
+#ifdef HAVE_XSHAPE
+      XShapeSelectInput (last->dpy, last->window, None);
+#endif
+      x_uncatch_errors ();
+
+#ifdef HAVE_XSHAPE
+      if (last->n_input_rects != -1)
+	xfree (last->input_rects);
+      if (last->n_bounding_rects != -1)
+	xfree (last->bounding_rects);
+#endif
+
+      xfree (last);
+    }
+
+  x_dnd_toplevels = NULL;
+}
+
+static int
+x_dnd_compute_toplevels (struct x_display_info *dpyinfo)
+{
+  Atom type;
+  Window *toplevels;
+  int format, rc;
+  unsigned long nitems, bytes_after;
+  unsigned long i;
+  unsigned char *data = NULL;
+
+#ifndef USE_XCB
+  int dest_x, dest_y;
+  unsigned long *wmstate;
+  unsigned long wmstate_items;
+  unsigned char *wmstate_data = NULL;
+  XWindowAttributes attrs;
+  Window child;
+#else
+  uint32_t *wmstate;
+  xcb_get_window_attributes_cookie_t *window_attribute_cookies;
+  xcb_translate_coordinates_cookie_t *translate_coordinate_cookies;
+  xcb_get_property_cookie_t *get_property_cookies;
+  xcb_get_geometry_cookie_t *get_geometry_cookies;
+  xcb_get_window_attributes_reply_t attrs, *attrs_reply;
+  xcb_translate_coordinates_reply_t *coordinates_reply;
+  xcb_get_property_reply_t *property_reply;
+  xcb_get_geometry_reply_t *geometry_reply;
+  xcb_generic_error_t *error;
+#endif
+
+#ifdef HAVE_XCB_SHAPE
+  xcb_shape_get_rectangles_cookie_t *bounding_rect_cookies;
+  xcb_shape_get_rectangles_reply_t *bounding_rect_reply;
+  xcb_rectangle_iterator_t bounding_rect_iterator;
+#endif
+
+#ifdef HAVE_XCB_SHAPE_INPUT_RECTS
+  xcb_shape_get_rectangles_cookie_t *input_rect_cookies;
+  xcb_shape_get_rectangles_reply_t *input_rect_reply;
+  xcb_rectangle_iterator_t input_rect_iterator;
+#endif
+
+  struct x_client_list_window *tem;
+#if defined HAVE_XSHAPE && !defined HAVE_XCB_SHAPE_INPUT_RECTS
+  int count, ordering;
+  XRectangle *rects;
+#endif
+
+  rc = XGetWindowProperty (dpyinfo->display, dpyinfo->root_window,
+			   dpyinfo->Xatom_net_client_list_stacking,
+			   0, LONG_MAX, False, XA_WINDOW, &type,
+			   &format, &nitems, &bytes_after, &data);
+
+  if (rc != Success)
+    return 1;
+
+  if (format != 32 || type != XA_WINDOW)
+    {
+      XFree (data);
+      return 1;
+    }
+
+  toplevels = (Window *) data;
+
+#ifdef USE_XCB
+  window_attribute_cookies
+    = alloca (sizeof *window_attribute_cookies * nitems);
+  translate_coordinate_cookies
+    = alloca (sizeof *translate_coordinate_cookies * nitems);
+  get_property_cookies
+    = alloca (sizeof *get_property_cookies * nitems);
+  get_geometry_cookies
+    = alloca (sizeof *get_geometry_cookies * nitems);
+
+#ifdef HAVE_XCB_SHAPE
+  bounding_rect_cookies
+    = alloca (sizeof *bounding_rect_cookies * nitems);
+#endif
+
+#ifdef HAVE_XCB_SHAPE_INPUT_RECTS
+  input_rect_cookies
+    = alloca (sizeof *input_rect_cookies * nitems);
+#endif
+
+  for (i = 0; i < nitems; ++i)
+    {
+      window_attribute_cookies[i]
+	= xcb_get_window_attributes (dpyinfo->xcb_connection,
+				     (xcb_window_t) toplevels[i]);
+      translate_coordinate_cookies[i]
+	= xcb_translate_coordinates (dpyinfo->xcb_connection,
+				     (xcb_window_t) toplevels[i],
+				     (xcb_window_t) dpyinfo->root_window,
+				     0, 0);
+      get_property_cookies[i]
+	= xcb_get_property (dpyinfo->xcb_connection, 0, (xcb_window_t) toplevels[i],
+			    (xcb_atom_t) dpyinfo->Xatom_wm_state, XCB_ATOM_ANY,
+			    0, 2);
+      get_geometry_cookies[i]
+	= xcb_get_geometry (dpyinfo->xcb_connection, (xcb_window_t) toplevels[i]);
+
+#ifdef HAVE_XCB_SHAPE
+      bounding_rect_cookies[i]
+	= xcb_shape_get_rectangles (dpyinfo->xcb_connection,
+				    (xcb_window_t) toplevels[i],
+				    XCB_SHAPE_SK_BOUNDING);
+#endif
+
+#ifdef HAVE_XCB_SHAPE_INPUT_RECTS
+      if (dpyinfo->xshape_major > 1
+	  || (dpyinfo->xshape_major == 1
+	      && dpyinfo->xshape_minor >= 1))
+	input_rect_cookies[i]
+	  = xcb_shape_get_rectangles (dpyinfo->xcb_connection,
+				      (xcb_window_t) toplevels[i],
+				      XCB_SHAPE_SK_INPUT);
+#endif
+    }
+#endif
+
+  /* Actually right because _NET_CLIENT_LIST_STACKING has bottom-up
+     order.  */
+  for (i = 0; i < nitems; ++i)
+    {
+#ifndef USE_XCB
+      x_catch_errors (dpyinfo->display);
+      rc = (XGetWindowAttributes (dpyinfo->display,
+				  toplevels[i], &attrs)
+	    && !x_had_errors_p (dpyinfo->display));
+
+      if (rc)
+	rc = (XTranslateCoordinates (dpyinfo->display, toplevels[i],
+				     attrs.root, -attrs.border_width,
+				     -attrs.border_width, &dest_x,
+				     &dest_y, &child)
+	      && !x_had_errors_p (dpyinfo->display));
+      if (rc)
+	rc = ((XGetWindowProperty (dpyinfo->display,
+				   toplevels[i],
+				   dpyinfo->Xatom_wm_state,
+				   0, 2, False, AnyPropertyType,
+				   &type, &format, &wmstate_items,
+				   &bytes_after, &wmstate_data)
+	       == Success)
+	      && !x_had_errors_p (dpyinfo->display)
+	      && wmstate_data && wmstate_items == 2 && format == 32);
+      x_uncatch_errors_after_check ();
+#else
+      rc = true;
+
+      attrs_reply
+	= xcb_get_window_attributes_reply (dpyinfo->xcb_connection,
+					   window_attribute_cookies[i],
+					   &error);
+
+      if (!attrs_reply)
+	{
+	  rc = false;
+	  free (error);
+	}
+
+      coordinates_reply
+	= xcb_translate_coordinates_reply (dpyinfo->xcb_connection,
+					   translate_coordinate_cookies[i],
+					   &error);
+
+      if (!coordinates_reply)
+	{
+	  rc = false;
+	  free (error);
+	}
+
+      property_reply = xcb_get_property_reply (dpyinfo->xcb_connection,
+					       get_property_cookies[i],
+					       &error);
+
+      if (!property_reply)
+	{
+	  rc = false;
+	  free (error);
+	}
+
+      if (property_reply
+	  && (xcb_get_property_value_length (property_reply) != 8
+	      || property_reply->format != 32))
+	rc = false;
+
+      geometry_reply = xcb_get_geometry_reply (dpyinfo->xcb_connection,
+					       get_geometry_cookies[i],
+					       &error);
+
+      if (!geometry_reply)
+	{
+	  rc = false;
+	  free (error);
+	}
+#endif
+
+      if (rc)
+	{
+#ifdef USE_XCB
+	  wmstate = (uint32_t *) xcb_get_property_value (property_reply);
+	  attrs = *attrs_reply;
+#else
+	  wmstate = (unsigned long *) wmstate_data;
+#endif
+
+	  tem = xmalloc (sizeof *tem);
+	  tem->window = toplevels[i];
+	  tem->dpy = dpyinfo->display;
+#ifndef USE_XCB
+	  tem->x = dest_x;
+	  tem->y = dest_y;
+	  tem->width = attrs.width + attrs.border_width;
+	  tem->height = attrs.height + attrs.border_width;
+	  tem->mapped_p = (attrs.map_state != IsUnmapped);
+#else
+	  tem->x = (coordinates_reply->dst_x
+		    - geometry_reply->border_width);
+	  tem->y = (coordinates_reply->dst_y
+		    - geometry_reply->border_width);
+	  tem->width = (geometry_reply->width
+			+ geometry_reply->border_width);
+	  tem->height = (geometry_reply->height
+			 + geometry_reply->border_width);
+	  tem->mapped_p = (attrs.map_state != XCB_MAP_STATE_UNMAPPED);
+#endif
+	  tem->next = x_dnd_toplevels;
+	  tem->previous_event_mask = attrs.your_event_mask;
+	  tem->wm_state = wmstate[0];
+
+#ifndef USE_XCB
+	  XFree (wmstate_data);
+#endif
+
+#ifdef HAVE_XSHAPE
+#ifndef USE_XCB
+	  tem->border_width = attrs.border_width;
+#else
+	  tem->border_width = geometry_reply->border_width;
+#endif
+	  tem->n_bounding_rects = -1;
+	  tem->n_input_rects = -1;
+
+	  if (dpyinfo->xshape_supported_p)
+	    {
+	      x_catch_errors (dpyinfo->display);
+	      XShapeSelectInput (dpyinfo->display,
+				 toplevels[i],
+				 ShapeNotifyMask);
+	      x_uncatch_errors ();
+
+#ifndef HAVE_XCB_SHAPE
+	      x_catch_errors (dpyinfo->display);
+	      rects = XShapeGetRectangles (dpyinfo->display,
+					   toplevels[i],
+					   ShapeBounding,
+					   &count, &ordering);
+	      rc = x_had_errors_p (dpyinfo->display);
+	      x_uncatch_errors_after_check ();
+
+	      /* Does XShapeGetRectangles allocate anything upon an
+		 error?  */
+	      if (!rc)
+		{
+		  tem->n_bounding_rects = count;
+		  tem->bounding_rects
+		    = xmalloc (sizeof *tem->bounding_rects * count);
+		  memcpy (tem->bounding_rects, rects,
+			  sizeof *tem->bounding_rects * count);
+
+		  XFree (rects);
+		}
+#else
+	      bounding_rect_reply = xcb_shape_get_rectangles_reply (dpyinfo->xcb_connection,
+								    bounding_rect_cookies[i],
+								    &error);
+
+	      if (bounding_rect_reply)
+		{
+		  bounding_rect_iterator
+		    = xcb_shape_get_rectangles_rectangles_iterator (bounding_rect_reply);
+		  tem->n_bounding_rects = bounding_rect_iterator.rem + 1;
+		  tem->bounding_rects = xmalloc (tem->n_bounding_rects
+						 * sizeof *tem->bounding_rects);
+		  tem->n_bounding_rects = 0;
+
+		  for (; bounding_rect_iterator.rem; xcb_rectangle_next (&bounding_rect_iterator))
+		    {
+		      tem->bounding_rects[tem->n_bounding_rects].x
+			= bounding_rect_iterator.data->x;
+		      tem->bounding_rects[tem->n_bounding_rects].y
+			= bounding_rect_iterator.data->y;
+		      tem->bounding_rects[tem->n_bounding_rects].width
+			= bounding_rect_iterator.data->width;
+		      tem->bounding_rects[tem->n_bounding_rects].height
+			= bounding_rect_iterator.data->height;
+
+		      tem->n_bounding_rects++;
+		    }
+
+		  free (bounding_rect_reply);
+		}
+	      else
+		free (error);
+#endif
+
+#ifdef HAVE_XCB_SHAPE_INPUT_RECTS
+	      if (dpyinfo->xshape_major > 1
+		  || (dpyinfo->xshape_major == 1
+		      && dpyinfo->xshape_minor >= 1))
+		{
+		  input_rect_reply = xcb_shape_get_rectangles_reply (dpyinfo->xcb_connection,
+								     input_rect_cookies[i],
+								     &error);
+
+		  if (input_rect_reply)
+		    {
+		      input_rect_iterator
+			= xcb_shape_get_rectangles_rectangles_iterator (input_rect_reply);
+		      tem->n_input_rects = input_rect_iterator.rem + 1;
+		      tem->input_rects = xmalloc (tem->n_input_rects
+						  * sizeof *tem->input_rects);
+		      tem->n_input_rects = 0;
+
+		      for (; input_rect_iterator.rem; xcb_rectangle_next (&input_rect_iterator))
+			{
+			  tem->input_rects[tem->n_input_rects].x
+			    = input_rect_iterator.data->x;
+			  tem->input_rects[tem->n_input_rects].y
+			    = input_rect_iterator.data->y;
+			  tem->input_rects[tem->n_input_rects].width
+			    = input_rect_iterator.data->width;
+			  tem->input_rects[tem->n_input_rects].height
+			    = input_rect_iterator.data->height;
+
+			  tem->n_input_rects++;
+			}
+
+		      free (input_rect_reply);
+		    }
+		  else
+		    free (error);
+		}
+#else
+#ifdef ShapeInput
+	      if (dpyinfo->xshape_major > 1
+		  || (dpyinfo->xshape_major == 1
+		      && dpyinfo->xshape_minor >= 1))
+		{
+		  x_catch_errors (dpyinfo->display);
+		  rects = XShapeGetRectangles (dpyinfo->display,
+					       toplevels[i], ShapeInput,
+					       &count, &ordering);
+		  rc = x_had_errors_p (dpyinfo->display);
+		  x_uncatch_errors_after_check ();
+
+		  /* Does XShapeGetRectangles allocate anything upon
+		     an error?  */
+		  if (!rc)
+		    {
+		      tem->n_input_rects = count;
+		      tem->input_rects
+			= xmalloc (sizeof *tem->input_rects * count);
+		      memcpy (tem->input_rects, rects,
+			      sizeof *tem->input_rects * count);
+
+		      XFree (rects);
+		    }
+		}
+#endif
+#endif
+	    }
+
+	  /* Handle the common case where the input shape equals the
+	     bounding shape.  */
+
+	  if (tem->n_input_rects != -1
+	      && tem->n_bounding_rects == tem->n_input_rects
+	      && !memcmp (tem->bounding_rects, tem->input_rects,
+			  tem->n_input_rects * sizeof *tem->input_rects))
+	    {
+	      xfree (tem->input_rects);
+	      tem->n_input_rects = -1;
+	    }
+
+	  /* And the common case where there is no input rect and the
+	     bouding rect equals the window dimensions.  */
+
+	  if (tem->n_input_rects == -1
+	      && tem->n_bounding_rects == 1
+#ifdef USE_XCB
+	      && tem->bounding_rects[0].width == (geometry_reply->width
+						  + geometry_reply->border_width)
+	      && tem->bounding_rects[0].height == (geometry_reply->height
+						   + geometry_reply->border_width)
+	      && tem->bounding_rects[0].x == -geometry_reply->border_width
+	      && tem->bounding_rects[0].y == -geometry_reply->border_width
+#else
+	      && tem->bounding_rects[0].width == attrs.width + attrs.border_width
+	      && tem->bounding_rects[0].height == attrs.height + attrs.border_width
+	      && tem->bounding_rects[0].x == -attrs.border_width
+	      && tem->bounding_rects[0].y == -attrs.border_width
+#endif
+	      )
+	    {
+	      xfree (tem->bounding_rects);
+	      tem->n_bounding_rects = -1;
+	    }
+#endif
+
+	  x_catch_errors (dpyinfo->display);
+	  XSelectInput (dpyinfo->display, toplevels[i],
+			(attrs.your_event_mask
+			 | StructureNotifyMask
+			 | PropertyChangeMask));
+	  x_uncatch_errors ();
+
+	  x_dnd_toplevels = tem;
+	}
+      else
+	{
+#ifdef HAVE_XCB_SHAPE
+	  if (dpyinfo->xshape_supported_p)
+	    {
+	      bounding_rect_reply = xcb_shape_get_rectangles_reply (dpyinfo->xcb_connection,
+								    bounding_rect_cookies[i],
+								    &error);
+
+	      if (bounding_rect_reply)
+		free (bounding_rect_reply);
+	      else
+		free (error);
+	    }
+#endif
+
+#ifdef HAVE_XCB_SHAPE_INPUT_RECTS
+	  if (dpyinfo->xshape_supported_p
+	      && (dpyinfo->xshape_major > 1
+		  || (dpyinfo->xshape_major == 1
+		      && dpyinfo->xshape_minor >= 1)))
+	    {
+	      input_rect_reply = xcb_shape_get_rectangles_reply (dpyinfo->xcb_connection,
+								 input_rect_cookies[i],
+								 &error);
+
+	      if (input_rect_reply)
+		free (input_rect_reply);
+	      else
+		free (error);
+	    }
+#endif
+	}
+
+#ifdef USE_XCB
+      if (attrs_reply)
+	free (attrs_reply);
+
+      if (coordinates_reply)
+	free (coordinates_reply);
+
+      if (property_reply)
+	free (property_reply);
+
+      if (geometry_reply)
+	free (geometry_reply);
+#endif
+    }
+
+  return 0;
+}
+
+#define X_DND_SUPPORTED_VERSION 5
+
+
+static int x_dnd_get_window_proto (struct x_display_info *, Window);
+static Window x_dnd_get_window_proxy (struct x_display_info *, Window);
+
+#ifdef USE_XCB
+static void
+x_dnd_get_proxy_proto (struct x_display_info *dpyinfo, Window wdesc,
+		       Window *proxy_out, int *proto_out)
+{
+  xcb_get_property_cookie_t xdnd_proto_cookie;
+  xcb_get_property_cookie_t xdnd_proxy_cookie;
+  xcb_get_property_reply_t *reply;
+  xcb_generic_error_t *error;
+
+  if (proxy_out)
+    *proxy_out = None;
+
+  if (proto_out)
+    *proto_out = -1;
+
+  if (proxy_out)
+    xdnd_proxy_cookie = xcb_get_property (dpyinfo->xcb_connection, 0,
+					  (xcb_window_t) wdesc,
+					  (xcb_atom_t) dpyinfo->Xatom_XdndProxy,
+					  XCB_ATOM_WINDOW, 0, 1);
+
+  if (proto_out)
+    xdnd_proto_cookie = xcb_get_property (dpyinfo->xcb_connection, 0,
+					  (xcb_window_t) wdesc,
+					  (xcb_atom_t) dpyinfo->Xatom_XdndAware,
+					  XCB_ATOM_ATOM, 0, 1);
+
+  if (proxy_out)
+    {
+      reply = xcb_get_property_reply (dpyinfo->xcb_connection,
+				      xdnd_proxy_cookie, &error);
+
+      if (!reply)
+	free (error);
+      else
+	{
+	  if (reply->format == 32
+	      && reply->type == XCB_ATOM_WINDOW
+	      && (xcb_get_property_value_length (reply) >= 4))
+	    *proxy_out = *(xcb_window_t *) xcb_get_property_value (reply);
+
+	  free (reply);
+	}
+    }
+
+  if (proto_out)
+    {
+      reply = xcb_get_property_reply (dpyinfo->xcb_connection,
+				      xdnd_proto_cookie, &error);
+
+      if (!reply)
+	free (error);
+      else
+	{
+	  if (reply->format == 32
+	      && reply->type == XCB_ATOM_ATOM
+	      && (xcb_get_property_value_length (reply) >= 4))
+	    *proto_out = (int) *(xcb_atom_t *) xcb_get_property_value (reply);
+
+	  free (reply);
+	}
+    }
+}
+#endif
+
+#ifdef HAVE_XSHAPE
+static bool
+x_dnd_get_target_window_2 (XRectangle *rects, int nrects,
+			   int x, int y)
+{
+  int i;
+  XRectangle *tem;
+
+  for (i = 0; i < nrects; ++i)
+    {
+      tem = &rects[i];
+
+      if (x >= tem->x && y >= tem->y
+	  && x < tem->x + tem->width
+	  && y < tem->y + tem->height)
+	return true;
+    }
+
+  return false;
+}
+#endif
+
+static Window
+x_dnd_get_target_window_1 (struct x_display_info *dpyinfo,
+			   int root_x, int root_y)
+{
+  struct x_client_list_window *tem;
+
+  /* Loop through x_dnd_toplevels until we find the toplevel where
+     root_x and root_y are.  */
+
+  for (tem = x_dnd_toplevels; tem; tem = tem->next)
+    {
+      if (!tem->mapped_p || tem->wm_state != NormalState)
+	continue;
+
+      if (root_x >= tem->x && root_y >= tem->y
+	  && root_x < tem->x + tem->width
+	  && root_y < tem->y + tem->height)
+	{
+#ifdef HAVE_XSHAPE
+	  if (tem->n_bounding_rects == -1)
+#endif
+	    return tem->window;
+
+#ifdef HAVE_XSHAPE
+	  if (x_dnd_get_target_window_2 (tem->bounding_rects,
+					 tem->n_bounding_rects,
+					 tem->border_width + root_x - tem->x,
+					 tem->border_width + root_y - tem->y))
+	    {
+	      if (tem->n_input_rects == -1
+		  || x_dnd_get_target_window_2 (tem->input_rects,
+						tem->n_input_rects,
+						tem->border_width + root_x - tem->x,
+						tem->border_width + root_y - tem->y))
+		return tem->window;
+	    }
+#endif
+	}
+    }
+
+  return None;
+}
+
+static Window
+x_dnd_get_target_window (struct x_display_info *dpyinfo,
+			 int root_x, int root_y, int *proto_out)
+{
+  Window child_return, child, dummy, proxy;
+  int dest_x_return, dest_y_return, rc, proto;
+#if defined HAVE_XCOMPOSITE && (XCOMPOSITE_MAJOR > 0 || XCOMPOSITE_MINOR > 2)
+  Window overlay_window;
+  XWindowAttributes attrs;
+#endif
+  child_return = dpyinfo->root_window;
+  dest_x_return = root_x;
+  dest_y_return = root_y;
+
+  proto = -1;
+
+  if (x_dnd_use_toplevels)
+    {
+      child = x_dnd_get_target_window_1 (dpyinfo, root_x, root_y);
+
+      if (child != None)
+	{
+#ifndef USE_XCB
+	  proxy = x_dnd_get_window_proxy (dpyinfo, child);
+#else
+	  x_dnd_get_proxy_proto (dpyinfo, child, &proxy, proto_out);
+#endif
+
+	  if (proxy != None)
+	    {
+	      proto = x_dnd_get_window_proto (dpyinfo, proxy);
+
+	      if (proto != -1)
+		{
+		  *proto_out = proto;
+		  return proxy;
+		}
+	    }
+
+#ifndef USE_XCB
+	  *proto_out = x_dnd_get_window_proto (dpyinfo, child);
+#endif
+	  return child;
+	}
+
+      /* Then look at the composite overlay window.  */
+#if defined HAVE_XCOMPOSITE && (XCOMPOSITE_MAJOR > 0 || XCOMPOSITE_MINOR > 2)
+      if (dpyinfo->composite_supported_p
+	  && (dpyinfo->composite_major > 0
+	      || dpyinfo->composite_minor > 2))
+	{
+	  if (XGetSelectionOwner (dpyinfo->display,
+				  dpyinfo->Xatom_NET_WM_CM_Sn) != None)
+	    {
+	      x_catch_errors (dpyinfo->display);
+	      overlay_window = XCompositeGetOverlayWindow (dpyinfo->display,
+							   dpyinfo->root_window);
+	      XCompositeReleaseOverlayWindow (dpyinfo->display,
+					      dpyinfo->root_window);
+	      if (!x_had_errors_p (dpyinfo->display))
+		{
+		  XGetWindowAttributes (dpyinfo->display, overlay_window, &attrs);
+
+		  if (attrs.map_state == IsViewable)
+		    {
+		      proxy = x_dnd_get_window_proxy (dpyinfo, overlay_window);
+
+		      if (proxy != None)
+			{
+			  proto = x_dnd_get_window_proto (dpyinfo, proxy);
+
+			  if (proto != -1)
+			    {
+			      *proto_out = proto;
+			      x_uncatch_errors_after_check ();
+
+			      return proxy;
+			    }
+			}
+		    }
+		}
+	      x_uncatch_errors_after_check ();
+	    }
+	}
+#endif
+
+      /* No toplevel was found and the overlay window was not a proxy,
+	 so return None.  */
+      *proto_out = -1;
+      return None;
+    }
+
+  /* Not strictly necessary, but satisfies GCC.  */
+  child = dpyinfo->root_window;
+
+  while (child_return != None)
+    {
+      child = child_return;
+
+      x_catch_errors (dpyinfo->display);
+      rc = XTranslateCoordinates (dpyinfo->display,
+				  child_return, child_return,
+				  dest_x_return, dest_y_return,
+				  &dest_x_return, &dest_y_return,
+				  &child_return);
+
+      if (x_had_errors_p (dpyinfo->display) || !rc)
+	{
+	  x_uncatch_errors_after_check ();
+	  break;
+	}
+
+      proxy = x_dnd_get_window_proxy (dpyinfo, child_return);
+
+      if (proxy != None)
+	{
+	  proto = x_dnd_get_window_proto (dpyinfo, proxy);
+
+	  if (proto != -1)
+	    {
+	      *proto_out = proto;
+
+	      x_uncatch_errors ();
+	      return proxy;
+	    }
+	}
+
+      if (child_return)
+	{
+	  proto = x_dnd_get_window_proto (dpyinfo, child_return);
+
+	  if (proto != -1)
+	    {
+	      *proto_out = proto;
+	      x_uncatch_errors ();
+
+	      return child_return;
+	    }
+
+	  rc = XTranslateCoordinates (dpyinfo->display,
+				      child, child_return,
+				      dest_x_return, dest_y_return,
+				      &dest_x_return, &dest_y_return,
+				      &dummy);
+
+	  if (x_had_errors_p (dpyinfo->display) || !rc)
+	    {
+	      x_uncatch_errors_after_check ();
+	      *proto_out = -1;
+	      return None;
+	    }
+	}
+
+      x_uncatch_errors_after_check ();
+    }
+
+#if defined HAVE_XCOMPOSITE && (XCOMPOSITE_MAJOR > 0 || XCOMPOSITE_MINOR > 2)
+  if (child != dpyinfo->root_window)
+    {
+#endif
+      *proto_out = x_dnd_get_window_proto (dpyinfo, child);
+      return child;
+#if defined HAVE_XCOMPOSITE && (XCOMPOSITE_MAJOR > 0 || XCOMPOSITE_MINOR > 2)
+    }
+  else if (dpyinfo->composite_supported_p
+	   && (dpyinfo->composite_major > 0
+	       || dpyinfo->composite_minor > 2))
+    {
+      /* Only do this if a compositing manager is present.  */
+      if (XGetSelectionOwner (dpyinfo->display,
+			      dpyinfo->Xatom_NET_WM_CM_Sn) != None)
+	{
+	  x_catch_errors (dpyinfo->display);
+	  overlay_window = XCompositeGetOverlayWindow (dpyinfo->display,
+						       dpyinfo->root_window);
+	  XCompositeReleaseOverlayWindow (dpyinfo->display,
+					  dpyinfo->root_window);
+	  if (!x_had_errors_p (dpyinfo->display))
+	    {
+	      XGetWindowAttributes (dpyinfo->display, overlay_window, &attrs);
+
+	      if (attrs.map_state == IsViewable)
+		{
+		  proxy = x_dnd_get_window_proxy (dpyinfo, overlay_window);
+
+		  if (proxy != None)
+		    {
+		      proto = x_dnd_get_window_proto (dpyinfo, proxy);
+
+		      if (proto != -1)
+			{
+			  *proto_out = proto;
+			  x_uncatch_errors_after_check ();
+
+			  return proxy;
+			}
+		    }
+		}
+	    }
+	  x_uncatch_errors_after_check ();
+	}
+    }
+
+  *proto_out = x_dnd_get_window_proto (dpyinfo, child);
+  return child;
+#endif
+}
+
+static Window
+x_dnd_get_window_proxy (struct x_display_info *dpyinfo, Window wdesc)
+{
+  int rc, actual_format;
+  unsigned long actual_size, bytes_remaining;
+  unsigned char *tmp_data;
+  XWindowAttributes attrs;
+  Atom actual_type;
+  Window proxy;
+
+  proxy = None;
+  x_catch_errors (dpyinfo->display);
+  rc = XGetWindowProperty (dpyinfo->display, wdesc,
+			   dpyinfo->Xatom_XdndProxy,
+			   0, 1, False, XA_WINDOW,
+			   &actual_type, &actual_format,
+			   &actual_size, &bytes_remaining,
+			   &tmp_data);
+
+  if (!x_had_errors_p (dpyinfo->display)
+      && rc == Success
+      && actual_type == XA_WINDOW
+      && actual_format == 32
+      && actual_size == 1)
+    {
+      proxy = *(Window *) tmp_data;
+      XFree (tmp_data);
+
+      /* Verify the proxy window exists.  */
+      XGetWindowAttributes (dpyinfo->display, proxy, &attrs);
+
+      if (x_had_errors_p (dpyinfo->display))
+	proxy = None;
+    }
+  x_uncatch_errors_after_check ();
+
+  return proxy;
+}
+
+static int
+x_dnd_get_window_proto (struct x_display_info *dpyinfo, Window wdesc)
+{
+  Atom actual, value;
+  unsigned char *tmp_data;
+  int rc, format;
+  unsigned long n, left;
+  bool had_errors;
+
+  if (wdesc == None || (!x_dnd_allow_current_frame
+			&& wdesc == FRAME_OUTER_WINDOW (x_dnd_frame)))
+    return -1;
+
+  x_catch_errors (dpyinfo->display);
+  rc = XGetWindowProperty (dpyinfo->display, wdesc, dpyinfo->Xatom_XdndAware,
+			   0, 1, False, XA_ATOM, &actual, &format, &n, &left,
+			   &tmp_data);
+  had_errors = x_had_errors_p (dpyinfo->display);
+  x_uncatch_errors_after_check ();
+
+  if (had_errors || rc != Success || actual != XA_ATOM || format != 32 || n < 1)
+    return -1;
+
+  value = (int) *(Atom *) tmp_data;
+  XFree (tmp_data);
+
+  return min (X_DND_SUPPORTED_VERSION, (int) value);
+}
+
+static void
+x_dnd_send_enter (struct frame *f, Window target, int supported)
+{
+  struct x_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
+  int i;
+  XEvent msg;
+
+  if (x_top_window_to_frame (dpyinfo, target))
+    return;
+
+  msg.xclient.type = ClientMessage;
+  msg.xclient.message_type = dpyinfo->Xatom_XdndEnter;
+  msg.xclient.format = 32;
+  msg.xclient.window = target;
+  msg.xclient.data.l[0] = FRAME_X_WINDOW (f);
+  msg.xclient.data.l[1] = (((unsigned int) min (X_DND_SUPPORTED_VERSION,
+						supported) << 24)
+			   | (x_dnd_n_targets > 3 ? 1 : 0));
+  msg.xclient.data.l[2] = 0;
+  msg.xclient.data.l[3] = 0;
+  msg.xclient.data.l[4] = 0;
+
+  for (i = 0; i < min (3, x_dnd_n_targets); ++i)
+    msg.xclient.data.l[i + 2] = x_dnd_targets[i];
+
+  if (x_dnd_n_targets > 3)
+    XChangeProperty (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f),
+		     dpyinfo->Xatom_XdndTypeList, XA_ATOM, 32,
+		     PropModeReplace, (unsigned char *) x_dnd_targets,
+		     x_dnd_n_targets);
+
+  x_catch_errors (dpyinfo->display);
+  XSendEvent (FRAME_X_DISPLAY (f), target, False, 0, &msg);
+  x_uncatch_errors ();
+}
+
+static void
+x_dnd_send_position (struct frame *f, Window target, int supported,
+		     unsigned short root_x, unsigned short root_y,
+		     Time timestamp, Atom action)
+{
+  struct x_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
+  XEvent msg;
+
+  if (target == x_dnd_mouse_rect_target
+      && x_dnd_mouse_rect.width
+      && x_dnd_mouse_rect.height)
+    {
+      if (root_x >= x_dnd_mouse_rect.x
+	  && root_x < (x_dnd_mouse_rect.x
+		       + x_dnd_mouse_rect.width)
+	  && root_y >= x_dnd_mouse_rect.y
+	  && root_y < (x_dnd_mouse_rect.y
+		       + x_dnd_mouse_rect.height))
+	return;
+    }
+
+  if (x_top_window_to_frame (dpyinfo, target))
+    return;
+
+  msg.xclient.type = ClientMessage;
+  msg.xclient.message_type = dpyinfo->Xatom_XdndPosition;
+  msg.xclient.format = 32;
+  msg.xclient.window = target;
+  msg.xclient.data.l[0] = FRAME_X_WINDOW (f);
+  msg.xclient.data.l[1] = 0;
+  msg.xclient.data.l[2] = (root_x << 16) | root_y;
+  msg.xclient.data.l[3] = 0;
+  msg.xclient.data.l[4] = 0;
+
+  if (supported >= 3)
+    msg.xclient.data.l[3] = timestamp;
+
+  if (supported >= 4)
+    msg.xclient.data.l[4] = action;
+
+  x_catch_errors (dpyinfo->display);
+  XSendEvent (FRAME_X_DISPLAY (f), target, False, 0, &msg);
+  x_uncatch_errors ();
+}
+
+static void
+x_dnd_send_leave (struct frame *f, Window target)
+{
+  struct x_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
+  XEvent msg;
+
+  if (x_top_window_to_frame (dpyinfo, target))
+    return;
+
+  msg.xclient.type = ClientMessage;
+  msg.xclient.message_type = dpyinfo->Xatom_XdndLeave;
+  msg.xclient.format = 32;
+  msg.xclient.window = target;
+  msg.xclient.data.l[0] = FRAME_X_WINDOW (f);
+  msg.xclient.data.l[1] = 0;
+  msg.xclient.data.l[2] = 0;
+  msg.xclient.data.l[3] = 0;
+  msg.xclient.data.l[4] = 0;
+
+  x_catch_errors (dpyinfo->display);
+  XSendEvent (FRAME_X_DISPLAY (f), target, False, 0, &msg);
+  x_uncatch_errors ();
+}
+
+static bool
+x_dnd_send_drop (struct frame *f, Window target, Time timestamp,
+		 int supported)
+{
+  struct x_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
+  XEvent msg;
+  struct input_event ie;
+  struct frame *self_frame;
+  int root_x, root_y, win_x, win_y, i;
+  unsigned int mask;
+  Window root, child;
+  Lisp_Object lval;
+  char **atom_names;
+  char *name;
+
+  self_frame = x_top_window_to_frame (dpyinfo, target);
+
+  if (self_frame)
+    {
+      /* Send a special drag-and-drop event when dropping on top of an
+	 Emacs frame to avoid all the overhead involved with sending
+	 client events.  */
+      EVENT_INIT (ie);
+
+      if (XQueryPointer (dpyinfo->display, FRAME_X_WINDOW (self_frame),
+			 &root, &child, &root_x, &root_y, &win_x, &win_y,
+			 &mask))
+	{
+	  ie.kind = DRAG_N_DROP_EVENT;
+	  XSETFRAME (ie.frame_or_window, self_frame);
+
+	  lval = Qnil;
+	  atom_names = alloca (x_dnd_n_targets * sizeof *atom_names);
+	  name = XGetAtomName (dpyinfo->display, x_dnd_wanted_action);
+
+	  if (!XGetAtomNames (dpyinfo->display, x_dnd_targets,
+			      x_dnd_n_targets, atom_names))
+	    {
+	      XFree (name);
+	      return false;
+	    }
+
+	  for (i = x_dnd_n_targets; i != 0; --i)
+	    {
+	      lval = Fcons (intern (atom_names[i - 1]), lval);
+	      XFree (atom_names[i - 1]);
+	    }
+
+	  lval = Fcons (intern (name), lval);
+	  lval = Fcons (QXdndSelection, lval);
+	  ie.arg = lval;
+	  ie.timestamp = CurrentTime;
+
+	  XSETINT (ie.x, win_x);
+	  XSETINT (ie.y, win_y);
+
+	  XFree (name);
+	  kbd_buffer_store_event (&ie);
+
+	  return false;
+	}
+    }
+  else if (x_dnd_action == None)
+    {
+      x_dnd_send_leave (f, target);
+      return false;
+    }
+
+  msg.xclient.type = ClientMessage;
+  msg.xclient.message_type = dpyinfo->Xatom_XdndDrop;
+  msg.xclient.format = 32;
+  msg.xclient.window = target;
+  msg.xclient.data.l[0] = FRAME_X_WINDOW (f);
+  msg.xclient.data.l[1] = 0;
+  msg.xclient.data.l[2] = 0;
+  msg.xclient.data.l[3] = 0;
+  msg.xclient.data.l[4] = 0;
+
+  if (supported >= 1)
+    msg.xclient.data.l[2] = timestamp;
+
+  x_catch_errors (dpyinfo->display);
+  XSendEvent (FRAME_X_DISPLAY (f), target, False, 0, &msg);
+  x_uncatch_errors ();
+  return true;
+}
+
+void
+x_set_dnd_targets (Atom *targets, int ntargets)
+{
+  if (x_dnd_targets)
+    xfree (x_dnd_targets);
+
+  x_dnd_targets = targets;
+  x_dnd_n_targets = ntargets;
+}
+
+static void
+x_dnd_cleanup_drag_and_drop (void *frame)
+{
+  struct frame *f = frame;
+
+  if (!x_dnd_unwind_flag)
+    return;
+
+  if (x_dnd_in_progress)
+    {
+      eassert (x_dnd_frame);
+
+      block_input ();
+      if (x_dnd_last_seen_window != None
+	  && x_dnd_last_protocol_version != -1)
+	x_dnd_send_leave (x_dnd_frame,
+			  x_dnd_last_seen_window);
+      unblock_input ();
+
+      x_dnd_end_window = x_dnd_last_seen_window;
+      x_dnd_last_seen_window = None;
+      x_dnd_in_progress = false;
+      x_set_dnd_targets (NULL, 0);
+    }
+
+  x_dnd_waiting_for_finish = false;
+
+  if (x_dnd_use_toplevels)
+    x_dnd_free_toplevels ();
+
+  FRAME_DISPLAY_INFO (f)->grabbed = 0;
+#ifdef USE_GTK
+  current_hold_quit = NULL;
+#endif
+
+  block_input ();
+  /* Restore the old event mask.  */
+  XSelectInput (FRAME_X_DISPLAY (f),
+		FRAME_DISPLAY_INFO (f)->root_window,
+		x_dnd_old_window_attrs.your_event_mask);
+  unblock_input ();
+
+  x_dnd_frame = NULL;
+}
 
 /* Flush display of frame F.  */
 
@@ -1838,6 +3094,68 @@ x_reset_clip_rectangles (struct frame *f, GC gc)
 #endif
 }
 
+#ifdef HAVE_XRENDER
+# if !defined USE_CAIRO && (RENDER_MAJOR > 0 || RENDER_MINOR >= 2)
+static void
+x_xrender_color_from_gc_foreground (struct frame *f, GC gc, XRenderColor *color,
+				    bool apply_alpha_background)
+{
+  XGCValues xgcv;
+  XColor xc;
+
+  XGetGCValues (FRAME_X_DISPLAY (f), gc, GCForeground, &xgcv);
+  xc.pixel = xgcv.foreground;
+  x_query_colors (f, &xc, 1);
+
+  color->alpha = (apply_alpha_background
+		  ? 65535 * f->alpha_background
+		  : 65535);
+
+  if (color->alpha == 65535)
+    {
+      color->red = xc.red;
+      color->blue = xc.blue;
+      color->green = xc.green;
+    }
+  else
+    {
+      color->red = (xc.red * color->alpha) / 65535;
+      color->blue = (xc.blue * color->alpha) / 65535;
+      color->green = (xc.green * color->alpha) / 65535;
+    }
+}
+# endif
+
+void
+x_xrender_color_from_gc_background (struct frame *f, GC gc, XRenderColor *color,
+				    bool apply_alpha_background)
+{
+  XGCValues xgcv;
+  XColor xc;
+
+  XGetGCValues (FRAME_X_DISPLAY (f), gc, GCBackground, &xgcv);
+  xc.pixel = xgcv.background;
+  x_query_colors (f, &xc, 1);
+
+  color->alpha = (apply_alpha_background
+		  ? 65535 * f->alpha_background
+		  : 65535);
+
+  if (color->alpha == 65535)
+    {
+      color->red = xc.red;
+      color->blue = xc.blue;
+      color->green = xc.green;
+    }
+  else
+    {
+      color->red = (xc.red * color->alpha) / 65535;
+      color->blue = (xc.blue * color->alpha) / 65535;
+      color->green = (xc.green * color->alpha) / 65535;
+    }
+}
+#endif
+
 static void
 x_fill_rectangle (struct frame *f, GC gc, int x, int y, int width, int height,
 		  bool respect_alpha_background)
@@ -2798,7 +4116,7 @@ static void x_scroll_bar_clear (struct frame *);
 static void x_check_font (struct frame *, struct font *);
 #endif
 
-void
+static void
 x_display_set_last_user_time (struct x_display_info *dpyinfo, Time time)
 {
 #ifndef USE_GTK
@@ -6443,9 +7761,284 @@ x_top_window_to_frame (struct x_display_info *dpyinfo, int wdesc)
 #else /* !USE_X_TOOLKIT && !USE_GTK */
 
 #define x_any_window_to_frame(d, i) x_window_to_frame (d, i)
-#define x_top_window_to_frame(d, i) x_window_to_frame (d, i)
+
+struct frame *
+x_top_window_to_frame (struct x_display_info *dpyinfo, int wdesc)
+{
+  return x_window_to_frame (dpyinfo, wdesc);
+}
 
 #endif /* USE_X_TOOLKIT || USE_GTK */
+
+/* This function is defined far away from the rest of the XDND code so
+   it can utilize `x_any_window_to_frame'.  */
+
+Lisp_Object
+x_dnd_begin_drag_and_drop (struct frame *f, Time time, Atom xaction,
+			   bool return_frame_p, Atom *ask_action_list,
+			   const char **ask_action_names,
+			   size_t n_ask_actions, bool allow_current_frame)
+{
+#ifndef USE_GTK
+  XEvent next_event;
+  int finish;
+#endif
+  XWindowAttributes root_window_attrs;
+  struct input_event hold_quit;
+  struct frame *any;
+  char *atom_name, *ask_actions;
+  Lisp_Object action, ltimestamp;
+  specpdl_ref ref;
+  ptrdiff_t i, end, fill;
+  XTextProperty prop;
+
+  if (!FRAME_VISIBLE_P (f))
+    error ("Frame is invisible");
+
+  if (x_dnd_in_progress || x_dnd_waiting_for_finish)
+    error ("A drag-and-drop session is already in progress");
+
+  ltimestamp = x_timestamp_for_selection (FRAME_DISPLAY_INFO (f),
+					  QXdndSelection);
+
+  if (NILP (ltimestamp))
+    error ("No local value for XdndSelection");
+
+  if (BIGNUMP (ltimestamp))
+    x_dnd_selection_timestamp = bignum_to_intmax (ltimestamp);
+  else
+    x_dnd_selection_timestamp = XFIXNUM (ltimestamp);
+
+  if (n_ask_actions)
+    {
+      ask_actions = NULL;
+      end = 0;
+
+      for (i = 0; i < n_ask_actions; ++i)
+	{
+	  fill = end;
+	  end += strlen (ask_action_names[i]) + 1;
+
+	  if (ask_actions)
+	    ask_actions = xrealloc (ask_actions, end);
+	  else
+	    ask_actions = xmalloc (end);
+
+	  strncpy (ask_actions + fill,
+		   ask_action_names[i],
+		   end - fill);
+	}
+
+      prop.value = (unsigned char *) ask_actions;
+      prop.encoding = XA_STRING;
+      prop.format = 8;
+      prop.nitems = end;
+
+      block_input ();
+      XSetTextProperty (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f),
+			&prop, FRAME_DISPLAY_INFO (f)->Xatom_XdndActionDescription);
+      xfree (ask_actions);
+
+      XChangeProperty (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f),
+		       FRAME_DISPLAY_INFO (f)->Xatom_XdndActionList, XA_ATOM, 32,
+		       PropModeReplace, (unsigned char *) ask_action_list,
+		       n_ask_actions);
+      unblock_input ();
+    }
+  else
+    {
+      /* Delete those two properties, since some clients look at them
+	 and not the action to decide whether or not the user should
+	 be prompted to select an action.  */
+
+      block_input ();
+      XDeleteProperty (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f),
+		       FRAME_DISPLAY_INFO (f)->Xatom_XdndActionList);
+      XDeleteProperty (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f),
+		       FRAME_DISPLAY_INFO (f)->Xatom_XdndActionDescription);
+      unblock_input ();
+    }
+
+  x_dnd_in_progress = true;
+  x_dnd_frame = f;
+  x_dnd_last_seen_window = None;
+  x_dnd_last_protocol_version = -1;
+  x_dnd_mouse_rect_target = None;
+  x_dnd_action = None;
+  x_dnd_wanted_action = xaction;
+  x_dnd_return_frame = 0;
+  x_dnd_waiting_for_finish = false;
+  x_dnd_end_window = None;
+  x_dnd_use_toplevels
+    = x_wm_supports (f, FRAME_DISPLAY_INFO (f)->Xatom_net_client_list_stacking);
+  x_dnd_toplevels = NULL;
+  x_dnd_allow_current_frame = allow_current_frame;
+
+  if (x_dnd_use_toplevels)
+    {
+      if (x_dnd_compute_toplevels (FRAME_DISPLAY_INFO (f)))
+	{
+	  x_dnd_free_toplevels ();
+	  x_dnd_use_toplevels = false;
+	}
+    }
+
+  if (return_frame_p)
+    x_dnd_return_frame = 1;
+
+#ifdef USE_GTK
+  current_count = 0;
+#endif
+
+  /* Now select for SubstructureNotifyMask and PropertyNotifyMask on
+     the root window, so we can get notified when window stacking
+     changes, a common operation during drag-and-drop.  */
+
+  block_input ();
+  XGetWindowAttributes (FRAME_X_DISPLAY (f),
+			FRAME_DISPLAY_INFO (f)->root_window,
+			&root_window_attrs);
+
+  XSelectInput (FRAME_X_DISPLAY (f),
+		FRAME_DISPLAY_INFO (f)->root_window,
+		root_window_attrs.your_event_mask
+		| SubstructureNotifyMask
+		| PropertyChangeMask);
+
+  while (x_dnd_in_progress || x_dnd_waiting_for_finish)
+    {
+      hold_quit.kind = NO_EVENT;
+#ifdef USE_GTK
+      current_finish = X_EVENT_NORMAL;
+      current_hold_quit = &hold_quit;
+#endif
+
+#ifdef USE_GTK
+      gtk_main_iteration ();
+#else
+#ifdef USE_X_TOOLKIT
+      XtAppNextEvent (Xt_app_con, &next_event);
+#else
+      XNextEvent (FRAME_X_DISPLAY (f), &next_event);
+#endif
+
+#ifdef HAVE_X_I18N
+#ifdef HAVE_XINPUT2
+      if (next_event.type != GenericEvent
+	  || !FRAME_DISPLAY_INFO (f)->supports_xi2
+	  || (next_event.xgeneric.extension
+	      != FRAME_DISPLAY_INFO (f)->xi2_opcode))
+	{
+#endif
+	  if (!x_filter_event (FRAME_DISPLAY_INFO (f), &next_event))
+	    handle_one_xevent (FRAME_DISPLAY_INFO (f),
+			       &next_event, &finish, &hold_quit);
+#ifdef HAVE_XINPUT2
+	}
+      else
+	handle_one_xevent (FRAME_DISPLAY_INFO (f),
+			   &next_event, &finish, &hold_quit);
+#endif
+#else
+      handle_one_xevent (FRAME_DISPLAY_INFO (f),
+			 &next_event, &finish, &hold_quit);
+#endif
+#endif
+
+      if (hold_quit.kind != NO_EVENT)
+	{
+	  if (hold_quit.kind == SELECTION_REQUEST_EVENT)
+	    {
+	      x_dnd_old_window_attrs = root_window_attrs;
+	      x_dnd_unwind_flag = true;
+
+	      ref = SPECPDL_INDEX ();
+	      record_unwind_protect_ptr (x_dnd_cleanup_drag_and_drop, f);
+	      x_handle_selection_event ((struct selection_input_event *) &hold_quit);
+	      x_dnd_unwind_flag = false;
+	      unbind_to (ref, Qnil);
+	      continue;
+	    }
+
+	  if (x_dnd_in_progress)
+	    {
+	      if (x_dnd_last_seen_window != None
+		  && x_dnd_last_protocol_version != -1)
+		x_dnd_send_leave (f, x_dnd_last_seen_window);
+
+	      x_dnd_end_window = x_dnd_last_seen_window;
+	      x_dnd_last_seen_window = None;
+	      x_dnd_in_progress = false;
+	      x_dnd_frame = NULL;
+	      x_set_dnd_targets (NULL, 0);
+	    }
+
+	  x_dnd_waiting_for_finish = false;
+
+	  if (x_dnd_use_toplevels)
+	    x_dnd_free_toplevels ();
+
+	  FRAME_DISPLAY_INFO (f)->grabbed = 0;
+#ifdef USE_GTK
+	  current_hold_quit = NULL;
+#endif
+	  /* Restore the old event mask.  */
+	  XSelectInput (FRAME_X_DISPLAY (f),
+			FRAME_DISPLAY_INFO (f)->root_window,
+			root_window_attrs.your_event_mask);
+	  unblock_input ();
+	  quit ();
+	}
+    }
+  x_set_dnd_targets (NULL, 0);
+  x_dnd_waiting_for_finish = false;
+
+#ifdef USE_GTK
+  current_hold_quit = NULL;
+#endif
+
+  /* Restore the old event mask.  */
+  XSelectInput (FRAME_X_DISPLAY (f),
+		FRAME_DISPLAY_INFO (f)->root_window,
+		root_window_attrs.your_event_mask);
+
+  unblock_input ();
+
+  if (x_dnd_return_frame == 3)
+    {
+      x_dnd_return_frame_object->mouse_moved = true;
+
+      XSETFRAME (action, x_dnd_return_frame_object);
+      return action;
+    }
+
+  if (x_dnd_use_toplevels)
+    x_dnd_free_toplevels ();
+  FRAME_DISPLAY_INFO (f)->grabbed = 0;
+
+  /* Emacs can't respond to DND events inside the nested event
+     loop, so when dragging items to itself, always return
+     XdndActionPrivate.  */
+  if (x_dnd_end_window != None
+      && (any = x_any_window_to_frame (FRAME_DISPLAY_INFO (f),
+				       x_dnd_end_window))
+      && (any != f))
+    return QXdndActionPrivate;
+
+  if (x_dnd_action != None)
+    {
+      block_input ();
+      atom_name = XGetAtomName (FRAME_X_DISPLAY (f),
+				x_dnd_action);
+      action = intern (atom_name);
+      XFree (atom_name);
+      unblock_input ();
+
+      return action;
+    }
+
+  return Qnil;
+}
 
 /* The focus may have changed.  Figure out if it is a real focus change,
    by checking both FocusIn/Out and Enter/LeaveNotify events.
@@ -7238,9 +8831,9 @@ x_window_to_scroll_bar (Display *display, Window window_id, int type)
 {
   Lisp_Object tail, frame;
 
-#if defined (USE_GTK) && defined (USE_TOOLKIT_SCROLL_BARS)
+#if defined (USE_GTK) && !defined (HAVE_GTK3) && defined (USE_TOOLKIT_SCROLL_BARS)
   window_id = (Window) xg_get_scroll_id_for_window (display, window_id);
-#endif /* USE_GTK  && USE_TOOLKIT_SCROLL_BARS */
+#endif /* USE_GTK && !HAVE_GTK3  && USE_TOOLKIT_SCROLL_BARS */
 
   FOR_EACH_FRAME (tail, frame)
     {
@@ -9735,13 +11328,6 @@ static struct x_display_info *XTread_socket_fake_io_error;
 
 static struct x_display_info *next_noop_dpyinfo;
 
-enum
-{
-  X_EVENT_NORMAL,
-  X_EVENT_GOTO_OUT,
-  X_EVENT_DROP
-};
-
 /* Filter events for the current X input method.
    DPYINFO is the display this event is for.
    EVENT is the X event to filter.
@@ -9817,10 +11403,6 @@ x_filter_event (struct x_display_info *dpyinfo, XEvent *event)
 #endif
 
 #ifdef USE_GTK
-static int current_count;
-static int current_finish;
-static struct input_event *current_hold_quit;
-
 /* This is the filter function invoked by the GTK event loop.
    It is invoked before the XEvent is translated to a GdkEvent,
    so we have a chance to act on the event before GTK.  */
@@ -9952,6 +11534,34 @@ flush_dirty_back_buffer_on (struct frame *f)
   unblock_input ();
 }
 
+#ifdef HAVE_GTK3
+void
+x_scroll_bar_configure (GdkEvent *event)
+{
+  XEvent configure;
+  GdkDisplay *gdpy;
+  Display *dpy;
+
+  configure.xconfigure.type = ConfigureNotify;
+  configure.xconfigure.serial = 0;
+  configure.xconfigure.send_event = event->configure.send_event;
+  configure.xconfigure.x = event->configure.x;
+  configure.xconfigure.y = event->configure.y;
+  configure.xconfigure.width = event->configure.width;
+  configure.xconfigure.height = event->configure.height;
+  configure.xconfigure.border_width = 0;
+  configure.xconfigure.event = GDK_WINDOW_XID (event->configure.window);
+  configure.xconfigure.window = GDK_WINDOW_XID (event->configure.window);
+  configure.xconfigure.above = None;
+  configure.xconfigure.override_redirect = False;
+
+  gdpy = gdk_window_get_display (event->configure.window);
+  dpy = gdk_x11_display_get_xdisplay (gdpy);
+
+  x_dispatch_event (&configure, dpy);
+}
+#endif
+
 /**
   mouse_or_wdesc_frame: When not dropping and the mouse was grabbed
   for DPYINFO, return the frame where the mouse was seen last.  If
@@ -9980,6 +11590,81 @@ mouse_or_wdesc_frame (struct x_display_info *dpyinfo, int wdesc)
 	/* When dropping it would be probably nice to raise w_f
 	   here.  */
 	return w_f;
+    }
+}
+
+/* Get the window underneath the pointer, see if it moved, and update
+   the DND state accordingly.  */
+static void
+x_dnd_update_state (struct x_display_info *dpyinfo)
+{
+  int root_x, root_y, dummy_x, dummy_y, target_proto;
+  unsigned int dummy_mask;
+  Window dummy, dummy_child, target;
+
+  if (XQueryPointer (dpyinfo->display,
+		     dpyinfo->root_window,
+		     &dummy, &dummy_child,
+		     &root_x, &root_y,
+		     &dummy_x, &dummy_y,
+		     &dummy_mask))
+    {
+      target = x_dnd_get_target_window (dpyinfo, root_x,
+					root_y, &target_proto);
+
+      if (target != x_dnd_last_seen_window)
+	{
+	  if (x_dnd_last_seen_window != None
+	      && x_dnd_last_protocol_version != -1
+	      && x_dnd_last_seen_window != FRAME_OUTER_WINDOW (x_dnd_frame))
+	    x_dnd_send_leave (x_dnd_frame, x_dnd_last_seen_window);
+
+	  if (target != FRAME_OUTER_WINDOW (x_dnd_frame)
+	      && x_dnd_return_frame == 1)
+	    x_dnd_return_frame = 2;
+
+	  if (x_dnd_return_frame == 2
+	      && x_any_window_to_frame (dpyinfo, target))
+	    {
+	      x_dnd_end_window = x_dnd_last_seen_window;
+	      x_dnd_last_seen_window = None;
+	      x_dnd_in_progress = false;
+	      x_dnd_return_frame_object
+		= x_any_window_to_frame (dpyinfo, target);
+	      x_dnd_return_frame = 3;
+	      x_dnd_waiting_for_finish = false;
+	      target = None;
+	    }
+
+	  x_dnd_action = None;
+	  x_dnd_last_seen_window = target;
+	  x_dnd_last_protocol_version = target_proto;
+
+	  if (target != None && x_dnd_last_protocol_version != -1)
+	    x_dnd_send_enter (x_dnd_frame, target,
+			      x_dnd_last_protocol_version);
+	}
+
+      if (x_dnd_last_protocol_version != -1 && target != None)
+	x_dnd_send_position (x_dnd_frame, target,
+			     x_dnd_last_protocol_version,
+			     root_x, root_y,
+			     x_dnd_selection_timestamp,
+			     x_dnd_wanted_action);
+    }
+  /* The pointer moved out of the screen.  */
+  else if (x_dnd_last_protocol_version != -1)
+    {
+      if (x_dnd_last_seen_window != None
+	  && x_dnd_last_protocol_version != -1)
+	x_dnd_send_leave (x_dnd_frame,
+			  x_dnd_last_seen_window);
+
+      x_dnd_end_window = x_dnd_last_seen_window;
+      x_dnd_last_seen_window = None;
+      x_dnd_in_progress = false;
+      x_dnd_waiting_for_finish = false;
+      x_dnd_frame = NULL;
     }
 }
 
@@ -10055,6 +11740,56 @@ handle_one_xevent (struct x_display_info *dpyinfo,
     {
     case ClientMessage:
       {
+	if (x_dnd_in_progress
+	    && FRAME_DISPLAY_INFO (x_dnd_frame) == dpyinfo
+	    && event->xclient.message_type == dpyinfo->Xatom_XdndStatus)
+	  {
+	    Window target;
+
+	    target = event->xclient.data.l[0];
+
+	    if (x_dnd_last_protocol_version != -1
+		&& target == x_dnd_last_seen_window
+		&& event->xclient.data.l[1] & 2)
+	      {
+		x_dnd_mouse_rect_target = target;
+		x_dnd_mouse_rect.x = (event->xclient.data.l[2] & 0xffff0000) >> 16;
+		x_dnd_mouse_rect.y = (event->xclient.data.l[2] & 0xffff);
+		x_dnd_mouse_rect.width = (event->xclient.data.l[3] & 0xffff0000) >> 16;
+		x_dnd_mouse_rect.height = (event->xclient.data.l[3] & 0xffff);
+	      }
+	    else
+	      x_dnd_mouse_rect_target = None;
+
+	    if (x_dnd_last_protocol_version != -1
+		&& target == x_dnd_last_seen_window)
+	      {
+		if (event->xclient.data.l[1] & 1)
+		  {
+		    if (x_dnd_last_protocol_version >= 2)
+		      x_dnd_action = event->xclient.data.l[4];
+		    else
+		      x_dnd_action = dpyinfo->Xatom_XdndActionCopy;
+		  }
+		else
+		  x_dnd_action = None;
+	      }
+	  }
+
+	if (event->xclient.message_type == dpyinfo->Xatom_XdndFinished
+	    && x_dnd_waiting_for_finish
+	    && event->xclient.data.l[0] == x_dnd_pending_finish_target)
+	  {
+	    x_dnd_waiting_for_finish = false;
+
+	    if (x_dnd_waiting_for_finish_proto >= 5)
+	      x_dnd_action = event->xclient.data.l[2];
+
+	    if (x_dnd_waiting_for_finish_proto >= 5
+		&& !(event->xclient.data.l[1] & 1))
+	      x_dnd_action = None;
+	  }
+
         if (event->xclient.message_type == dpyinfo->Xatom_wm_protocols
             && event->xclient.format == 32)
           {
@@ -10153,7 +11888,19 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 		send_event.xclient.window = dpyinfo->root_window;
 		XSendEvent (dpyinfo->display, dpyinfo->root_window, False,
-			    SubstructureRedirectMask | SubstructureNotifyMask,
+			    /* FIXME: handling window stacking changes
+			       during drag-and-drop requires Emacs to
+			       select for SubstructureNotifyMask,
+			       which in turn causes the message to be
+			       sent to Emacs itself using the event
+			       mask specified by the EWMH.  To avoid
+			       an infinite loop, just use
+			       SubstructureRedirectMask when a
+			       drag-and-drop operation is in
+			       progress.  */
+			    ((x_dnd_in_progress || x_dnd_waiting_for_finish)
+			     ? SubstructureRedirectMask
+			     : SubstructureRedirectMask | SubstructureNotifyMask),
 			    &send_event);
 
 		*finish = X_EVENT_DROP;
@@ -10339,10 +12086,79 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	SELECTION_EVENT_TARGET (&inev.sie) = eventp->target;
 	SELECTION_EVENT_PROPERTY (&inev.sie) = eventp->property;
 	SELECTION_EVENT_TIME (&inev.sie) = eventp->time;
+
+	/* If drag-and-drop is in progress, handle SelectionRequest
+	   events immediately, by setting hold_quit to the input
+	   event.  */
+
+	if (x_dnd_in_progress || x_dnd_waiting_for_finish)
+	  {
+	    *hold_quit = inev.ie;
+	    EVENT_INIT (inev.ie);
+	  }
       }
       break;
 
     case PropertyNotify:
+      if (x_dnd_in_progress && x_dnd_use_toplevels
+	  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame)
+	  && event->xproperty.atom == dpyinfo->Xatom_wm_state)
+	{
+	  struct x_client_list_window *tem, *last;
+
+	  for (last = NULL, tem = x_dnd_toplevels; tem;
+	       last = tem, tem = tem->next)
+	    {
+	      if (tem->window == event->xproperty.window)
+		{
+		  Atom actual_type;
+		  int actual_format, rc;
+		  unsigned long nitems, bytesafter;
+		  unsigned char *data = NULL;
+
+
+		  if (event->xproperty.state == PropertyDelete)
+		    {
+		      if (!last)
+			x_dnd_toplevels = tem->next;
+		      else
+			last->next = tem->next;
+
+#ifdef HAVE_XSHAPE
+		      if (tem->n_input_rects != -1)
+			xfree (tem->input_rects);
+		      if (tem->n_bounding_rects != -1)
+			xfree (tem->bounding_rects);
+#endif
+		      xfree (tem);
+		    }
+		  else
+		    {
+		      x_catch_errors (dpyinfo->display);
+		      rc = XGetWindowProperty (dpyinfo->display,
+					       event->xproperty.window,
+					       dpyinfo->Xatom_wm_state,
+					       0, 2, False, AnyPropertyType,
+					       &actual_type, &actual_format,
+					       &nitems, &bytesafter, &data);
+
+		      if (!x_had_errors_p (dpyinfo->display) && rc == Success && data
+			  && nitems == 2 && actual_format == 32)
+			{
+			  tem->wm_state = ((unsigned long *) data)[0];
+			  XFree (data);
+			}
+		      else
+			tem->wm_state = WithdrawnState;
+		      x_uncatch_errors_after_check ();
+		    }
+
+		  x_dnd_update_state (dpyinfo);
+		  break;
+		}
+	    }
+	}
+
       f = x_top_window_to_frame (dpyinfo, event->xproperty.window);
       if (f && event->xproperty.atom == dpyinfo->Xatom_net_wm_state)
 	{
@@ -10385,6 +12201,26 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      inev.ie.kind = ICONIFY_EVENT;
 	      XSETFRAME (inev.ie.frame_or_window, f);
 	    }
+	}
+
+      if (event->xproperty.window == dpyinfo->root_window
+	  && (event->xproperty.atom == dpyinfo->Xatom_net_client_list_stacking
+	      || event->xproperty.atom == dpyinfo->Xatom_net_current_desktop)
+	  && x_dnd_in_progress
+	  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+	{
+	  if (x_dnd_use_toplevels)
+	    {
+	      x_dnd_free_toplevels ();
+
+	      if (x_dnd_compute_toplevels (dpyinfo))
+		{
+		  x_dnd_free_toplevels ();
+		  x_dnd_use_toplevels = false;
+		}
+	    }
+
+	  x_dnd_update_state (dpyinfo);
 	}
 
       x_handle_property_notify (&event->xproperty);
@@ -10556,6 +12392,20 @@ handle_one_xevent (struct x_display_info *dpyinfo,
       break;
 
     case UnmapNotify:
+      if (x_dnd_in_progress && x_dnd_use_toplevels
+	  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+	{
+	  for (struct x_client_list_window *tem = x_dnd_toplevels; tem;
+	       tem = tem->next)
+	    {
+	      if (tem->window == event->xunmap.window)
+		{
+		  tem->mapped_p = false;
+		  break;
+		}
+	    }
+	}
+
       /* Redo the mouse-highlight after the tooltip has gone.  */
       if (event->xunmap.window == tip_window)
         {
@@ -10600,6 +12450,24 @@ handle_one_xevent (struct x_display_info *dpyinfo,
       if (xg_is_menu_window (dpyinfo->display, event->xmap.window))
 	popup_activated_flag = 1;
 #endif
+
+      if (x_dnd_in_progress)
+	x_dnd_update_state (dpyinfo);
+
+      if (x_dnd_in_progress && x_dnd_use_toplevels
+	  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+	{
+	  for (struct x_client_list_window *tem = x_dnd_toplevels; tem;
+	       tem = tem->next)
+	    {
+	      if (tem->window == event->xmap.window)
+		{
+		  tem->mapped_p = true;
+		  break;
+		}
+	    }
+	}
+
       /* We use x_top_window_to_frame because map events can
          come for sub-windows and they don't mean that the
          frame is visible.  */
@@ -11010,6 +12878,15 @@ handle_one_xevent (struct x_display_info *dpyinfo,
         }
     done_keysym:
 #ifdef HAVE_X_I18N
+      if (f)
+	{
+	  struct window *w = XWINDOW (f->selected_window);
+	  xic_set_preeditarea (w, w->cursor.x, w->cursor.y);
+
+	  if (FRAME_XIC (f) && (FRAME_XIC_STYLE (f) & XIMStatusArea))
+            xic_set_statusarea (f);
+	}
+
       /* Don't dispatch this event since XtDispatchEvent calls
          XFilterEvent, and two calls in a row may freeze the
          client.  */
@@ -11173,6 +13050,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
     case MotionNotify:
       {
+	XMotionEvent xmotion = event->xmotion;
+
         previous_help_echo_string = help_echo_string;
         help_echo_string = Qnil;
 
@@ -11183,6 +13062,69 @@ handle_one_xevent (struct x_display_info *dpyinfo,
           }
 
 	f = mouse_or_wdesc_frame (dpyinfo, event->xmotion.window);
+
+	if (x_dnd_in_progress
+	    && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+	  {
+	    Window target;
+	    int target_proto;
+
+	    /* Sometimes the drag-and-drop operation starts with the
+	       pointer of a frame invisible due to input.  Since
+	       motion events are ignored during that, make the pointer
+	       visible manually.  */
+
+	    if (f)
+	      XTtoggle_invisible_pointer (f, false);
+
+	    target = x_dnd_get_target_window (dpyinfo,
+					      event->xmotion.x_root,
+					      event->xmotion.y_root,
+					      &target_proto);
+
+	    if (target != x_dnd_last_seen_window)
+	      {
+		if (x_dnd_last_seen_window != None
+		    && x_dnd_last_protocol_version != -1
+		    && x_dnd_last_seen_window != FRAME_OUTER_WINDOW (x_dnd_frame))
+		  x_dnd_send_leave (x_dnd_frame, x_dnd_last_seen_window);
+
+		if (target != FRAME_OUTER_WINDOW (x_dnd_frame)
+		    && x_dnd_return_frame == 1)
+		  x_dnd_return_frame = 2;
+
+		if (x_dnd_return_frame == 2
+		    && x_any_window_to_frame (dpyinfo, target))
+		  {
+		    x_dnd_end_window = x_dnd_last_seen_window;
+		    x_dnd_last_seen_window = None;
+		    x_dnd_in_progress = false;
+		    x_dnd_return_frame_object
+		      = x_any_window_to_frame (dpyinfo, target);
+		    x_dnd_return_frame = 3;
+		    x_dnd_waiting_for_finish = false;
+		    target = None;
+		  }
+
+		x_dnd_action = None;
+		x_dnd_last_seen_window = target;
+		x_dnd_last_protocol_version = target_proto;
+
+		if (target != None && x_dnd_last_protocol_version != -1)
+		  x_dnd_send_enter (x_dnd_frame, target,
+				    x_dnd_last_protocol_version);
+	      }
+
+	    if (x_dnd_last_protocol_version != -1 && target != None)
+	      x_dnd_send_position (x_dnd_frame, target,
+				   x_dnd_last_protocol_version,
+				   event->xmotion.x_root,
+				   event->xmotion.y_root,
+				   x_dnd_selection_timestamp,
+				   x_dnd_wanted_action);
+
+	    goto OTHER;
+	  }
 
 #ifdef USE_GTK
         if (f && xg_event_is_for_scrollbar (f, event, false))
@@ -11213,8 +13155,18 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		    || !NILP (focus_follows_mouse)))
 	      {
 		static Lisp_Object last_mouse_window;
+
+		if (xmotion.window != FRAME_X_WINDOW (f))
+		  {
+		    XTranslateCoordinates (FRAME_X_DISPLAY (f),
+					   xmotion.window, FRAME_X_WINDOW (f),
+					   xmotion.x, xmotion.y, &xmotion.x,
+					   &xmotion.y, &xmotion.subwindow);
+		    xmotion.window = FRAME_X_WINDOW (f);
+		  }
+
 		Lisp_Object window = window_from_coordinates
-		  (f, event->xmotion.x, event->xmotion.y, 0, false, false);
+		  (f, xmotion.x, xmotion.y, 0, false, false);
 
 		/* A window will be autoselected only when it is not
 		   selected now and the last mouse movement event was
@@ -11236,7 +13188,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		last_mouse_window = window;
 	      }
 
-            if (!x_note_mouse_movement (f, &event->xmotion))
+            if (!x_note_mouse_movement (f, &xmotion))
 	      help_echo_string = previous_help_echo_string;
           }
         else
@@ -11293,6 +13245,101 @@ handle_one_xevent (struct x_display_info *dpyinfo,
           else
 	    configureEvent = next_event;
         }
+
+      if (x_dnd_in_progress && x_dnd_use_toplevels
+	  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+	{
+	  int rc, dest_x, dest_y;
+	  Window child;
+	  struct x_client_list_window *tem, *last = NULL;
+
+	  for (tem = x_dnd_toplevels; tem; last = tem, tem = tem->next)
+	    {
+	      /* Not completely right, since the parent could be
+		 unmapped, but good enough.  */
+
+	      if (tem->window == configureEvent.xconfigure.window)
+		{
+		  x_catch_errors (dpyinfo->display);
+		  rc = (XTranslateCoordinates (dpyinfo->display,
+					       configureEvent.xconfigure.window,
+					       dpyinfo->root_window,
+					       -configureEvent.xconfigure.border_width,
+					       -configureEvent.xconfigure.border_width,
+					       &dest_x, &dest_y, &child)
+			&& !x_had_errors_p (dpyinfo->display));
+		  x_uncatch_errors_after_check ();
+
+		  if (rc)
+		    {
+		      tem->x = dest_x;
+		      tem->y = dest_y;
+		      tem->width = (configureEvent.xconfigure.width
+				    + configureEvent.xconfigure.border_width);
+		      tem->height = (configureEvent.xconfigure.height
+				     + configureEvent.xconfigure.border_width);
+		    }
+		  else
+		    {
+		      /* The window was probably destroyed, so get rid
+			 of it.  */
+
+		      if (!last)
+			x_dnd_toplevels = tem->next;
+		      else
+			last->next = tem->next;
+
+#ifdef HAVE_XSHAPE
+		      if (tem->n_input_rects != -1)
+			xfree (tem->input_rects);
+		      if (tem->n_bounding_rects != -1)
+			xfree (tem->bounding_rects);
+#endif
+		      xfree (tem);
+		    }
+
+		  break;
+		}
+	    }
+	}
+
+#if defined HAVE_GTK3 && defined USE_TOOLKIT_SCROLL_BARS
+	  struct scroll_bar *bar = x_window_to_scroll_bar (dpyinfo->display,
+							   configureEvent.xconfigure.window, 2);
+
+	  /* There is really no other way to make GTK scroll bars fit
+	     in the dimensions we want them to.  */
+	  if (bar)
+	    {
+	      /* Skip all the pending configure events, not just the
+		 ones where window motion occurred.  */
+	      while (XPending (dpyinfo->display))
+		{
+		  XNextEvent (dpyinfo->display, &next_event);
+		  if (next_event.type != ConfigureNotify
+		      || next_event.xconfigure.window != event->xconfigure.window)
+		    {
+		      XPutBackEvent (dpyinfo->display, &next_event);
+		      break;
+		    }
+		  else
+		    configureEvent = next_event;
+		}
+
+	      if (configureEvent.xconfigure.width != max (bar->width, 1)
+		  || configureEvent.xconfigure.height != max (bar->height, 1))
+		{
+		  XResizeWindow (dpyinfo->display, bar->x_window,
+				 max (bar->width, 1), max (bar->height, 1));
+		  x_flush (WINDOW_XFRAME (XWINDOW (bar->window)));
+		}
+
+	      if (f && FRAME_X_DOUBLE_BUFFERED_P (f))
+		x_drop_xrender_surfaces (f);
+
+	      goto OTHER;
+	    }
+#endif
 
       f = x_top_window_to_frame (dpyinfo, configureEvent.xconfigure.window);
       /* Unfortunately, we need to call x_drop_xrender_surfaces for
@@ -11441,17 +13488,20 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 
 #ifdef HAVE_X_I18N
-          if (FRAME_XIC (f) && (FRAME_XIC_STYLE (f) & XIMStatusArea))
-            xic_set_statusarea (f);
-
 	  if (f)
 	    {
+	      if (FRAME_XIC (f) && (FRAME_XIC_STYLE (f) & XIMStatusArea))
+		xic_set_statusarea (f);
+
 	      struct window *w = XWINDOW (f->selected_window);
 	      xic_set_preeditarea (w, w->cursor.x, w->cursor.y);
 	    }
 #endif
 
 	}
+
+      if (x_dnd_in_progress)
+	x_dnd_update_state (dpyinfo);
       goto OTHER;
 
     case ButtonRelease:
@@ -11485,6 +13535,46 @@ handle_one_xevent (struct x_display_info *dpyinfo,
         Lisp_Object tab_bar_arg = Qnil;
         bool tab_bar_p = false;
         bool tool_bar_p = false;
+	bool dnd_grab = false;
+
+	if (x_dnd_in_progress
+	    && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+	  {
+	    for (int i = 1; i < 8; ++i)
+	      {
+		if (i != event->xbutton.button
+		    && event->xbutton.state & (Button1Mask << (i - 1)))
+		  dnd_grab = true;
+	      }
+
+	    if (!dnd_grab && event->xbutton.type == ButtonRelease)
+	      {
+		x_dnd_end_window = x_dnd_last_seen_window;
+		x_dnd_in_progress = false;
+
+		if (x_dnd_last_seen_window != None
+		    && x_dnd_last_protocol_version != -1)
+		  {
+		    x_dnd_pending_finish_target = x_dnd_last_seen_window;
+		    x_dnd_waiting_for_finish_proto = x_dnd_last_protocol_version;
+
+		    x_dnd_waiting_for_finish
+		      = x_dnd_send_drop (x_dnd_frame, x_dnd_last_seen_window,
+					 x_dnd_selection_timestamp,
+					 x_dnd_last_protocol_version);
+		  }
+
+		x_dnd_last_protocol_version = -1;
+		x_dnd_last_seen_window = None;
+		x_dnd_frame = NULL;
+		x_set_dnd_targets (NULL, 0);
+	      }
+
+	    goto OTHER;
+	  }
+
+	if (x_dnd_in_progress)
+	  goto OTHER;
 
 	memset (&compose_status, 0, sizeof (compose_status));
 	dpyinfo->last_mouse_glyph_frame = NULL;
@@ -11698,6 +13788,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
       break;
 
     case CirculateNotify:
+      if (x_dnd_in_progress)
+	x_dnd_update_state (dpyinfo);
       goto OTHER;
 
     case CirculateRequest:
@@ -12033,6 +14125,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		goto XI_OTHER;
 #endif
 
+	      Window dummy;
+
 #ifdef HAVE_XINPUT2_1
 #ifdef HAVE_XWIDGETS
 	      struct xwidget_view *xv = xwidget_view_from_window (xev->event);
@@ -12043,7 +14137,6 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      double total_y = 0.0;
 
 	      int real_x, real_y;
-	      Window dummy;
 
 	      for (int i = 0; i < states->mask_len * 8; i++)
 		{
@@ -12286,12 +14379,82 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 	      f = mouse_or_wdesc_frame (dpyinfo, xev->event);
 
+	      if (x_dnd_in_progress
+		  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+		{
+		  Window target;
+		  int target_proto;
+
+		  /* Sometimes the drag-and-drop operation starts with the
+		     pointer of a frame invisible due to input.  Since
+		     motion events are ignored during that, make the pointer
+		     visible manually.  */
+
+		  if (f)
+		    XTtoggle_invisible_pointer (f, false);
+
+		  target = x_dnd_get_target_window (dpyinfo,
+						    xev->root_x,
+						    xev->root_y,
+						    &target_proto);
+
+		  if (target != x_dnd_last_seen_window)
+		    {
+		      if (x_dnd_last_seen_window != None
+			  && x_dnd_last_protocol_version != -1
+			  && x_dnd_last_seen_window != FRAME_OUTER_WINDOW (x_dnd_frame))
+			x_dnd_send_leave (x_dnd_frame, x_dnd_last_seen_window);
+
+		      if (target != FRAME_OUTER_WINDOW (x_dnd_frame)
+			  && x_dnd_return_frame == 1)
+			x_dnd_return_frame = 2;
+
+		      if (x_dnd_return_frame == 2
+			  && x_any_window_to_frame (dpyinfo, target))
+			{
+			  x_dnd_end_window = x_dnd_last_seen_window;
+			  x_dnd_last_seen_window = None;
+			  x_dnd_in_progress = false;
+			  x_dnd_return_frame_object
+			    = x_any_window_to_frame (dpyinfo, target);
+			  x_dnd_return_frame = 3;
+			  x_dnd_waiting_for_finish = false;
+			  target = None;
+			}
+
+		      x_dnd_action = None;
+		      x_dnd_last_seen_window = target;
+		      x_dnd_last_protocol_version = target_proto;
+
+		      if (target != None && x_dnd_last_protocol_version != -1)
+			x_dnd_send_enter (x_dnd_frame, target,
+					  x_dnd_last_protocol_version);
+		    }
+
+		  if (x_dnd_last_protocol_version != -1 && target != None)
+		    x_dnd_send_position (x_dnd_frame, target,
+					 x_dnd_last_protocol_version,
+					 xev->root_x, xev->root_y,
+					 x_dnd_selection_timestamp,
+					 x_dnd_wanted_action);
+
+		  goto XI_OTHER;
+		}
+
 #ifdef USE_GTK
 	      if (f && xg_event_is_for_scrollbar (f, event, false))
 		f = 0;
 #endif
 	      if (f)
 		{
+		  if (xev->event != FRAME_X_WINDOW (f))
+		    {
+		      XTranslateCoordinates (FRAME_X_DISPLAY (f),
+					     xev->event, FRAME_X_WINDOW (f),
+					     ev.x, ev.y, &ev.x, &ev.y, &dummy);
+		      ev.window = FRAME_X_WINDOW (f);
+		    }
+
 		  /* Maybe generate a SELECT_WINDOW_EVENT for
 		     `mouse-autoselect-window' but don't let popup menus
 		     interfere with this (Bug#1261).  */
@@ -12371,6 +14534,46 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 #endif
 	      /* A fake XButtonEvent for x_construct_mouse_click. */
 	      XButtonEvent bv;
+	      bool dnd_grab = false;
+
+	      if (x_dnd_in_progress
+		  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+		{
+		  for (int i = 0; i < xev->buttons.mask_len * 8; ++i)
+		    {
+		      if (i != xev->detail && XIMaskIsSet (xev->buttons.mask, i))
+			dnd_grab = true;
+		    }
+
+		  if (!dnd_grab
+		      && xev->evtype == XI_ButtonRelease)
+		    {
+		      x_dnd_end_window = x_dnd_last_seen_window;
+		      x_dnd_in_progress = false;
+
+		      if (x_dnd_last_seen_window != None
+			  && x_dnd_last_protocol_version != -1)
+			{
+			  x_dnd_pending_finish_target = x_dnd_last_seen_window;
+			  x_dnd_waiting_for_finish_proto = x_dnd_last_protocol_version;
+
+			  x_dnd_waiting_for_finish
+			    = x_dnd_send_drop (x_dnd_frame, x_dnd_last_seen_window,
+					       x_dnd_selection_timestamp,
+					       x_dnd_last_protocol_version);
+			}
+
+		      x_dnd_last_protocol_version = -1;
+		      x_dnd_last_seen_window = None;
+		      x_dnd_frame = NULL;
+		      x_set_dnd_targets (NULL, 0);
+
+		      goto XI_OTHER;
+		    }
+		}
+
+	      if (x_dnd_in_progress)
+		goto XI_OTHER;
 
 #ifdef USE_MOTIF
 #ifdef USE_TOOLKIT_SCROLL_BARS
@@ -12437,15 +14640,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 	      if (popup_activated ()
 		  && xev->evtype == XI_ButtonRelease)
-		{
-		  *finish = X_EVENT_DROP;
-		  gtk_main_do_event (copy);
-		  gdk_event_free (copy);
-		  goto XI_OTHER;
-		}
-
-	      gtk_main_do_event (copy);
-	      gdk_event_free (copy);
+		goto XI_OTHER;
 #endif
 
 #ifdef HAVE_XINPUT2_1
@@ -12771,6 +14966,19 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      xkey.time = xev->time;
 	      xkey.state = ((xev->mods.effective & ~(1 << 13 | 1 << 14))
 			    | (xev->group.effective << 13));
+
+	      /* Some input methods react differently depending on the
+		 buttons that are pressed.  */
+	      if (xev->buttons.mask_len)
+		{
+		  if (XIMaskIsSet (xev->buttons.mask, 1))
+		    xkey.state |= Button1Mask;
+		  if (XIMaskIsSet (xev->buttons.mask, 2))
+		    xkey.state |= Button2Mask;
+		  if (XIMaskIsSet (xev->buttons.mask, 3))
+		    xkey.state |= Button3Mask;
+		}
+
 	      xkey.keycode = xev->detail;
 	      xkey.same_screen = True;
 
@@ -13126,6 +15334,19 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      xkey.time = xev->time;
 	      xkey.state = ((xev->mods.effective & ~(1 << 13 | 1 << 14))
 			    | (xev->group.effective << 13));
+
+	      /* Some input methods react differently depending on the
+		 buttons that are pressed.  */
+	      if (xev->buttons.mask_len)
+		{
+		  if (XIMaskIsSet (xev->buttons.mask, 1))
+		    xkey.state |= Button1Mask;
+		  if (XIMaskIsSet (xev->buttons.mask, 2))
+		    xkey.state |= Button2Mask;
+		  if (XIMaskIsSet (xev->buttons.mask, 3))
+		    xkey.state |= Button3Mask;
+		}
+
 	      xkey.keycode = xev->detail;
 	      xkey.same_screen = True;
 
@@ -13489,7 +15710,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 	  case XI_GesturePinchEnd:
 	    {
-#if defined HAVE_XWIDGETS && HAVE_USABLE_XI_GESTURE_PINCH_EVENT
+#if defined HAVE_XWIDGETS
 	      XIGesturePinchEvent *pev = (XIGesturePinchEvent *) xi_event;
 	      struct xwidget_view *xvw = xwidget_view_from_window (pev->event);
 
@@ -13506,8 +15727,14 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
       xi_done_keysym:
 #ifdef HAVE_X_I18N
-	if (FRAME_XIC (f) && (FRAME_XIC_STYLE (f) & XIMStatusArea))
-	  xic_set_statusarea (f);
+      if (f)
+	{
+	  struct window *w = XWINDOW (f->selected_window);
+	  xic_set_preeditarea (w, w->cursor.x, w->cursor.y);
+
+	  if (FRAME_XIC (f) && (FRAME_XIC_STYLE (f) & XIMStatusArea))
+            xic_set_statusarea (f);
+	}
 #endif
 	if (must_free_data)
 	  XFreeEventData (dpyinfo->display, &event->xcookie);
@@ -13522,7 +15749,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
     default:
 #ifdef HAVE_XKB
-      if (event->type == dpyinfo->xkb_event_type)
+      if (dpyinfo->supports_xkb
+	  && event->type == dpyinfo->xkb_event_type)
 	{
 	  XkbEvent *xkbevent = (XkbEvent *) event;
 
@@ -13568,6 +15796,216 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	    }
 	}
 #endif
+#ifdef HAVE_XSHAPE
+      if (dpyinfo->xshape_supported_p
+	  && event->type == dpyinfo->xshape_event_base + ShapeNotify
+	  && x_dnd_in_progress && x_dnd_use_toplevels
+	  && dpyinfo == FRAME_DISPLAY_INFO (x_dnd_frame))
+	{
+	  XEvent xevent;
+	  XShapeEvent *xse = (XShapeEvent *) event;
+#if defined HAVE_XCB_SHAPE && defined HAVE_XCB_SHAPE_INPUT_RECTS
+	  xcb_shape_get_rectangles_cookie_t bounding_rect_cookie;
+	  xcb_shape_get_rectangles_reply_t *bounding_rect_reply;
+	  xcb_rectangle_iterator_t bounding_rect_iterator;
+
+	  xcb_shape_get_rectangles_cookie_t input_rect_cookie;
+	  xcb_shape_get_rectangles_reply_t *input_rect_reply;
+	  xcb_rectangle_iterator_t input_rect_iterator;
+
+	  xcb_generic_error_t *error;
+#else
+	  XRectangle *rects;
+	  int rc, ordering;
+#endif
+
+	  while (XPending (dpyinfo->display))
+	    {
+	      XNextEvent (dpyinfo->display, &xevent);
+
+	      if (xevent.type == dpyinfo->xshape_event_base + ShapeNotify
+		  && ((XShapeEvent *) &xevent)->window == xse->window)
+		xse = (XShapeEvent *) &xevent;
+	      else
+		{
+		  XPutBackEvent (dpyinfo->display, &xevent);
+		  break;
+		}
+	    }
+
+	  for (struct x_client_list_window *tem = x_dnd_toplevels; tem;
+	       tem = tem->next)
+	    {
+	      if (tem->window == xse->window)
+		{
+		  if (tem->n_input_rects != -1)
+		    xfree (tem->input_rects);
+		  if (tem->n_bounding_rects != -1)
+		    xfree (tem->bounding_rects);
+
+		  tem->n_input_rects = -1;
+		  tem->n_bounding_rects = -1;
+
+#if defined HAVE_XCB_SHAPE && defined HAVE_XCB_SHAPE_INPUT_RECTS
+		  bounding_rect_cookie = xcb_shape_get_rectangles (dpyinfo->xcb_connection,
+								   (xcb_window_t) xse->window,
+								   XCB_SHAPE_SK_BOUNDING);
+		  if (dpyinfo->xshape_major > 1
+		      || (dpyinfo->xshape_major == 1
+			  && dpyinfo->xshape_minor >= 1))
+		    input_rect_cookie
+		      = xcb_shape_get_rectangles (dpyinfo->xcb_connection,
+						  (xcb_window_t) xse->window,
+						  XCB_SHAPE_SK_INPUT);
+
+		  bounding_rect_reply = xcb_shape_get_rectangles_reply (dpyinfo->xcb_connection,
+									bounding_rect_cookie,
+									&error);
+
+		  if (bounding_rect_reply)
+		    {
+		      bounding_rect_iterator
+			= xcb_shape_get_rectangles_rectangles_iterator (bounding_rect_reply);
+		      tem->n_bounding_rects = bounding_rect_iterator.rem + 1;
+		      tem->bounding_rects = xmalloc (tem->n_bounding_rects
+						     * sizeof *tem->bounding_rects);
+		      tem->n_bounding_rects = 0;
+
+		      for (; bounding_rect_iterator.rem; xcb_rectangle_next (&bounding_rect_iterator))
+			{
+			  tem->bounding_rects[tem->n_bounding_rects].x
+			    = bounding_rect_iterator.data->x;
+			  tem->bounding_rects[tem->n_bounding_rects].y
+			    = bounding_rect_iterator.data->y;
+			  tem->bounding_rects[tem->n_bounding_rects].width
+			    = bounding_rect_iterator.data->width;
+			  tem->bounding_rects[tem->n_bounding_rects].height
+			    = bounding_rect_iterator.data->height;
+
+			  tem->n_bounding_rects++;
+			}
+
+		      free (bounding_rect_reply);
+		    }
+		  else
+		    free (error);
+
+		  if (dpyinfo->xshape_major > 1
+		      || (dpyinfo->xshape_major == 1
+			  && dpyinfo->xshape_minor >= 1))
+		    {
+		      input_rect_reply = xcb_shape_get_rectangles_reply (dpyinfo->xcb_connection,
+									 input_rect_cookie, &error);
+
+		      if (input_rect_reply)
+			{
+			  input_rect_iterator
+			    = xcb_shape_get_rectangles_rectangles_iterator (input_rect_reply);
+			  tem->n_input_rects = input_rect_iterator.rem + 1;
+			  tem->input_rects = xmalloc (tem->n_input_rects
+						      * sizeof *tem->input_rects);
+			  tem->n_input_rects = 0;
+
+			  for (; input_rect_iterator.rem; xcb_rectangle_next (&input_rect_iterator))
+			    {
+			      tem->input_rects[tem->n_input_rects].x
+				= input_rect_iterator.data->x;
+			      tem->input_rects[tem->n_input_rects].y
+				= input_rect_iterator.data->y;
+			      tem->input_rects[tem->n_input_rects].width
+				= input_rect_iterator.data->width;
+			      tem->input_rects[tem->n_input_rects].height
+				= input_rect_iterator.data->height;
+
+			      tem->n_input_rects++;
+			    }
+
+			  free (input_rect_reply);
+			}
+		      else
+			free (error);
+		    }
+#else
+		  x_catch_errors (dpyinfo->display);
+		  rects = XShapeGetRectangles (dpyinfo->display,
+					       xse->window,
+					       ShapeBounding,
+					       &count, &ordering);
+		  rc = x_had_errors_p (dpyinfo->display);
+		  x_uncatch_errors_after_check ();
+
+		  /* Does XShapeGetRectangles allocate anything upon an
+		     error?  */
+		  if (!rc)
+		    {
+		      tem->n_bounding_rects = count;
+		      tem->bounding_rects
+			= xmalloc (sizeof *tem->bounding_rects * count);
+		      memcpy (tem->bounding_rects, rects,
+			      sizeof *tem->bounding_rects * count);
+
+		      XFree (rects);
+		    }
+
+#ifdef ShapeInput
+		  if (dpyinfo->xshape_major > 1
+		      || (dpyinfo->xshape_major == 1
+			  && dpyinfo->xshape_minor >= 1))
+		    {
+		      x_catch_errors (dpyinfo->display);
+		      rects = XShapeGetRectangles (dpyinfo->display,
+						   xse->window, ShapeInput,
+						   &count, &ordering);
+		      rc = x_had_errors_p (dpyinfo->display);
+		      x_uncatch_errors_after_check ();
+
+		      /* Does XShapeGetRectangles allocate anything upon
+			 an error?  */
+		      if (!rc)
+			{
+			  tem->n_input_rects = count;
+			  tem->input_rects
+			    = xmalloc (sizeof *tem->input_rects * count);
+			  memcpy (tem->input_rects, rects,
+				  sizeof *tem->input_rects * count);
+
+			  XFree (rects);
+			}
+		    }
+#endif
+#endif
+
+		  /* Handle the common case where the input shape equals the
+		     bounding shape.  */
+
+		  if (tem->n_input_rects != -1
+		      && tem->n_bounding_rects == tem->n_input_rects
+		      && !memcmp (tem->bounding_rects, tem->input_rects,
+				  tem->n_input_rects * sizeof *tem->input_rects))
+		    {
+		      xfree (tem->input_rects);
+		      tem->n_input_rects = -1;
+		    }
+
+		  /* And the common case where there is no input rect and the
+		     bouding rect equals the window dimensions.  */
+
+		  if (tem->n_input_rects == -1
+		      && tem->n_bounding_rects == 1
+		      && tem->bounding_rects[0].width == tem->width
+		      && tem->bounding_rects[0].height == tem->height
+		      && tem->bounding_rects[0].x == -tem->border_width
+		      && tem->bounding_rects[0].y == -tem->border_width)
+		    {
+		      xfree (tem->bounding_rects);
+		      tem->n_bounding_rects = -1;
+		    }
+
+		  break;
+		}
+	    }
+	}
+#endif
     OTHER:
 #ifdef USE_X_TOOLKIT
       block_input ();
@@ -13589,6 +16027,16 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	}
       unblock_input ();
 #endif /* USE_X_TOOLKIT */
+#if defined USE_GTK && !defined HAVE_GTK3 && defined HAVE_XINPUT2
+      if (*finish != X_EVENT_DROP && copy)
+	{
+	  gtk_main_do_event (copy);
+	  *finish = X_EVENT_DROP;
+	}
+
+      if (copy)
+	gdk_event_free (copy);
+#endif
     break;
     }
 
@@ -13693,8 +16141,19 @@ XTread_socket (struct terminal *terminal, struct input_event *hold_quit)
 
 #ifdef HAVE_X_I18N
       /* Filter events for the current X input method.  */
-      if (x_filter_event (dpyinfo, &event))
-        continue;
+#ifdef HAVE_XINPUT2
+      if (event.type != GenericEvent
+	  || !dpyinfo->supports_xi2
+	  || event.xgeneric.extension != dpyinfo->xi2_opcode)
+	{
+	  /* Input extension key events are filtered inside
+	     handle_one_xevent.  */
+#endif
+	  if (x_filter_event (dpyinfo, &event))
+	    continue;
+#ifdef HAVE_XINPUT2
+	}
+#endif
 #endif
       event_found = true;
 
@@ -14691,6 +17150,9 @@ xim_instantiate_callback (Display *display, XPointer client_data, XPointer call_
 {
   struct xim_inst_t *xim_inst = (struct xim_inst_t *) client_data;
   struct x_display_info *dpyinfo = xim_inst->dpyinfo;
+
+  if (x_dnd_in_progress)
+    return;
 
   /* We don't support multiple XIM connections. */
   if (dpyinfo->xim)
@@ -16424,6 +18886,21 @@ x_free_frame_resources (struct frame *f)
   struct scroll_bar *b;
 #endif
 
+  if (x_dnd_in_progress && f == x_dnd_frame)
+    {
+      block_input ();
+      if (x_dnd_last_seen_window != None
+	  && x_dnd_last_protocol_version != -1)
+	x_dnd_send_leave (f, x_dnd_last_seen_window);
+      unblock_input ();
+
+      x_dnd_end_window = None;
+      x_dnd_last_seen_window = None;
+      x_dnd_in_progress = false;
+      x_dnd_waiting_for_finish = false;
+      x_dnd_frame = NULL;
+    }
+
   block_input ();
 
   /* If a display connection is dead, don't try sending more
@@ -16587,10 +19064,6 @@ x_free_frame_resources (struct frame *f)
     g_object_unref (FRAME_OUTPUT_DATA (f)->scrollbar_foreground_css_provider);
 #endif
 
-  xfree (f->output_data.x->saved_menu_event);
-  xfree (f->output_data.x);
-  f->output_data.x = NULL;
-
   if (f == dpyinfo->x_focus_frame)
     dpyinfo->x_focus_frame = 0;
   if (f == dpyinfo->x_focus_event_frame)
@@ -16616,6 +19089,10 @@ x_destroy_window (struct frame *f)
   if (dpyinfo->display != 0)
     x_free_frame_resources (f);
 
+  xfree (f->output_data.x->saved_menu_event);
+  xfree (f->output_data.x);
+  f->output_data.x = NULL;
+
   dpyinfo->reference_count--;
 }
 
@@ -16635,6 +19112,9 @@ x_wm_set_size_hint (struct frame *f, long flags, bool user_position)
 {
   XSizeHints size_hints;
   Window window = FRAME_OUTER_WINDOW (f);
+#ifdef USE_X_TOOLKIT
+  WMShellWidget shell;
+#endif
 
   if (!window)
     return;
@@ -16642,8 +19122,63 @@ x_wm_set_size_hint (struct frame *f, long flags, bool user_position)
 #ifdef USE_X_TOOLKIT
   if (f->output_data.x->widget)
     {
+      /* Do this dance in xterm.c because some stuff is not as easily
+	 available in widget.c.  */
+
+      eassert (XtIsWMShell (f->output_data.x->widget));
+      shell = (WMShellWidget) f->output_data.x->widget;
+
+      shell->wm.size_hints.flags &= ~(PPosition | USPosition);
+      shell->wm.size_hints.flags |= flags & (PPosition | USPosition);
+
+      if (user_position)
+	{
+	  shell->wm.size_hints.flags &= ~PPosition;
+	  shell->wm.size_hints.flags |= USPosition;
+	}
+
       widget_update_wm_size_hints (f->output_data.x->widget,
 				   f->output_data.x->edit_widget);
+
+#ifdef USE_MOTIF
+      /* Do this all over again for the benefit of Motif, which always
+	 knows better than the programmer.  */
+      shell->wm.size_hints.flags &= ~(PPosition | USPosition);
+      shell->wm.size_hints.flags |= flags & (PPosition | USPosition);
+
+      if (user_position)
+	{
+	  shell->wm.size_hints.flags &= ~PPosition;
+	  shell->wm.size_hints.flags |= USPosition;
+	}
+
+      /* Drill hints into Motif, since it keeps setting its own.  */
+      size_hints.flags = shell->wm.size_hints.flags;
+      size_hints.x = shell->wm.size_hints.x;
+      size_hints.y = shell->wm.size_hints.y;
+      size_hints.width = shell->wm.size_hints.width;
+      size_hints.height = shell->wm.size_hints.height;
+      size_hints.min_width = shell->wm.size_hints.min_width;
+      size_hints.min_height = shell->wm.size_hints.min_height;
+      size_hints.max_width = shell->wm.size_hints.max_width;
+      size_hints.max_height = shell->wm.size_hints.max_height;
+      size_hints.width_inc = shell->wm.size_hints.width_inc;
+      size_hints.height_inc = shell->wm.size_hints.height_inc;
+      size_hints.min_aspect.x = shell->wm.size_hints.min_aspect.x;
+      size_hints.min_aspect.y = shell->wm.size_hints.min_aspect.y;
+      size_hints.max_aspect.x = shell->wm.size_hints.max_aspect.x;
+      size_hints.max_aspect.y = shell->wm.size_hints.max_aspect.y;
+#ifdef HAVE_X11XTR6
+      size_hints.base_width = shell->wm.base_width;
+      size_hints.base_height = shell->wm.base_height;
+      size_hints.win_gravity = shell->wm.win_gravity;
+#endif
+
+      XSetWMNormalHints (XtDisplay (f->output_data.x->widget),
+			 XtWindow (f->output_data.x->widget),
+			 &size_hints);
+#endif
+
       return;
     }
 #endif
@@ -17097,6 +19632,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 #ifdef USE_XCB
   xcb_connection_t *xcb_conn;
 #endif
+  char *cm_atom_sprintf;
 
   block_input ();
 
@@ -17376,6 +19912,33 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
     dpyinfo->xrender_supported_p
       = XRenderQueryVersion (dpyinfo->display, &dpyinfo->xrender_major,
 			     &dpyinfo->xrender_minor);
+#endif
+
+  /* This must come after XRenderQueryVersion! */
+#ifdef HAVE_XCOMPOSITE
+  int composite_event_base, composite_error_base;
+  dpyinfo->composite_supported_p = XCompositeQueryExtension (dpyinfo->display,
+							     &composite_event_base,
+							     &composite_error_base);
+
+  if (dpyinfo->composite_supported_p)
+    dpyinfo->composite_supported_p
+      = XCompositeQueryVersion (dpyinfo->display,
+				&dpyinfo->composite_major,
+				&dpyinfo->composite_minor);
+#endif
+
+#ifdef HAVE_XSHAPE
+  dpyinfo->xshape_supported_p
+    = XShapeQueryExtension (dpyinfo->display,
+			    &dpyinfo->xshape_event_base,
+			    &dpyinfo->xshape_error_base);
+
+  if (dpyinfo->xshape_supported_p)
+    dpyinfo->xshape_supported_p
+      = XShapeQueryVersion (dpyinfo->display,
+			    &dpyinfo->xshape_major,
+			    &dpyinfo->xshape_minor);
 #endif
 
   /* Put the rdb where we can find it in a way that works on
@@ -17737,6 +20300,15 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
     }
 
   {
+    int n = snprintf (NULL, 0, "_NET_WM_CM_S%d",
+		      XScreenNumberOfScreen (dpyinfo->screen));
+    cm_atom_sprintf = alloca (n + 1);
+
+    snprintf (cm_atom_sprintf, n + 1, "_NET_WM_CM_S%d",
+	      XScreenNumberOfScreen (dpyinfo->screen));
+  }
+
+  {
     static const struct
     {
       const char *name;
@@ -17749,6 +20321,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("WM_SAVE_YOURSELF", Xatom_wm_save_yourself)
       ATOM_REFS_INIT ("WM_DELETE_WINDOW", Xatom_wm_delete_window)
       ATOM_REFS_INIT ("WM_CHANGE_STATE", Xatom_wm_change_state)
+      ATOM_REFS_INIT ("WM_STATE", Xatom_wm_state)
       ATOM_REFS_INIT ("WM_CONFIGURE_DENIED", Xatom_wm_configure_denied)
       ATOM_REFS_INIT ("WM_MOVED", Xatom_wm_window_moved)
       ATOM_REFS_INIT ("WM_CLIENT_LEADER", Xatom_wm_client_leader)
@@ -17771,6 +20344,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("CLIPBOARD_MANAGER", Xatom_CLIPBOARD_MANAGER)
       ATOM_REFS_INIT ("XATOM_COUNTER", Xatom_XEMBED_INFO)
       ATOM_REFS_INIT ("_XEMBED_INFO", Xatom_XEMBED_INFO)
+      ATOM_REFS_INIT ("_MOTIF_WM_HINTS", Xatom_MOTIF_WM_HINTS)
       /* For properties of font.  */
       ATOM_REFS_INIT ("PIXEL_SIZE", Xatom_PIXEL_SIZE)
       ATOM_REFS_INIT ("AVERAGE_WIDTH", Xatom_AVERAGE_WIDTH)
@@ -17810,6 +20384,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("_NET_WM_FRAME_DRAWN", Xatom_net_wm_frame_drawn)
       ATOM_REFS_INIT ("_NET_WM_USER_TIME", Xatom_net_wm_user_time)
       ATOM_REFS_INIT ("_NET_WM_USER_TIME_WINDOW", Xatom_net_wm_user_time_window)
+      ATOM_REFS_INIT ("_NET_CLIENT_LIST_STACKING", Xatom_net_client_list_stacking)
       /* Session management */
       ATOM_REFS_INIT ("SM_CLIENT_ID", Xatom_SM_CLIENT_ID)
       ATOM_REFS_INIT ("_XSETTINGS_SETTINGS", Xatom_xsettings_prop)
@@ -17819,6 +20394,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("_NET_WM_STATE_BELOW", Xatom_net_wm_state_below)
       ATOM_REFS_INIT ("_NET_WM_OPAQUE_REGION", Xatom_net_wm_opaque_region)
       ATOM_REFS_INIT ("_NET_WM_PING", Xatom_net_wm_ping)
+      ATOM_REFS_INIT ("_NET_WM_PID", Xatom_net_wm_pid)
 #ifdef HAVE_XKB
       ATOM_REFS_INIT ("Meta", Xatom_Meta)
       ATOM_REFS_INIT ("Super", Xatom_Super)
@@ -17826,12 +20402,30 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
       ATOM_REFS_INIT ("ShiftLock", Xatom_ShiftLock)
       ATOM_REFS_INIT ("Alt", Xatom_Alt)
 #endif
+      /* DND source.  */
+      ATOM_REFS_INIT ("XdndAware", Xatom_XdndAware)
+      ATOM_REFS_INIT ("XdndSelection", Xatom_XdndSelection)
+      ATOM_REFS_INIT ("XdndTypeList", Xatom_XdndTypeList)
+      ATOM_REFS_INIT ("XdndActionCopy", Xatom_XdndActionCopy)
+      ATOM_REFS_INIT ("XdndActionMove", Xatom_XdndActionMove)
+      ATOM_REFS_INIT ("XdndActionLink", Xatom_XdndActionLink)
+      ATOM_REFS_INIT ("XdndActionAsk", Xatom_XdndActionAsk)
+      ATOM_REFS_INIT ("XdndActionPrivate", Xatom_XdndActionPrivate)
+      ATOM_REFS_INIT ("XdndActionList", Xatom_XdndActionList)
+      ATOM_REFS_INIT ("XdndActionDescription", Xatom_XdndActionDescription)
+      ATOM_REFS_INIT ("XdndProxy", Xatom_XdndProxy)
+      ATOM_REFS_INIT ("XdndEnter", Xatom_XdndEnter)
+      ATOM_REFS_INIT ("XdndPosition", Xatom_XdndPosition)
+      ATOM_REFS_INIT ("XdndStatus", Xatom_XdndStatus)
+      ATOM_REFS_INIT ("XdndLeave", Xatom_XdndLeave)
+      ATOM_REFS_INIT ("XdndDrop", Xatom_XdndDrop)
+      ATOM_REFS_INIT ("XdndFinished", Xatom_XdndFinished)
     };
 
     int i;
     enum { atom_count = ARRAYELTS (atom_refs) };
     /* 1 for _XSETTINGS_SN.  */
-    enum { total_atom_count = 1 + atom_count };
+    enum { total_atom_count = 2 + atom_count };
     Atom atoms_return[total_atom_count];
     char *atom_names[total_atom_count];
     static char const xsettings_fmt[] = "_XSETTINGS_S%d";
@@ -17845,6 +20439,7 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
     sprintf (xsettings_atom_name, xsettings_fmt,
 	     XScreenNumberOfScreen (dpyinfo->screen));
     atom_names[i] = xsettings_atom_name;
+    atom_names[i + 1] = cm_atom_sprintf;
 
     XInternAtoms (dpyinfo->display, atom_names, total_atom_count,
                   False, atoms_return);
@@ -17852,8 +20447,9 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
     for (i = 0; i < atom_count; i++)
       *(Atom *) ((char *) dpyinfo + atom_refs[i].offset) = atoms_return[i];
 
-    /* Manually copy last atom.  */
+    /* Manually copy last two atoms.  */
     dpyinfo->Xatom_xsettings_sel = atoms_return[i];
+    dpyinfo->Xatom_NET_WM_CM_Sn = atoms_return[i + 1];
   }
 
 #ifdef HAVE_XKB
@@ -18362,66 +20958,6 @@ init_xterm (void)
 }
 #endif
 
-#ifdef HAVE_XRENDER
-void
-x_xrender_color_from_gc_foreground (struct frame *f, GC gc, XRenderColor *color,
-				    bool apply_alpha_background)
-{
-  XGCValues xgcv;
-  XColor xc;
-
-  XGetGCValues (FRAME_X_DISPLAY (f), gc, GCForeground, &xgcv);
-  xc.pixel = xgcv.foreground;
-  x_query_colors (f, &xc, 1);
-
-  color->alpha = (apply_alpha_background
-		  ? 65535 * f->alpha_background
-		  : 65535);
-
-  if (color->alpha == 65535)
-    {
-      color->red = xc.red;
-      color->blue = xc.blue;
-      color->green = xc.green;
-    }
-  else
-    {
-      color->red = (xc.red * color->alpha) / 65535;
-      color->blue = (xc.blue * color->alpha) / 65535;
-      color->green = (xc.green * color->alpha) / 65535;
-    }
-}
-
-void
-x_xrender_color_from_gc_background (struct frame *f, GC gc, XRenderColor *color,
-				    bool apply_alpha_background)
-{
-  XGCValues xgcv;
-  XColor xc;
-
-  XGetGCValues (FRAME_X_DISPLAY (f), gc, GCBackground, &xgcv);
-  xc.pixel = xgcv.background;
-  x_query_colors (f, &xc, 1);
-
-  color->alpha = (apply_alpha_background
-		  ? 65535 * f->alpha_background
-		  : 65535);
-
-  if (color->alpha == 65535)
-    {
-      color->red = xc.red;
-      color->blue = xc.blue;
-      color->green = xc.green;
-    }
-  else
-    {
-      color->red = (xc.red * color->alpha) / 65535;
-      color->blue = (xc.blue * color->alpha) / 65535;
-      color->green = (xc.green * color->alpha) / 65535;
-    }
-}
-#endif
-
 void
 syms_of_xterm (void)
 {
@@ -18501,6 +21037,7 @@ With MS Windows, Haiku windowing or Nextstep, the value is t.  */);
   Fput (Qmeta, Qmodifier_value, make_fixnum (meta_modifier));
   DEFSYM (Qsuper, "super");
   Fput (Qsuper, Qmodifier_value, make_fixnum (super_modifier));
+  DEFSYM (QXdndSelection, "XdndSelection");
 
   DEFVAR_LISP ("x-ctrl-keysym", Vx_ctrl_keysym,
     doc: /* Which keys Emacs uses for the ctrl modifier.

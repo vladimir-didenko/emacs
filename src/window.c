@@ -3181,14 +3181,6 @@ resize_root_window (Lisp_Object window, Lisp_Object delta,
 		horizontal, ignore, pixelwise);
 }
 
-void
-sanitize_window_sizes (Lisp_Object horizontal)
-{
-  /* Don't burp in temacs -nw before window.el is loaded.  */
-  if (!NILP (Fsymbol_function (Qwindow__sanitize_window_sizes)))
-    call1 (Qwindow__sanitize_window_sizes, horizontal);
-}
-
 
 static Lisp_Object
 window_pixel_to_total (Lisp_Object frame, Lisp_Object horizontal)
@@ -6342,7 +6334,9 @@ as argument a number, nil, or `-'.
 The next window is usually the one below the current one;
 or the one at the top if the current one is at the bottom.
 It is determined by the function `other-window-for-scrolling',
-which see.  */)
+which see.
+
+Also see the `other-window-scroll-default' variable.  */)
   (Lisp_Object arg)
 {
   specpdl_ref count = SPECPDL_INDEX ();
@@ -8232,7 +8226,6 @@ syms_of_window (void)
   DEFSYM (Qwindow__resize_root_window_vertically,
 	  "window--resize-root-window-vertically");
   DEFSYM (Qwindow__resize_mini_frame, "window--resize-mini-frame");
-  DEFSYM (Qwindow__sanitize_window_sizes, "window--sanitize-window-sizes");
   DEFSYM (Qwindow__pixel_to_total, "window--pixel-to-total");
   DEFSYM (Qsafe, "safe");
   DEFSYM (Qdisplay_buffer, "display-buffer");

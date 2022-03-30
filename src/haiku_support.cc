@@ -37,6 +37,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include <interface/Alert.h>
 #include <interface/Button.h>
 #include <interface/ControlLook.h>
+#include <interface/Deskbar.h>
 
 #include <locale/UnicodeChar.h>
 
@@ -81,6 +82,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "haiku_support.h"
 
 #define SCROLL_BAR_UPDATE 3000
+#define WAIT_FOR_RELEASE 3001
 
 static color_space dpy_color_space = B_NO_COLOR_SPACE;
 static key_map *key_map = NULL;
@@ -116,6 +118,10 @@ static BLocker movement_locker;
 
 static BMessage volatile *popup_track_message;
 static int32 volatile alert_popup_value;
+static int current_window_id;
+
+static void *grab_view = NULL;
+static BLocker grab_view_locker;
 
 /* This could be a private API, but it's used by (at least) the Qt
    port, so it's probably here to stay.  */
@@ -381,37 +387,6 @@ public:
     haiku_write (APP_QUIT_REQUESTED_EVENT, &rq);
     return 0;
   }
-
-  void
-  RefsReceived (BMessage *msg)
-  {
-    struct haiku_refs_event rq;
-    entry_ref ref;
-    BEntry entry;
-    BPath path;
-    int32 cookie = 0;
-    int32 x, y;
-    void *window;
-
-    if ((msg->FindPointer ("window", 0, &window) != B_OK)
-	|| (msg->FindInt32 ("x", 0, &x) != B_OK)
-	|| (msg->FindInt32 ("y", 0, &y) != B_OK))
-      return;
-
-    rq.window = window;
-    rq.x = x;
-    rq.y = y;
-
-    while (msg->FindRef ("refs", cookie++, &ref) == B_OK)
-      {
-        if (entry.SetTo (&ref, 0) == B_OK
-            && entry.GetPath (&path) == B_OK)
-          {
-            rq.ref = strdup (path.Path ());
-            haiku_write (REFS_EVENT, &rq);
-          }
-      }
-  }
 };
 
 class EmacsWindow : public BWindow
@@ -429,9 +404,9 @@ public:
   BRect pre_zoom_rect;
   int x_before_zoom = INT_MIN;
   int y_before_zoom = INT_MIN;
-  int fullscreen_p = 0;
-  int zoomed_p = 0;
-  int shown_flag = 0;
+  bool fullscreen_p = false;
+  bool zoomed_p = false;
+  bool shown_flag = false;
   volatile int was_shown_p = 0;
   bool menu_bar_active_p = false;
   bool override_redirect_p = false;
@@ -441,11 +416,16 @@ public:
   pthread_mutex_t menu_update_mutex = PTHREAD_MUTEX_INITIALIZER;
   pthread_cond_t menu_update_cv = PTHREAD_COND_INITIALIZER;
   bool menu_updated_p = false;
+  int window_id;
 
   EmacsWindow () : BWindow (BRect (0, 0, 0, 0), "", B_TITLED_WINDOW_LOOK,
 			    B_NORMAL_WINDOW_FEEL, B_NO_SERVER_SIDE_WINDOW_MODIFIERS)
   {
+    window_id = current_window_id++;
 
+    /* This pulse rate is used by scroll bars for repeating a button
+       action while a button is held down.  */
+    SetPulseRate (30000);
   }
 
   ~EmacsWindow ()
@@ -469,6 +449,77 @@ public:
 
     pthread_cond_destroy (&menu_update_cv);
     pthread_mutex_destroy (&menu_update_mutex);
+  }
+
+  BRect
+  CalculateZoomRect (void)
+  {
+    BScreen screen (this);
+    BDeskbar deskbar;
+    BRect screen_frame;
+    BRect frame;
+    BRect deskbar_frame;
+    BRect window_frame;
+    BRect decorator_frame;
+
+    if (!screen.IsValid ())
+      gui_abort ("Failed to calculate screen rect");
+
+    screen_frame = frame = screen.Frame ();
+    deskbar_frame = deskbar.Frame ();
+
+    if (!(modifiers () & B_SHIFT_KEY)
+	&& !deskbar.IsAutoHide ())
+      {
+	switch (deskbar.Location ())
+	  {
+	  case B_DESKBAR_TOP:
+	    frame.top = deskbar_frame.bottom + 2;
+	    break;
+
+	  case B_DESKBAR_BOTTOM:
+	  case B_DESKBAR_LEFT_BOTTOM:
+	  case B_DESKBAR_RIGHT_BOTTOM:
+	    frame.bottom = deskbar_frame.bottom - 2;
+	    break;
+
+	  case B_DESKBAR_LEFT_TOP:
+	    if (deskbar.IsExpanded ())
+	      frame.top = deskbar_frame.bottom + 2;
+	    else
+	      frame.left = deskbar_frame.right + 2;
+	    break;
+
+	  default:
+	    if (deskbar.IsExpanded ()
+		&& !deskbar.IsAlwaysOnTop ()
+		&& !deskbar.IsAutoRaise ())
+	      frame.right = deskbar_frame.left - 2;
+	  }
+      }
+
+    window_frame = Frame ();
+    decorator_frame = DecoratorFrame ();
+
+    frame.top += (window_frame.top
+		  - decorator_frame.top);
+    frame.bottom -= (decorator_frame.bottom
+		     - window_frame.bottom);
+    frame.left += (window_frame.left
+		   - decorator_frame.left);
+    frame.right -= (decorator_frame.right
+		    - window_frame.right);
+
+    if (frame.top > deskbar_frame.bottom
+	|| frame.bottom < deskbar_frame.top)
+      {
+	frame.left = screen_frame.left + (window_frame.left
+					  - decorator_frame.left);
+	frame.right = screen_frame.right - (decorator_frame.right
+					    - window_frame.left);
+      }
+
+    return frame;
   }
 
   void
@@ -665,22 +716,25 @@ public:
 
     if (msg->WasDropped ())
       {
-	entry_ref ref;
 	BPoint whereto;
+	int32 windowid;
+	struct haiku_drag_and_drop_event rq;
 
-        if (msg->FindRef ("refs", &ref) == B_OK)
-	  {
-	    msg->what = B_REFS_RECEIVED;
-	    msg->AddPointer ("window", this);
-	    if (msg->FindPoint ("_drop_point_", &whereto) == B_OK)
-	      {
-		this->ConvertFromScreen (&whereto);
-		msg->AddInt32 ("x", whereto.x);
-		msg->AddInt32 ("y", whereto.y);
-	      }
-	    be_app->PostMessage (msg);
-	    msg->SendReply (B_OK);
-	  }
+	if (msg->FindInt32 ("emacs:window_id", &windowid) == B_OK
+	    && !msg->IsSourceRemote ()
+	    && windowid == this->window_id)
+	  return;
+
+	whereto = msg->DropPoint ();
+
+	this->ConvertFromScreen (&whereto);
+
+	rq.window = this;
+	rq.message = DetachCurrentMessage ();
+	rq.x = whereto.x;
+	rq.y = whereto.y;
+
+	haiku_write (DRAG_AND_DROP_EVENT, &rq);
       }
     else if (msg->GetPointer ("menuptr"))
       {
@@ -1010,33 +1064,29 @@ public:
   Zoom (BPoint o, float w, float h)
   {
     struct haiku_zoom_event rq;
+    BRect rect;
     rq.window = this;
-
-    rq.x = o.x;
-    rq.y = o.y;
-
-    rq.width = w + 1;
-    rq.height = h + 1;
 
     if (fullscreen_p)
       MakeFullscreen (0);
 
-    if (o.x != x_before_zoom ||
-	o.y != y_before_zoom)
+    if (!zoomed_p)
       {
-	x_before_zoom = Frame ().left;
-	y_before_zoom = Frame ().top;
 	pre_zoom_rect = Frame ();
-	zoomed_p = 1;
-	haiku_write (ZOOM_EVENT, &rq);
+	zoomed_p = true;
+	rect = CalculateZoomRect ();
       }
     else
       {
-	zoomed_p = 0;
-	x_before_zoom = y_before_zoom = INT_MIN;
+	zoomed_p = false;
+	rect = pre_zoom_rect;
       }
 
-    BWindow::Zoom (o, w, h);
+    rq.zoomed = zoomed_p;
+    haiku_write (ZOOM_EVENT, &rq);
+
+    BWindow::Zoom (rect.LeftTop (), BE_RECT_WIDTH (rect) - 1,
+		   BE_RECT_HEIGHT (rect) - 1);
   }
 
   void
@@ -1044,11 +1094,8 @@ public:
   {
     if (!zoomed_p)
       return;
-    zoomed_p = 0;
 
-    EmacsMoveTo (pre_zoom_rect.left, pre_zoom_rect.top);
-    ResizeTo (BE_RECT_WIDTH (pre_zoom_rect) - 1,
-	      BE_RECT_HEIGHT (pre_zoom_rect) - 1);
+    BWindow::Zoom ();
   }
 
   void
@@ -1103,6 +1150,8 @@ public:
 
     if (!screen.IsValid ())
       gui_abort ("Trying to make a window fullscreen without a screen");
+
+    UnZoom ();
 
     if (make_fullscreen_p == fullscreen_p)
       return;
@@ -1210,6 +1259,7 @@ public:
 #endif
 
   BPoint tt_absl_pos;
+  BMessage *wait_for_release_message = NULL;
 
   color_space cspace;
 
@@ -1220,13 +1270,44 @@ public:
 
   ~EmacsView ()
   {
+    if (wait_for_release_message)
+      gui_abort ("Wait for release message still exists");
+
     TearDownDoubleBuffering ();
+
+    if (!grab_view_locker.Lock ())
+      gui_abort ("Couldn't lock grab view locker");
+    if (grab_view == this)
+      grab_view = NULL;
+    grab_view_locker.Unlock ();
   }
 
   void
   AttachedToWindow (void)
   {
     cspace = B_RGBA32;
+  }
+
+  void
+  MessageReceived (BMessage *msg)
+  {
+    uint32 buttons;
+    BLooper *looper = Looper ();
+
+    if (msg->what == WAIT_FOR_RELEASE)
+      {
+	if (wait_for_release_message)
+	  gui_abort ("Wait for release message already exists");
+
+	GetMouse (NULL, &buttons, false);
+
+	if (!buttons)
+	  msg->SendReply (msg);
+	else
+	  wait_for_release_message = looper->DetachCurrentMessage ();
+      }
+    else
+      BView::MessageReceived (msg);
   }
 
 #ifdef USE_BE_CAIRO
@@ -1439,7 +1520,7 @@ public:
   }
 
   void
-  MouseMoved (BPoint point, uint32 transit, const BMessage *msg)
+  MouseMoved (BPoint point, uint32 transit, const BMessage *drag_msg)
   {
     struct haiku_mouse_motion_event rq;
 
@@ -1452,6 +1533,17 @@ public:
     if (ToolTip ())
       ToolTip ()->SetMouseRelativeLocation (BPoint (-(point.x - tt_absl_pos.x),
 						    -(point.y - tt_absl_pos.y)));
+
+    if (!grab_view_locker.Lock ())
+      gui_abort ("Couldn't lock grab view locker");
+
+    if (grab_view && this != grab_view)
+      {
+	grab_view_locker.Unlock ();
+	return;
+      }
+
+    grab_view_locker.Unlock ();
 
     if (movement_locker.Lock ())
       {
@@ -1468,18 +1560,26 @@ public:
 
     this->GetMouse (&point, &buttons, false);
 
-    rq.window = this->Window ();
-    rq.btn_no = 0;
+    if (!grab_view_locker.Lock ())
+      gui_abort ("Couldn't lock grab view locker");
+    if (buttons)
+      grab_view = this;
+    grab_view_locker.Unlock ();
 
-    if (!(previous_buttons & B_PRIMARY_MOUSE_BUTTON) &&
-	(buttons & B_PRIMARY_MOUSE_BUTTON))
+    rq.window = this->Window ();
+
+    if (!(previous_buttons & B_PRIMARY_MOUSE_BUTTON)
+	&& (buttons & B_PRIMARY_MOUSE_BUTTON))
       rq.btn_no = 0;
-    else if (!(previous_buttons & B_SECONDARY_MOUSE_BUTTON) &&
-	     (buttons & B_SECONDARY_MOUSE_BUTTON))
+    else if (!(previous_buttons & B_SECONDARY_MOUSE_BUTTON)
+	     && (buttons & B_SECONDARY_MOUSE_BUTTON))
       rq.btn_no = 2;
-    else if (!(previous_buttons & B_TERTIARY_MOUSE_BUTTON) &&
-	     (buttons & B_TERTIARY_MOUSE_BUTTON))
+    else if (!(previous_buttons & B_TERTIARY_MOUSE_BUTTON)
+	     && (buttons & B_TERTIARY_MOUSE_BUTTON))
       rq.btn_no = 1;
+    else
+      return;
+
     previous_buttons = buttons;
 
     rq.x = point.x;
@@ -1500,7 +1600,8 @@ public:
     if (mods & B_OPTION_KEY)
       rq.modifiers |= HAIKU_MODIFIER_SUPER;
 
-    SetMouseEventMask (B_POINTER_EVENTS, B_LOCK_WINDOW_FOCUS);
+    SetMouseEventMask (B_POINTER_EVENTS, (B_LOCK_WINDOW_FOCUS
+					  | B_NO_POINTER_HISTORY));
 
     rq.time = system_time ();
     haiku_write (BUTTON_DOWN, &rq);
@@ -1514,8 +1615,23 @@ public:
 
     this->GetMouse (&point, &buttons, false);
 
+    if (!grab_view_locker.Lock ())
+      gui_abort ("Couldn't lock grab view locker");
+    if (!buttons)
+      grab_view = NULL;
+    grab_view_locker.Unlock ();
+
+    if (!buttons && wait_for_release_message)
+      {
+	wait_for_release_message->SendReply (wait_for_release_message);
+	delete wait_for_release_message;
+	wait_for_release_message = NULL;
+
+	previous_buttons = buttons;
+	return;
+      }
+
     rq.window = this->Window ();
-    rq.btn_no = 0;
 
     if ((previous_buttons & B_PRIMARY_MOUSE_BUTTON)
 	&& !(buttons & B_PRIMARY_MOUSE_BUTTON))
@@ -1526,6 +1642,9 @@ public:
     else if ((previous_buttons & B_TERTIARY_MOUSE_BUTTON)
 	     && !(buttons & B_TERTIARY_MOUSE_BUTTON))
       rq.btn_no = 1;
+    else
+      return;
+
     previous_buttons = buttons;
 
     rq.x = point.x;
@@ -1563,6 +1682,16 @@ public:
   float old_value;
   scroll_bar_info info;
 
+  /* True if button events should be passed to the parent.  */
+  bool handle_button = false;
+  bool in_overscroll = false;
+  bool can_overscroll = false;
+  bool maybe_overscroll = false;
+  BPoint last_overscroll;
+  int last_reported_overscroll_value;
+  int max_value, real_max_value;
+  int overscroll_start_value;
+
   EmacsScrollBar (int x, int y, int x1, int y1, bool horizontal_p) :
     BScrollBar (BRect (x, y, x1, y1), NULL, NULL, 0, 0, horizontal_p ?
 		B_HORIZONTAL : B_VERTICAL)
@@ -1577,23 +1706,59 @@ public:
   void
   MessageReceived (BMessage *msg)
   {
-    int32 portion, range;
-    double proportion;
+    int32 portion, range, dragging, value;
+    float proportion;
 
     if (msg->what == SCROLL_BAR_UPDATE)
       {
-	old_value = msg->GetInt32 ("emacs:units", 0);
 	portion = msg->GetInt32 ("emacs:portion", 0);
 	range = msg->GetInt32 ("emacs:range", 0);
-	proportion = (double) portion / range;
+	dragging = msg->GetInt32 ("emacs:dragging", 0);
+	proportion = ((range <= 0 || portion <= 0)
+		      ? 1.0f : (float) portion / range);
+	value = msg->GetInt32 ("emacs:units", 0);
+	can_overscroll = msg->GetBool ("emacs:overscroll", false);
 
-	if (!msg->GetBool ("emacs:dragging", false))
+	if (value < 0)
+	  value = 0;
+
+	if (dragging != 1)
 	  {
-	    /* Unlike on Motif, PORTION isn't included in the total
-	       range of the scroll bar.  */
-	    this->SetRange (0, std::floor ((double) range - (range * proportion)));
-	    this->SetValue (old_value);
-	    this->SetProportion (proportion);
+	    if (in_overscroll || dragging != -1)
+	      {
+		/* Set the value to the smallest possible one.
+		   Otherwise, the call to SetRange could lead to
+		   spurious updates.  */
+		old_value = 0;
+		SetValue (0);
+
+		/* Unlike on Motif, PORTION isn't included in the total
+		   range of the scroll bar.  */
+
+		SetRange (0, range - portion);
+		SetProportion (proportion);
+		max_value = range - portion;
+		real_max_value = range;
+
+		if (in_overscroll || value > max_value)
+		  value = max_value;
+
+		old_value = roundf (value);
+		SetValue (old_value);
+	      }
+	    else
+	      {
+		value = Value ();
+
+		old_value = 0;
+		SetValue (0);
+		SetRange (0, range - portion);
+		SetProportion (proportion);
+		old_value = value;
+		SetValue (value);
+		max_value = range - portion;
+		real_max_value = range;
+	      }
 	  }
       }
 
@@ -1601,10 +1766,37 @@ public:
   }
 
   void
+  Pulse (void)
+  {
+    struct haiku_scroll_bar_part_event rq;
+    BPoint point;
+    uint32 buttons;
+
+    if (!dragging)
+      {
+	SetFlags (Flags () & ~B_PULSE_NEEDED);
+	return;
+      }
+
+    GetMouse (&point, &buttons, false);
+
+    if (ButtonRegionFor (current_part).Contains (point))
+      {
+	rq.scroll_bar = this;
+	rq.window = Window ();
+	rq.part = current_part;
+	haiku_write (SCROLL_BAR_PART_EVENT, &rq);
+      }
+
+    BScrollBar::Pulse ();
+  }
+
+  void
   ValueChanged (float new_value)
   {
     struct haiku_scroll_bar_value_event rq;
-    struct haiku_scroll_bar_part_event part;
+
+    new_value = Value ();
 
     if (dragging)
       {
@@ -1613,11 +1805,7 @@ public:
 	    if (dragging > 1)
 	      {
 		SetValue (old_value);
-
-		part.scroll_bar = this;
-		part.window = Window ();
-		part.part = current_part;
-		haiku_write (SCROLL_BAR_PART_EVENT, &part);
+		SetFlags (Flags () | B_PULSE_NEEDED);
 	      }
 	    else
 	      dragging++;
@@ -1703,9 +1891,11 @@ public:
     BRegion r;
     BLooper *looper;
     BMessage *message;
-    int32 buttons;
+    int32 buttons, mods;
+    BView *parent;
 
     looper = Looper ();
+    message = NULL;
 
     if (!looper)
       GetMouse (&pt, (uint32 *) &buttons, false);
@@ -1715,6 +1905,18 @@ public:
 
 	if (!message || message->FindInt32 ("buttons", &buttons) != B_OK)
 	  GetMouse (&pt, (uint32 *) &buttons, false);
+      }
+
+    if (message && (message->FindInt32 ("modifiers", &mods)
+		    == B_OK)
+	&& mods & B_CONTROL_KEY)
+      {
+	/* Allow C-mouse-3 to split the window on a scroll bar.   */
+	handle_button = true;
+	parent = Parent ();
+	parent->MouseDown (ConvertToParent (pt));
+
+	return;
       }
 
     if (buttons == B_PRIMARY_MOUSE_BUTTON)
@@ -1743,14 +1945,25 @@ public:
 	    dragging = 1;
 	    current_part = HAIKU_SCROLL_BAR_DOWN_BUTTON;
 
+	    if (Value () == max_value)
+	      {
+		SetFlags (Flags () | B_PULSE_NEEDED);
+		dragging = 2;
+	      }
+
 	    haiku_write (SCROLL_BAR_PART_EVENT, &part);
 	    goto out;
 	  }
+
+	maybe_overscroll = true;
       }
 
     rq.dragging_p = 1;
     rq.window = Window ();
     rq.scroll_bar = this;
+
+    SetMouseEventMask (B_POINTER_EVENTS, (B_SUSPEND_VIEW_FOCUS
+					  | B_LOCK_WINDOW_FOCUS));
 
     haiku_write (SCROLL_BAR_DRAG_EVENT, &rq);
 
@@ -1762,12 +1975,26 @@ public:
   MouseUp (BPoint pt)
   {
     struct haiku_scroll_bar_drag_event rq;
+    BView *parent;
+
+    in_overscroll = false;
+    maybe_overscroll = false;
+
+    if (handle_button)
+      {
+	handle_button = false;
+	parent = Parent ();
+	parent->MouseUp (ConvertToParent (pt));
+
+	return;
+      }
+
     rq.dragging_p = 0;
     rq.scroll_bar = this;
     rq.window = Window ();
 
     haiku_write (SCROLL_BAR_DRAG_EVENT, &rq);
-    dragging = false;
+    dragging = 0;
 
     BScrollBar::MouseUp (pt);
   }
@@ -1776,7 +2003,13 @@ public:
   MouseMoved (BPoint point, uint32 transit, const BMessage *msg)
   {
     struct haiku_menu_bar_left_event rq;
+    struct haiku_scroll_bar_value_event value_event;
+    int range, diff, value, trough_size;
+    BRect bounds;
     BPoint conv;
+    uint32 buttons;
+
+    GetMouse (NULL, &buttons, false);
 
     if (transit == B_EXITED_VIEW)
       {
@@ -1793,6 +2026,72 @@ public:
 	  }
       }
 
+    if (in_overscroll)
+      {
+	if (horizontal)
+	  diff = point.x - last_overscroll.x;
+	else
+	  diff = point.y - last_overscroll.y;
+
+	if (diff < 0)
+	  {
+	    in_overscroll = false;
+	    goto allow;
+	  }
+
+	range = real_max_value;
+	bounds = Bounds ();
+	bounds.InsetBy (1.0, 1.0);
+	value = overscroll_start_value;
+	trough_size = (horizontal
+		       ? BE_RECT_WIDTH (bounds)
+		       : BE_RECT_HEIGHT (bounds));
+	trough_size -= (horizontal
+			? BE_RECT_HEIGHT (bounds)
+			: BE_RECT_WIDTH (bounds)) / 2;
+	if (info.double_arrows)
+	  trough_size -= (horizontal
+			  ? BE_RECT_HEIGHT (bounds)
+			  : BE_RECT_WIDTH (bounds)) / 2;
+
+	value += ((double) range / trough_size) * diff;
+
+	if (value != last_reported_overscroll_value)
+	  {
+	    last_reported_overscroll_value = value;
+
+	    value_event.scroll_bar = this;
+	    value_event.window = Window ();
+	    value_event.position = value;
+
+	    haiku_write (SCROLL_BAR_VALUE_EVENT, &value_event);
+	    return;
+	  }
+      }
+    else if (can_overscroll
+	     && (buttons == B_PRIMARY_MOUSE_BUTTON)
+	     && maybe_overscroll)
+      {
+	value = Value ();
+
+	if (value >= max_value)
+	  {
+	    BScrollBar::MouseMoved (point, transit, msg);
+
+	    if (value == Value ())
+	      {
+		overscroll_start_value = value;
+		in_overscroll = true;
+		last_overscroll = point;
+		last_reported_overscroll_value = value;
+
+		MouseMoved (point, transit, msg);
+		return;
+	      }
+	  }
+      }
+
+  allow:
     BScrollBar::MouseMoved (point, transit, msg);
   }
 };
@@ -2286,9 +2585,13 @@ BView_move_frame (void *view, int x, int y, int x1, int y1)
   vw->UnlockLooper ();
 }
 
+/* DRAGGING can either be 0 (which means to update everything), 1
+   (which means to update nothing), or -1 (which means to update only
+   the thumb size and range).  */
+
 void
 BView_scroll_bar_update (void *sb, int portion, int whole, int position,
-			 bool dragging)
+			 int dragging, bool can_overscroll)
 {
   BScrollBar *bar = (BScrollBar *) sb;
   BMessage msg = BMessage (SCROLL_BAR_UPDATE);
@@ -2296,7 +2599,8 @@ BView_scroll_bar_update (void *sb, int portion, int whole, int position,
   msg.AddInt32 ("emacs:range", whole);
   msg.AddInt32 ("emacs:units", position);
   msg.AddInt32 ("emacs:portion", portion);
-  msg.AddBool ("emacs:dragging", dragging);
+  msg.AddInt32 ("emacs:dragging", dragging);
+  msg.AddBool ("emacs:overscroll", can_overscroll);
 
   mr.SendMessage (&msg);
 }
@@ -2779,7 +3083,7 @@ BMenu_run (void *menu, int x, int y,
       next_time = process_pending_signals_function ();
 
       if (next_time.tv_nsec < 0)
-	timeout = 100000;
+	timeout = 10000000000;
       else
 	timeout = (next_time.tv_sec * 1000000
 		   + next_time.tv_nsec / 1000);
@@ -2796,7 +3100,7 @@ BMenu_run (void *menu, int x, int y,
 
       if (infos[0].events & B_EVENT_READ)
 	{
-	  if (!haiku_read_with_timeout (&type, buf, 200, 1000000, true))
+	  while (!haiku_read_with_timeout (&type, buf, 200, 0, true))
 	    {
 	      switch (type)
 		{
@@ -3118,6 +3422,8 @@ void
 be_get_version_string (char *version, int len)
 {
   std::strncpy (version, "Unknown Haiku release", len - 1);
+  version[len - 1] = '\0';
+
   BPath path;
   if (find_directory (B_BEOS_LIB_DIRECTORY, &path) == B_OK)
     {
@@ -3131,7 +3437,10 @@ be_get_version_string (char *version, int len)
           && appFileInfo.GetVersionInfo (&versionInfo,
                                          B_APP_VERSION_KIND) == B_OK
           && versionInfo.short_info[0] != '\0')
-	std::strncpy (version, versionInfo.short_info, len - 1);
+	{
+	  std::strncpy (version, versionInfo.short_info, len - 1);
+	  version[len - 1] = '\0';
+	}
     }
 }
 
@@ -3734,4 +4043,96 @@ EmacsWindow_signal_menu_update_complete (void *window)
   w->menu_updated_p = true;
   pthread_cond_signal (&w->menu_update_cv);
   pthread_mutex_unlock (&w->menu_update_mutex);
+}
+
+void
+BMessage_delete (void *message)
+{
+  delete (BMessage *) message;
+}
+
+static int32
+be_drag_message_thread_entry (void *thread_data)
+{
+  BMessenger *messenger;
+  BMessage reply;
+
+  messenger = (BMessenger *) thread_data;
+  messenger->SendMessage (WAIT_FOR_RELEASE, &reply);
+
+  return 0;
+}
+
+bool
+be_drag_message (void *view, void *message, bool allow_same_view,
+		 void (*block_input_function) (void),
+		 void (*unblock_input_function) (void),
+		 void (*process_pending_signals_function) (void),
+		 bool (*should_quit_function) (void))
+{
+  EmacsView *vw = (EmacsView *) view;
+  EmacsWindow *window = (EmacsWindow *) vw->Window ();
+  BMessage *msg = (BMessage *) message;
+  BMessage wait_for_release;
+  BMessenger messenger (vw);
+  struct object_wait_info infos[2];
+  ssize_t stat;
+
+  block_input_function ();
+
+  if (!allow_same_view &&
+      (msg->ReplaceInt32 ("emacs:window_id", window->window_id)
+       == B_NAME_NOT_FOUND))
+    msg->AddInt32 ("emacs:window_id", window->window_id);
+
+  if (!vw->LockLooper ())
+    gui_abort ("Failed to lock view looper for drag");
+
+  vw->DragMessage (msg, BRect (0, 0, 0, 0));
+  vw->UnlockLooper ();
+
+  infos[0].object = port_application_to_emacs;
+  infos[0].type = B_OBJECT_TYPE_PORT;
+  infos[0].events = B_EVENT_READ;
+
+  infos[1].object = spawn_thread (be_drag_message_thread_entry,
+				  "Drag waiter thread",
+				  B_DEFAULT_MEDIA_PRIORITY,
+				  (void *) &messenger);
+  infos[1].type = B_OBJECT_TYPE_THREAD;
+  infos[1].events = B_EVENT_INVALID;
+  unblock_input_function ();
+
+  if (infos[1].object < B_OK)
+    return false;
+
+  block_input_function ();
+  resume_thread (infos[1].object);
+  unblock_input_function ();
+
+  while (true)
+    {
+      block_input_function ();
+      stat = wait_for_objects ((struct object_wait_info *) &infos, 2);
+      unblock_input_function ();
+
+      if (stat == B_INTERRUPTED || stat == B_TIMED_OUT
+	  || stat == B_WOULD_BLOCK)
+	continue;
+
+      if (stat < B_OK)
+	gui_abort ("Failed to wait for drag");
+
+      if (infos[0].events & B_EVENT_READ)
+	process_pending_signals_function ();
+
+      if (should_quit_function ())
+	return true;
+
+      if (infos[1].events & B_EVENT_INVALID)
+	return false;
+
+      infos[0].events = B_EVENT_READ;
+      infos[1].events = B_EVENT_INVALID;
+    }
 }

@@ -350,10 +350,10 @@ the formats available in the clipboard if TYPE is `CLIPBOARD'."
 (defun gui-set-selection (type data)
   "Make an X selection of type TYPE and value DATA.
 The argument TYPE (nil means `PRIMARY') says which selection, and
-DATA specifies the contents.  TYPE must be a symbol.  \(It can also
-be a string, which stands for the symbol with that name, but this
-is considered obsolete.)  DATA may be a string, a symbol, an
-integer (or a cons of two integers or list of two integers).
+DATA specifies the contents.  TYPE must be a symbol.  \(It can
+also be a string, which stands for the symbol with that name, but
+this is considered obsolete.)  DATA may be a string, a symbol, or
+an integer.
 
 The selection may also be a cons of two markers pointing to the same buffer,
 or an overlay.  In these cases, the selection is considered to be the text
@@ -485,7 +485,8 @@ two markers or an overlay.  Otherwise, it is nil."
 			       (if eight-bit 'C_STRING
 				 'STRING))))))))
 	  (cond
-	   ((eq type 'UTF8_STRING)
+	   ((or (eq type 'UTF8_STRING)
+                (eq type 'text/plain\;charset=utf-8))
 	    (if (or (not coding)
 		    (not (eq (coding-system-type coding) 'utf-8)))
 		(setq coding 'utf-8))
@@ -495,6 +496,12 @@ two markers or an overlay.  Otherwise, it is nil."
 	    (if (or (not coding)
 		    (not (eq (coding-system-type coding) 'charset)))
 		(setq coding 'iso-8859-1))
+	    (setq str (encode-coding-string str coding)))
+
+           ((eq type 'text/plain)
+            (if (or (not coding)
+		    (not (eq (coding-system-type coding) 'charset)))
+		(setq coding 'ascii))
 	    (setq str (encode-coding-string str coding)))
 
 	   ((eq type 'COMPOUND_TEXT)
@@ -539,20 +546,19 @@ two markers or an overlay.  Otherwise, it is nil."
     (if len
 	(xselect--int-to-cons len))))
 
-(defun xselect-convert-to-targets (_selection _type _value)
-  ;; return a vector of atoms, but remove duplicates first.
-  (let* ((all (cons 'TIMESTAMP
-		    (cons 'MULTIPLE
-			  (mapcar 'car selection-converter-alist))))
-	 (rest all))
-    (while rest
-      (cond ((memq (car rest) (cdr rest))
-	     (setcdr rest (delq (car rest) (cdr rest))))
-	    ((eq (car (cdr rest)) '_EMACS_INTERNAL)  ; shh, it's a secret
-	     (setcdr rest (cdr (cdr rest))))
-	    (t
-	     (setq rest (cdr rest)))))
-    (apply 'vector all)))
+(defun xselect-convert-to-targets (selection _type value)
+  ;; Return a vector of atoms, but remove duplicates first.
+  (apply #'vector
+         (delete-dups
+          `( TIMESTAMP MULTIPLE
+             . ,(delq '_EMACS_INTERNAL
+                      (mapcar (lambda (conv)
+                                (if (or (not (consp (cdr conv)))
+                                        (funcall (cadr conv) selection
+                                                 (car conv) value))
+                                    (car conv)
+                                  '_EMACS_INTERNAL))
+                              selection-converter-alist))))))
 
 (defun xselect-convert-to-delete (selection _type _value)
   (gui-backend-set-selection selection nil)
@@ -625,11 +631,39 @@ This function returns the string \"emacs\"."
   (when (eq selection 'CLIPBOARD)
     'NULL))
 
+(defun xselect-convert-to-username (_selection _type _value)
+  (user-real-login-name))
+
+(defun xselect-convert-to-text-uri-list (_selection _type value)
+  (when (and (stringp value)
+             (file-exists-p value))
+    (concat (url-encode-url
+             ;; Uncomment the following code code in a better world where
+             ;; people write correct code that adds the hostname to the URI.
+             ;; Since most programs don't implement this properly, we omit the
+             ;; hostname so that copying files actually works.  Most properly
+             ;; written programs will look at WM_CLIENT_MACHINE to determine
+             ;; the hostname anyway.  (format "file://%s%s\n" (system-name)
+             ;; (expand-file-name value))
+             (concat "file://" (expand-file-name value)))
+            "\n")))
+
+(defun xselect-uri-list-available-p (selection _type value)
+  "Return whether or not `text/uri-list' is a valid target for SELECTION.
+VALUE is the local selection value of SELECTION."
+  (and (eq selection 'XdndSelection)
+       (stringp value)
+       (file-exists-p value)))
+
 (setq selection-converter-alist
       '((TEXT . xselect-convert-to-string)
 	(COMPOUND_TEXT . xselect-convert-to-string)
 	(STRING . xselect-convert-to-string)
 	(UTF8_STRING . xselect-convert-to-string)
+	(text/plain . xselect-convert-to-string)
+	(text/plain\;charset=utf-8 . xselect-convert-to-string)
+        (text/uri-list . (xselect-uri-list-available-p . xselect-convert-to-text-uri-list))
+        (text/x-xdnd-username . xselect-convert-to-username)
 	(TARGETS . xselect-convert-to-targets)
 	(LENGTH . xselect-convert-to-length)
 	(DELETE . xselect-convert-to-delete)
