@@ -1,11 +1,11 @@
 # -*- coding: utf-8; mode: rpm-spec -*-
 %def_enable gtk3		# actually unconditionally
-%def_enable athena
-%def_enable nox
+%def_disable athena
+%def_disable nox
 
 Name: emacs
 Version: 29.0.50
-Release: alt3.git610d8578
+Release: alt4.git2ec77fcd
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -278,12 +278,12 @@ autoreconf -i -I m4
 export LIBRARY_PATH=%_libdir/gcc/x86_64-alt-linux/11
 
 pushd build-gtk3
-%configure %_configure_mostly --without-gpm --with-pgtk --with-cairo
+%configure %_configure_mostly --without-gpm --with-pgtk --with-cairo --with-toolkit-scroll-bars
 popd
 
 %if_enabled athena
 pushd build-athena
-%configure %_configure_mostly --without-gpm --with-x-toolkit=athena
+%configure %_configure_mostly --without-gpm --with-x-toolkit=athena --with-toolkit-scroll-bars
 popd
 %endif
 
@@ -291,7 +291,7 @@ popd
 pushd build-nox
 %configure --disable-build-details --sharedstatedir=/var --without-all \
 	   --with-gnutls --with-gpm --with-selinux --with-pop --with-xml2 \
-	   --with-wide-int --with-modules --with-x=no
+	   --with-wide-int --with-modules --with-x=no --with-toolkit-scroll-bars=no
 popd
 %endif
 
@@ -505,6 +505,10 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Wed Mar 30 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt4.git2ec77fcd
+- 29.0.50-git2ec77fcd
+- build only gtk3 version
+
 * Fri Mar 11 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt3.git610d8578
 - 29.0.50-git610d8578
 
