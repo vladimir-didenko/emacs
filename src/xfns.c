@@ -730,9 +730,11 @@ x_set_wait_for_wm (struct frame *f, Lisp_Object new_value, Lisp_Object old_value
 static void
 x_set_alpha_background (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-#ifndef HAVE_GTK3
   unsigned long opaque_region[] = {0, 0, FRAME_PIXEL_WIDTH (f),
 				   FRAME_PIXEL_HEIGHT (f)};
+#ifdef HAVE_GTK3
+  GObjectClass *object_class;
+  GtkWidgetClass *class;
 #endif
 
   gui_set_alpha_background (f, arg, oldval);
@@ -776,6 +778,24 @@ x_set_alpha_background (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 		     FRAME_DISPLAY_INFO (f)->Xatom_net_wm_opaque_region,
 		     XA_CARDINAL, 32, PropModeReplace,
 		     (unsigned char *) &opaque_region, 4);
+#else
+  else
+    {
+      if (FRAME_TOOLTIP_P (f))
+	XChangeProperty (FRAME_X_DISPLAY (f),
+			 FRAME_X_WINDOW (f),
+			 FRAME_DISPLAY_INFO (f)->Xatom_net_wm_opaque_region,
+			 XA_CARDINAL, 32, PropModeReplace,
+			 (unsigned char *) &opaque_region, 4);
+      else
+	{
+	  object_class = G_OBJECT_GET_CLASS (FRAME_GTK_OUTER_WIDGET (f));
+	  class = GTK_WIDGET_CLASS (object_class);
+
+	  if (class->style_updated)
+	    class->style_updated (FRAME_GTK_OUTER_WIDGET (f));
+	}
+    }
 #endif
 }
 
@@ -803,22 +823,24 @@ x_set_tool_bar_position (struct frame *f,
     wrong_choice (choice, new_value);
 }
 
+#ifdef HAVE_XDBE
 static void
 x_set_inhibit_double_buffering (struct frame *f,
                                 Lisp_Object new_value,
                                 Lisp_Object old_value)
 {
-  block_input ();
+  bool want_double_buffering, was_double_buffered;
+
   if (FRAME_X_WINDOW (f) && !EQ (new_value, old_value))
     {
-      bool want_double_buffering = NILP (new_value);
-      bool was_double_buffered = FRAME_X_DOUBLE_BUFFERED_P (f);
-      /* font_drop_xrender_surfaces in xftfont does something only if
-         we're double-buffered, so call font_drop_xrender_surfaces before
-         and after any potential change.  One of the calls will end up
-         being a no-op.  */
+      want_double_buffering = NILP (new_value);
+      was_double_buffered = FRAME_X_DOUBLE_BUFFERED_P (f);
+
+      block_input ();
       if (want_double_buffering != was_double_buffered)
 	{
+	  /* Force XftDraw etc to be recreated with the new double
+	     buffered drawable.  */
 	  font_drop_xrender_surfaces (f);
 
 	  /* Scroll bars decide whether or not to use a back buffer
@@ -840,9 +862,10 @@ x_set_inhibit_double_buffering (struct frame *f,
           SET_FRAME_GARBAGED (f);
           font_drop_xrender_surfaces (f);
         }
+      unblock_input ();
     }
-  unblock_input ();
 }
+#endif
 
 /**
  * x_set_undecorated:
@@ -1238,25 +1261,27 @@ struct mouse_cursor_types {
 };
 
 /* This array must stay in sync with enum mouse_cursor above!  */
-static const struct mouse_cursor_types mouse_cursor_types[] = {
-  { "text",      &Vx_pointer_shape,                    XC_xterm               },
-  { "nontext",   &Vx_nontext_pointer_shape,            XC_left_ptr            },
-  { "hourglass", &Vx_hourglass_pointer_shape,          XC_watch               },
-  { "modeline",  &Vx_mode_pointer_shape,               XC_xterm               },
-  { NULL,        &Vx_sensitive_text_pointer_shape,     XC_hand2               },
-  { NULL,        &Vx_window_horizontal_drag_shape,     XC_sb_h_double_arrow   },
-  { NULL,        &Vx_window_vertical_drag_shape,       XC_sb_v_double_arrow   },
-  { NULL,        &Vx_window_left_edge_shape,           XC_left_side           },
-  { NULL,        &Vx_window_top_left_corner_shape,     XC_top_left_corner     },
-  { NULL,        &Vx_window_top_edge_shape,            XC_top_side            },
-  { NULL,        &Vx_window_top_right_corner_shape,    XC_top_right_corner    },
-  { NULL,        &Vx_window_right_edge_shape,          XC_right_side          },
-  { NULL,        &Vx_window_bottom_right_corner_shape, XC_bottom_right_corner },
-  { NULL,        &Vx_window_bottom_edge_shape,         XC_bottom_side         },
-  { NULL,        &Vx_window_bottom_left_corner_shape,  XC_bottom_left_corner  },
-};
+static const struct mouse_cursor_types mouse_cursor_types[] =
+  {
+    { "text",      &Vx_pointer_shape,                    XC_xterm               },
+    { "nontext",   &Vx_nontext_pointer_shape,            XC_left_ptr            },
+    { "hourglass", &Vx_hourglass_pointer_shape,          XC_watch               },
+    { "modeline",  &Vx_mode_pointer_shape,               XC_xterm               },
+    { NULL,        &Vx_sensitive_text_pointer_shape,     XC_hand2               },
+    { NULL,        &Vx_window_horizontal_drag_shape,     XC_sb_h_double_arrow   },
+    { NULL,        &Vx_window_vertical_drag_shape,       XC_sb_v_double_arrow   },
+    { NULL,        &Vx_window_left_edge_shape,           XC_left_side           },
+    { NULL,        &Vx_window_top_left_corner_shape,     XC_top_left_corner     },
+    { NULL,        &Vx_window_top_edge_shape,            XC_top_side            },
+    { NULL,        &Vx_window_top_right_corner_shape,    XC_top_right_corner    },
+    { NULL,        &Vx_window_right_edge_shape,          XC_right_side          },
+    { NULL,        &Vx_window_bottom_right_corner_shape, XC_bottom_right_corner },
+    { NULL,        &Vx_window_bottom_edge_shape,         XC_bottom_side         },
+    { NULL,        &Vx_window_bottom_left_corner_shape,  XC_bottom_left_corner  },
+  };
 
-struct mouse_cursor_data {
+struct mouse_cursor_data
+{
   /* Last index for which XCreateFontCursor has been called, and thus
      the last index for which x_request_serial[] is valid.  */
   int last_cursor_create_request;
@@ -1337,8 +1362,10 @@ x_set_mouse_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
     {
       cursor_data.x_request_serial[i] = XNextRequest (dpy);
       cursor_data.last_cursor_create_request = i;
-      cursor_data.cursor[i] = XCreateFontCursor (dpy,
-						 cursor_data.cursor_num[i]);
+
+      cursor_data.cursor[i]
+	= x_create_font_cursor (FRAME_DISPLAY_INFO (f),
+				cursor_data.cursor_num[i]);
     }
 
   /* Now sync up and process all received errors from cursor
@@ -2347,6 +2374,63 @@ x_set_scroll_bar_default_height (struct frame *f)
      scroll bar.  */
   FRAME_CONFIG_SCROLL_BAR_HEIGHT (f) = 14;
 #endif
+}
+
+static void
+x_set_alpha (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
+{
+  double alpha = 1.0;
+  double newval[2];
+  int i;
+  Lisp_Object item;
+  bool alpha_identical_p;
+
+  alpha_identical_p = true;
+
+  for (i = 0; i < 2; i++)
+    {
+      newval[i] = 1.0;
+      if (CONSP (arg))
+        {
+          item = CAR (arg);
+          arg  = CDR (arg);
+
+	  alpha_identical_p = false;
+        }
+      else
+        item = arg;
+
+      if (NILP (item))
+	alpha = - 1.0;
+      else if (FLOATP (item))
+	{
+	  alpha = XFLOAT_DATA (item);
+	  if (! (0 <= alpha && alpha <= 1.0))
+	    args_out_of_range (make_float (0.0), make_float (1.0));
+	}
+      else if (FIXNUMP (item))
+	{
+	  EMACS_INT ialpha = XFIXNUM (item);
+	  if (! (0 <= ialpha && ialpha <= 100))
+	    args_out_of_range (make_fixnum (0), make_fixnum (100));
+	  alpha = ialpha / 100.0;
+	}
+      else
+	wrong_type_argument (Qnumberp, item);
+      newval[i] = alpha;
+    }
+
+  for (i = 0; i < 2; i++)
+    f->alpha[i] = newval[i];
+
+  FRAME_X_OUTPUT (f)->alpha_identical_p = alpha_identical_p;
+
+  if (FRAME_TERMINAL (f)->set_frame_alpha_hook)
+    {
+      block_input ();
+      FRAME_TERMINAL (f)->set_frame_alpha_hook (f);
+      unblock_input ();
+    }
 }
 
 
@@ -3528,8 +3612,11 @@ xic_set_xfontset (struct frame *f, const char *base_fontname)
 void
 x_mark_frame_dirty (struct frame *f)
 {
-  if (FRAME_X_DOUBLE_BUFFERED_P (f) && !FRAME_X_NEED_BUFFER_FLIP (f))
+#ifdef HAVE_XDBE
+  if (FRAME_X_DOUBLE_BUFFERED_P (f)
+      && !FRAME_X_NEED_BUFFER_FLIP (f))
     FRAME_X_NEED_BUFFER_FLIP (f) = true;
+#endif
 }
 
 static void
@@ -3610,12 +3697,12 @@ tear_down_x_back_buffer (struct frame *f)
 void
 initial_set_up_x_back_buffer (struct frame *f)
 {
-  block_input ();
   eassert (FRAME_X_WINDOW (f));
   FRAME_X_RAW_DRAWABLE (f) = FRAME_X_WINDOW (f);
-  if (NILP (CDR (Fassq (Qinhibit_double_buffering, f->param_alist))))
+
+  if (NILP (CDR (Fassq (Qinhibit_double_buffering,
+			f->param_alist))))
     set_up_x_back_buffer (f);
-  unblock_input ();
 }
 
 #if defined HAVE_XINPUT2
@@ -4211,7 +4298,7 @@ x_make_gc (struct frame *f)
 
   gc_values.foreground = FRAME_FOREGROUND_PIXEL (f);
   gc_values.background = FRAME_BACKGROUND_PIXEL (f);
-  gc_values.line_width = 0;	/* Means 1 using fast algorithm.  */
+  gc_values.line_width = 1;
   f->output_data.x->normal_gc
     = XCreateGC (FRAME_X_DISPLAY (f),
                  FRAME_X_DRAWABLE (f),
@@ -4844,6 +4931,13 @@ This function is an internal primitive--use `make-frame' instead.  */)
 
   x_icon (f, parms);
   x_make_gc (f);
+
+#ifdef HAVE_XINPUT2
+  if (dpyinfo->supports_xi2)
+    FRAME_X_OUTPUT (f)->xi_masks
+      = XIGetSelectedEvents (dpyinfo->display, FRAME_X_WINDOW (f),
+			     &FRAME_X_OUTPUT (f)->num_xi_masks);
+#endif
 
   /* Now consider the frame official.  */
   f->terminal->reference_count++;
@@ -6712,7 +6806,9 @@ https://freedesktop.org/wiki/Specifications/XDND/.
 
 If RETURN-FRAME is non-nil, this function will return the frame if the
 mouse pointer moves onto an Emacs frame, after first moving out of
-FRAME.  (This is not guaranteed to work on some systems.)
+FRAME.  (This is not guaranteed to work on some systems.)  If
+RETURN-FRAME is the symbol `now', any frame underneath the mouse
+pointer will be returned immediately.
 
 If ACTION is a list and not nil, its elements are assumed to be a cons
 of (ITEM . STRING), where ITEM is the name of an action, and STRING is
@@ -6730,14 +6826,12 @@ mouse buttons are released on top of FRAME.  */)
 {
   struct frame *f = decode_window_system_frame (frame);
   int ntargets = 0, nnames = 0;
-  ptrdiff_t len;
   char *target_names[2048];
   Atom *target_atoms;
   Lisp_Object lval, original, tem, t1, t2;
   Atom xaction;
   Atom action_list[2048];
   char *name_list[2048];
-  char *scratch;
 
   USE_SAFE_ALLOCA;
 
@@ -6751,10 +6845,8 @@ mouse buttons are released on top of FRAME.  */)
 
       if (ntargets < 2048)
 	{
-	  scratch = SSDATA (XCAR (targets));
-	  len = strlen (scratch);
-	  target_names[ntargets] = SAFE_ALLOCA (len + 1);
-	  strncpy (target_names[ntargets], scratch, len + 1);
+	  SAFE_ALLOCA_STRING (target_names[ntargets],
+			      XCAR (targets));
 	  ntargets++;
 	}
       else
@@ -6804,10 +6896,8 @@ mouse buttons are released on top of FRAME.  */)
 	      else
 		signal_error ("Invalid drag-and-drop action", tem);
 
-	      scratch = SSDATA (ENCODE_UTF_8 (t2));
-	      len = strlen (scratch);
-	      name_list[nnames] = SAFE_ALLOCA (len + 1);
-	      strncpy (name_list[nnames], scratch, len + 1);
+	      SAFE_ALLOCA_STRING (name_list[nnames],
+				  ENCODE_SYSTEM (t2));
 
 	      nnames++;
 	    }
@@ -6828,7 +6918,7 @@ mouse buttons are released on top of FRAME.  */)
 
   x_set_dnd_targets (target_atoms, ntargets);
   lval = x_dnd_begin_drag_and_drop (f, FRAME_DISPLAY_INFO (f)->last_user_time,
-				    xaction, !NILP (return_frame), action_list,
+				    xaction, return_frame, action_list,
 				    (const char **) &name_list, nnames,
 				    !NILP (allow_current_frame));
 
@@ -8214,29 +8304,6 @@ x_hide_tip (bool delete)
 	      else
 		x_make_frame_invisible (XFRAME (tip_frame));
 
-#ifdef USE_LUCID
-	      /* Bloodcurdling hack alert: The Lucid menu bar widget's
-		 redisplay procedure is not called when a tip frame over
-		 menu items is unmapped.  Redisplay the menu manually...  */
-	      {
-		Widget w;
-		struct frame *f = SELECTED_FRAME ();
-
-		if (FRAME_X_P (f) && FRAME_LIVE_P (f))
-		  {
-		    w = f->output_data.x->menubar_widget;
-
-		    if (!DoesSaveUnders (FRAME_DISPLAY_INFO (f)->screen)
-			&& w != NULL)
-		      {
-			block_input ();
-			xlwmenu_redisplay (w);
-			unblock_input ();
-		      }
-		  }
-	      }
-#endif /* USE_LUCID */
-
 	      was_open = Qt;
 	    }
 	  else
@@ -8263,7 +8330,8 @@ PARMS is an optional list of frame parameters which can be used to
 change the tooltip's appearance.
 
 Automatically hide the tooltip after TIMEOUT seconds.  TIMEOUT nil
-means use the default timeout of 5 seconds.
+means use the default timeout from the `x-show-tooltip-timeout'
+variable.
 
 If the list of frame parameters PARMS contains a `left' parameter,
 display the tooltip at that x-position.  If the list of frame parameters
@@ -8309,9 +8377,8 @@ Text larger than the specified size is clipped.  */)
   f = decode_window_system_frame (frame);
 
   if (NILP (timeout))
-    timeout = make_fixnum (5);
-  else
-    CHECK_FIXNAT (timeout);
+    timeout = Vx_show_tooltip_timeout;
+  CHECK_FIXNAT (timeout);
 
   if (NILP (dx))
     dx = make_fixnum (5);
@@ -8608,7 +8675,12 @@ DEFUN ("x-double-buffered-p", Fx_double_buffered_p, Sx_double_buffered_p,
      (Lisp_Object frame)
 {
   struct frame *f = decode_live_frame (frame);
+
+#ifdef HAVE_XDBE
   return FRAME_X_DOUBLE_BUFFERED_P (f) ? Qt : Qnil;
+#else
+  return Qnil;
+#endif
 }
 
 
@@ -8781,25 +8853,11 @@ DEFUN ("x-file-dialog", Fx_file_dialog, Sx_file_dialog, 2, 5, 0,
   while (result == 0)
     {
       XEvent event, copy;
-#ifdef HAVE_XINPUT2
-      x_menu_wait_for_event (FRAME_X_DISPLAY (f));
-#else
       x_menu_wait_for_event (0);
-#endif
 
-      if (
-#ifndef HAVE_XINPUT2
-	  XtAppPending (Xt_app_con)
-#else
-	  XPending (FRAME_X_DISPLAY (f))
-#endif
-	  )
+      if (XtAppPending (Xt_app_con))
 	{
-#ifndef HAVE_XINPUT2
 	  XtAppNextEvent (Xt_app_con, &event);
-#else
-	  XNextEvent (FRAME_X_DISPLAY (f), &event);
-#endif
 
 	  copy = event;
 	  if (event.type == KeyPress
@@ -9365,10 +9423,14 @@ frame_parm_handler x_frame_parm_handlers[] =
   x_set_wait_for_wm,
   gui_set_fullscreen,
   gui_set_font_backend,
-  gui_set_alpha,
+  x_set_alpha,
   x_set_sticky,
   x_set_tool_bar_position,
+#ifdef HAVE_XDBE
   x_set_inhibit_double_buffering,
+#else
+  NULL,
+#endif
   x_set_undecorated,
   x_set_parent_frame,
   x_set_skip_taskbar,

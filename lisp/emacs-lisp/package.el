@@ -566,9 +566,9 @@ This is the name of the package with its version appended."
   "Return file-name extension of package-desc object PKG-DESC.
 Depending on the `package-desc-kind' of PKG-DESC, this is one of:
 
-   'single - \".el\"
-   'tar    - \".tar\"
-   'dir    - \"\"
+   \\='single - \".el\"
+   \\='tar    - \".tar\"
+   \\='dir    - \"\"
 
 Signal an error if the kind is none of the above."
   (pcase (package-desc-kind pkg-desc)
@@ -1854,8 +1854,12 @@ SEEN is used internally to detect infinite recursion."
               (error "Need package `%s-%s', but only %s is available"
                      next-pkg (package-version-join next-version)
                      found-something))
-             (t (error "Package `%s-%s' is unavailable"
-                       next-pkg (package-version-join next-version)))))
+             (t
+              (if (eq next-pkg 'emacs)
+                  (error "This package requires Emacs version %s"
+                         (package-version-join next-version))
+                (error "Package `%s-%s' is unavailable"
+                       next-pkg (package-version-join next-version))))))
           (setq packages
                 (package-compute-transaction (cons found packages)
                                              (package-desc-reqs found)
@@ -2131,6 +2135,49 @@ to install it but still mark it as selected."
           (package--quickstart-maybe-refresh)
           (message  "Package `%s' installed." name))
       (message "`%s' is already installed" name))))
+
+;;;###autoload
+(defun package-update (name)
+  "Update package NAME if a newer version exists."
+  (interactive
+   (list (completing-read
+          "Update package: " (package--updateable-packages) nil t)))
+  (let ((package (if (symbolp name)
+                     name
+                   (intern name))))
+    (package-delete (cadr (assq package package-alist)) 'force)
+    (package-install package 'dont-select)))
+
+(defun package--updateable-packages ()
+  ;; Initialize the package system to get the list of package
+  ;; symbols for completion.
+  (package--archives-initialize)
+  (mapcar
+   #'car
+   (seq-filter
+    (lambda (elt)
+      (let ((available
+             (assq (car elt) package-archive-contents)))
+        (and available
+             (version-list-<
+              (package-desc-priority-version (cadr elt))
+              (package-desc-priority-version (cadr available))))))
+    package-alist)))
+
+(defun package-update-all (&optional inhibit-queries)
+  "Upgrade all packages."
+  (interactive "P")
+  (let ((updateable (package--updateable-packages)))
+    (if (not updateable)
+        (message "No packages to update")
+      (when (and (not inhibit-queries)
+                 (not (yes-or-no-p
+                       (if (length= updateable 1)
+                           "One package to update.  Do it? "
+                         (format "%s packages to update.  Do it?"
+                                 (length updateable))))))
+        (user-error "Updating aborted"))
+      (mapc #'package-update updateable))))
 
 (defun package-strip-rcs-id (str)
   "Strip RCS version ID from the version string STR.
@@ -2856,7 +2903,13 @@ either a full name or nil, and EMAIL is a valid email address."
 
 (define-derived-mode package-menu-mode tabulated-list-mode "Package Menu"
   "Major mode for browsing a list of packages.
-Letters do not insert themselves; instead, they are commands.
+The most useful commands here are:
+
+  `x': Install the package under point if it isn't already installed,
+       and delete it if it's already installed,
+  `i': mark a package for installation, and
+  `d': mark a package for deletion.  Use the `x' command to perform the
+       actions on the marked files.
 \\<package-menu-mode-map>
 \\{package-menu-mode-map}"
   :interactive nil
@@ -3461,7 +3514,7 @@ corresponding to the newer version."
       ;; ENTRY is (PKG-DESC [NAME VERSION STATUS DOC])
       (let ((pkg-desc (car entry))
             (status (aref (cadr entry) 2)))
-        (cond ((member status '("installed" "dependency" "unsigned"))
+        (cond ((member status '("installed" "dependency" "unsigned" "external"))
                (push pkg-desc installed))
               ((member status '("available" "new"))
                (setq available (package--append-to-alist pkg-desc available))))))
@@ -3603,8 +3656,13 @@ packages list, respectively."
 (defun package-menu-execute (&optional noquery)
   "Perform marked Package Menu actions.
 Packages marked for installation are downloaded and installed,
-packages marked for deletion are removed,
-and packages marked for upgrading are downloaded and upgraded.
+packages marked for deletion are removed, and packages marked for
+upgrading are downloaded and upgraded.
+
+If no packages are marked, the action taken depends on the state
+of the package under point.  If it's not already installed, this
+command will install the package, and if it's installed, it will
+delete the package.
 
 Optional argument NOQUERY non-nil means do not ask the user to confirm."
   (interactive nil package-menu-mode)
@@ -3622,8 +3680,20 @@ Optional argument NOQUERY non-nil means do not ask the user to confirm."
                 ((eq cmd ?I)
                  (push pkg-desc install-list))))
         (forward-line)))
+    ;; Nothing marked.
     (unless (or delete-list install-list)
-      (user-error "No operations specified"))
+      ;; Not on a package line.
+      (unless (tabulated-list-get-id)
+        (user-error "No operations specified"))
+      (let* ((id (tabulated-list-get-id))
+             (status (package-menu-get-status)))
+        (cond
+         ((member status '("installed"))
+          (push id delete-list))
+         ((member status '("available" "avail-obso" "new" "dependency"))
+          (push id install-list))
+         (t (user-error "No default action available for status: %s"
+                        status)))))
     (let-alist (package-menu--partition-transaction install-list delete-list)
       (when (or noquery
                 (package-menu--prompt-transaction-p .delete .install .upgrade))

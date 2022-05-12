@@ -706,7 +706,8 @@ avoid '==' being treated as an assignment."
     ;;   [a] = 5
     ;;   [*a] = 5, 6
     (,(python-font-lock-assignment-matcher
-       (python-rx (or "[" "(") (* space)
+       (python-rx (or line-start ?\;) (* space)
+                  (or "[" "(") (* space)
                   grouped-assignment-target (* space)
                   (or ")" "]") (* space)
                   assignment-operator))
@@ -1296,7 +1297,7 @@ Called from a program, START and END specify the region to indent."
                    ;; Don't mess with strings, unless it's the
                    ;; enclosing set of quotes or a docstring.
                    (or (not (python-syntax-context 'string))
-                       (eq
+                       (equal
                         (syntax-after
                          (+ (1- (point))
                             (current-indentation)
@@ -1628,23 +1629,20 @@ of the statement."
                        ;; are somehow out of whack.  This has been
                        ;; observed when using `syntax-ppss' during
                        ;; narrowing.
-                       (cl-assert (>= string-start last-string-end)
-                                  :show-args
-                                  "\
-Overlapping strings detected (start=%d, last-end=%d)")
-                       (goto-char string-start)
-                       (if (python-syntax-context 'paren)
-                           ;; Ended up inside a paren, roll again.
-                           (python-nav-end-of-statement t)
-                         ;; This is not inside a paren, move to the
-                         ;; end of this string.
-                         (goto-char (+ (point)
-                                       (python-syntax-count-quotes
-                                        (char-after (point)) (point))))
-                         (setq last-string-end
-                               (or (re-search-forward
-                                    (rx (syntax string-delimiter)) nil t)
-                                   (goto-char (point-max))))))
+                       (when (>= string-start last-string-end)
+                         (goto-char string-start)
+                         (if (python-syntax-context 'paren)
+                             ;; Ended up inside a paren, roll again.
+                             (python-nav-end-of-statement t)
+                           ;; This is not inside a paren, move to the
+                           ;; end of this string.
+                           (goto-char (+ (point)
+                                         (python-syntax-count-quotes
+                                          (char-after (point)) (point))))
+                           (setq last-string-end
+                                 (or (re-search-forward
+                                      (rx (syntax string-delimiter)) nil t)
+                                     (goto-char (point-max)))))))
                       ((python-syntax-context 'paren)
                        ;; The statement won't end before we've escaped
                        ;; at least one level of parenthesis.
@@ -2648,6 +2646,7 @@ banner and the initial prompt are received separately."
 (defun python-comint-postoutput-scroll-to-bottom (output)
   "Faster version of `comint-postoutput-scroll-to-bottom'.
 Avoids `recenter' calls until OUTPUT is completely sent."
+  (declare (obsolete nil "29.1")) ; Not used.
   (when (and (not (string= "" output))
              (python-shell-comint-end-of-output-p
               (ansi-color-filter-apply output)))
@@ -2953,11 +2952,11 @@ variable.
   (setq-local comint-output-filter-functions
               '(ansi-color-process-output
                 python-shell-comint-watch-for-first-prompt-output-filter
-                python-comint-postoutput-scroll-to-bottom
                 comint-watch-for-password-prompt))
   (setq-local comint-highlight-input nil)
   (setq-local compilation-error-regexp-alist
               python-shell-compilation-regexp-alist)
+  (setq-local scroll-conservatively 1)
   (add-hook 'completion-at-point-functions
             #'python-shell-completion-at-point nil 'local)
   (define-key inferior-python-mode-map "\t"
@@ -3294,22 +3293,25 @@ the python shell:
                               (goto-char start)
                               (python-util-forward-comment 1)
                               (current-indentation))))
-         (fillstr (and (not no-cookie)
-                       (not starts-at-point-min-p)
-                       (concat
-                        (format "# -*- coding: %s -*-\n" encoding)
-                        (make-string
-                         ;; Subtract 2 because of the coding cookie.
-                         (- (line-number-at-pos start) 2) ?\n)))))
+         (fillstr (cond (starts-at-point-min-p
+                         nil)
+                        ((not no-cookie)
+                         (concat
+                          (format "# -*- coding: %s -*-\n" encoding)
+                          (make-string
+                           ;; Subtract 2 because of the coding cookie.
+                           (- (line-number-at-pos start) 2) ?\n)))
+                        (t
+                         (make-string (- (line-number-at-pos start) 1) ?\n)))))
     (with-temp-buffer
       (python-mode)
       (when fillstr
         (insert fillstr))
-      (insert substring)
-      (goto-char (point-min))
       (when (not toplevel-p)
-        (insert "if True:")
+        (forward-line -1)
+        (insert "if True:\n")
         (delete-region (point) (line-end-position)))
+      (insert substring)
       (when nomain
         (let* ((if-name-main-start-end
                 (and nomain

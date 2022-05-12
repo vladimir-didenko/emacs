@@ -434,7 +434,9 @@ If `all', also restores frames that are partially offscreen onscreen.
 Note that checking of frame boundaries is only approximate.
 It can fail to reliably detect frames whose onscreen/offscreen state
 depends on a few pixels, especially near the right / bottom borders
-of the screen."
+of the screen.
+Text-mode frames are always considered onscreen, so this option has
+no effect on restoring frames in a non-GUI session."
   :type '(choice (const :tag "Only fully offscreen frames" t)
 		 (const :tag "Also partially offscreen frames" all)
 		 (const :tag "Do not force frames onscreen" nil))
@@ -645,6 +647,14 @@ Only valid during frame saving & restoring; intended for internal use.")
   "When the desktop file was last modified to the knowledge of this Emacs.
 Used to detect desktop file conflicts.")
 
+(defun desktop--get-file-modtime ()
+  "Get desktop file modtime, in list form for desktop format version 208."
+  (setq desktop-file-modtime
+	(time-convert (file-attribute-modification-time
+		       (file-attributes
+			(desktop-full-file-name)))
+		      'list)))
+
 (defvar desktop-var-serdes-funs
   (list (list
 	 'mark-ring
@@ -847,15 +857,16 @@ buffer, which is (in order):
     ,(buffer-name)
     ,major-mode
     ;; minor modes
-    ,(let (ret)
-       (dolist (minor-mode (mapcar #'car minor-mode-alist) ret)
-         (and (boundp minor-mode)
-              (symbol-value minor-mode)
-              (let* ((special (assq minor-mode desktop-minor-mode-table))
-                     (value (cond (special (cadr special))
-                                  ((get minor-mode :minor-mode-function))
-                                  ((functionp minor-mode) minor-mode))))
-                (when value (cl-pushnew value ret))))))
+    ,(seq-filter
+      (lambda (minor-mode)
+        ;; Just two sanity checks.
+        (and (boundp minor-mode)
+             (symbol-value minor-mode)
+             (let ((special
+                    (assq minor-mode desktop-minor-mode-table)))
+               (or (not special)
+                   (cadr special)))))
+      local-minor-modes)
     ;; point and mark, and read-only status
     ,(point)
     ,(list (mark t) mark-active)
@@ -1120,7 +1131,7 @@ no questions asked."
 			(file-attributes (desktop-full-file-name)))))
       (when
 	  (or (not new-modtime)		; nothing to overwrite
-	      (equal desktop-file-modtime new-modtime)
+	      (time-equal-p desktop-file-modtime new-modtime)
 	      (yes-or-no-p (if desktop-file-modtime
 			       (if (time-less-p desktop-file-modtime
 						new-modtime)
@@ -1220,9 +1231,7 @@ no questions asked."
 		(write-region (point-min) (point-max) (desktop-full-file-name) nil 'nomessage))
 	      (setq desktop-file-checksum checksum)
 	      ;; We remember when it was modified (which is presumably just now).
-	      (setq desktop-file-modtime (file-attribute-modification-time
-					  (file-attributes
-					   (desktop-full-file-name)))))))))))
+	      (desktop--get-file-modtime))))))))
 
 ;; ----------------------------------------------------------------------------
 ;;;###autoload
@@ -1244,7 +1253,11 @@ This function also sets `desktop-dirname' to nil."
 ;; ----------------------------------------------------------------------------
 (defun desktop-restoring-frameset-p ()
   "True if calling `desktop-restore-frameset' will actually restore it."
-  (and desktop-restore-frames desktop-saved-frameset (display-graphic-p) t))
+  (and desktop-restore-frames desktop-saved-frameset
+       ;; Don't restore frames when the selected frame is the daemon's
+       ;; initial frame.
+       (not (and (daemonp) (not (frame-parameter nil 'client))))
+       t))
 
 (defun desktop-restore-frameset ()
   "Restore the state of a set of frames.
@@ -1255,7 +1268,17 @@ being set (usually, by reading it from the desktop)."
 		      :reuse-frames (eq desktop-restore-reuses-frames t)
 		      :cleanup-frames (not (eq desktop-restore-reuses-frames 'keep))
 		      :force-display desktop-restore-in-current-display
-		      :force-onscreen desktop-restore-forces-onscreen)))
+		      :force-onscreen (and desktop-restore-forces-onscreen
+                                           (display-graphic-p)))
+    ;; When at least one restored frame contains a tab bar,
+    ;; enable `tab-bar-mode' that takes care about recalculating
+    ;; the correct values of the frame parameter `tab-bar-lines'
+    ;; (that depends on `tab-bar-show'), and also loads graphical buttons.
+    (when (seq-some
+           (lambda (frame)
+             (menu-bar-positive-p (frame-parameter frame 'tab-bar-lines)))
+           (frame-list))
+      (tab-bar-mode 1))))
 
 ;; Just to silence the byte compiler.
 ;; Dynamically bound in `desktop-read'.
@@ -1331,9 +1354,7 @@ It returns t if a desktop file was loaded, nil otherwise.
                           'window-configuration-change-hook)))
 	    (desktop-auto-save-disable)
 	    ;; Evaluate desktop buffer and remember when it was modified.
-	    (setq desktop-file-modtime (file-attribute-modification-time
-					(file-attributes
-					 (desktop-full-file-name))))
+	    (desktop--get-file-modtime)
 	    (load (desktop-full-file-name) t t t)
 	    ;; If it wasn't already, mark it as in-use, to bother other
 	    ;; desktop instances.

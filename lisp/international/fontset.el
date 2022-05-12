@@ -231,13 +231,16 @@
 	(chorasmian #x10FB0)
 	(elymaic #x10FE0)
 	(old-uyghur #x10F70)
+        (brahmi #x11013 #x11045 #x11052 #x11065)
+        (kaithi #x1108D #x110B0 #x110BD)
 	(mahajani #x11150)
+        (sharada #x11191 #x111B3 #x111CD)
 	(khojki #x11200)
 	(khudawadi #x112B0)
 	(grantha #x11305)
 	(newa #x11400)
-	(tirhuta #x11481)
-	(siddham #x11580)
+	(tirhuta #x11481 #x1148F #x114D0)
+	(siddham #x1158E #x115AF #x115D4)
 	(modi #x11600)
 	(takri #x11680)
 	(dogra #x11800)
@@ -770,6 +773,11 @@
                     chorasmian
 		    elymaic
                     old-uyghur
+                    brahmi
+                    kaithi
+                    sharada
+                    tirhuta
+                    siddham
 		    makasar
                     dives-akuru
 		    cuneiform

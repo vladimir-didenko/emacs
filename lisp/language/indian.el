@@ -126,6 +126,61 @@ environment."))
 South Indian language Malayalam is supported in this language environment."))
  '("Indian"))
 
+(set-language-info-alist
+ "Brahmi" '((charset unicode)
+	    (coding-system utf-8)
+	    (coding-priority utf-8)
+	    (input-method . "brahmi")
+            (sample-text . "Brahmi (𑀩𑁆𑀭𑀸𑀳𑁆𑀫𑀻)	𑀦𑀫𑀲𑁆𑀢𑁂")
+	    (documentation . "\
+The ancient Brahmi script is supported in this language environment."))
+ '("Indian"))                           ; Should we have an "Old" category?
+
+(set-language-info-alist
+ "Kaithi" '((charset unicode)
+            (coding-system utf-8)
+            (coding-priority utf-8)
+            (input-method . "kaithi")
+            (sample-text . "Kaithi (𑂍𑂶𑂟𑂲)        𑂩𑂰𑂧𑂩𑂰𑂧")
+            (documentation . "\
+Languages such as Awadhi, Bhojpuri, Magahi and Maithili
+which used the Kaithi script are supported in this language environment."))
+ '("Indian"))
+
+(set-language-info-alist
+ "Tirhuta" '((charset unicode)
+             (coding-system utf-8)
+             (coding-priority utf-8)
+             (input-method . "tirhuta")
+             (sample-text . "Tirhuta (𑒞𑒱𑒩𑒯𑒳𑒞𑒰)        𑒣𑓂𑒩𑒢𑒰𑒧")
+             (documentation . "\
+Maithili language and its script Tirhuta is supported in this
+language environment."))
+ '("Indian"))
+
+(set-language-info-alist
+ "Sharada" '((charset unicode)
+             (coding-system utf-8)
+             (coding-priority utf-8)
+             (input-method . "sharada")
+             (sample-text . "Sharada (𑆯𑆳𑆫𑆢𑆳)        𑆤𑆩𑆱𑇀𑆑𑆳𑆫")
+             (documentation . "\
+Kashmiri language and its script Sharada is supported in this
+language environment."))
+ '("Indian"))
+
+(set-language-info-alist
+ "Siddham" '((charset unicode)
+             (coding-system utf-8)
+             (coding-priority utf-8)
+             (input-method . "siddham")
+             (sample-text . "Siddham (𑖭𑖰𑖟𑖿𑖠𑖽)        𑖡𑖦𑖭𑖿𑖝𑖸")
+             (documentation . "\
+Sanskrit language and one of its script Siddham is supported
+in this language environment."))
+ '("Indian"))
+
+
 ;; Replace mnemonic characters in REGEXP according to TABLE.  TABLE is
 ;; an alist of (MNEMONIC-STRING . REPLACEMENT-STRING).
 
@@ -147,6 +202,8 @@ South Indian language Malayalam is supported in this language environment."))
 	   ("H" . "\u094D")		; HALANT
 	   ("s" . "[\u0951\u0952]")	; stress sign
 	   ("t" . "[\u0953\u0954]")	; accent
+           ("1" . "\u0967")             ; numeral 1
+           ("3" . "\u0969")             ; numeral 3
 	   ("N" . "\u200C")		; ZWNJ
 	   ("J" . "\u200D")		; ZWJ
 	   ("X" . "[\u0900-\u097F]"))))	; all coverage
@@ -158,6 +215,8 @@ South Indian language Malayalam is supported in this language environment."))
       "Cn?\\(?:J?HJ?Cn?\\)*\\(?:H[NJ]?\\|v*n?a?s?t?A?\\)\\|"
       ;; special consonant form, or
       "JHR\\|"
+      ;; vedic accents with numerals, or
+      "1ss?\\|3ss\\|s3ss\\|"
       ;; any other singleton characters
       "X")
      table))
@@ -168,14 +227,15 @@ South Indian language Malayalam is supported in this language environment."))
 	 '(("a" . "\u0981")		; SIGN CANDRABINDU
 	   ("A" . "[\u0982\u0983]")	; SIGN ANUSVARA .. VISARGA
 	   ("V" . "[\u0985-\u0994\u09E0\u09E1]") ; independent vowel
-	   ("C" . "[\u0995-\u09B9\u09DC-\u09DF\u09F1]") ; consonant
+	   ("C" . "[\u0995-\u09B9\u09DC-\u09DF\u09F0\u09F1]") ; consonant
 	   ("B" . "[\u09AC\u09AF\u09B0\u09F0]")		; BA, YA, RA
 	   ("R" . "[\u09B0\u09F0]")		; RA
 	   ("n" . "\u09BC")		; NUKTA
 	   ("v" . "[\u09BE-\u09CC\u09D7\u09E2\u09E3]") ; vowel sign
 	   ("H" . "\u09CD")		; HALANT
 	   ("T" . "\u09CE")		; KHANDA TA
-	   ("N" . "\u200C")		; ZWNJ
+           ("S" . "\u09FE")             ; SANDHI MARK
+           ("N" . "\u200C")		; ZWNJ
 	   ("J" . "\u200D")		; ZWJ
 	   ("X" . "[\u0980-\u09FF]"))))	; all coverage
     (indian-compose-regexp
@@ -183,7 +243,7 @@ South Indian language Malayalam is supported in this language environment."))
       ;; syllables with an independent vowel, or
       "\\(?:RH\\)?Vn?\\(?:J?HB\\)?v*n?a?A?\\|"
       ;; consonant-based syllables, or
-      "Cn?\\(?:J?HJ?Cn?\\)*\\(?:H[NJ]?\\|v*[NJ]?v?a?A?\\)\\|"
+      "Cn?\\(?:J?HJ?Cn?\\)*\\(?:H[NJ]?\\|v*[NJ]?v?a?A?S?\\)\\|"
       ;; another syllables with an independent vowel, or
       "\\(?:RH\\)?T\\|"
       ;; special consonant form, or
@@ -384,6 +444,134 @@ South Indian language Malayalam is supported in this language environment."))
 	      (list (vector (cdr slot) 0 #'font-shape-gstring))))))
    char-script-table))
 
-(provide 'indian)
+;; Brahmi composition rules
+(let ((consonant     "[\U00011013-\U00011034]")
+      (non-consonant "[^\U00011013-\U00011034\U00011046\U0001107F]")
+      (vowel         "[\U00011038-\U00011045]")
+      (numeral       "[\U00011052-\U00011065]")
+      (multiplier    "[\U00011064\U00011065]")
+      (virama        "\U00011046")
+      (number-joiner "\U0001107F"))
+  (set-char-table-range composition-function-table
+		        '(#x11046 . #x11046)
+                        (list (vector
+                               ;; Consonant conjuncts
+                               (concat consonant "\\(?:" virama consonant "\\)+"
+                                       vowel "?")
+                               1 'font-shape-gstring)
+                              (vector
+                               ;; Vowelless consonants
+                               (concat consonant virama non-consonant)
+                               1 'font-shape-gstring)))
+  (set-char-table-range composition-function-table
+                        '(#x1107F . #x1107F)
+                        (list (vector
+                               ;; Additive-multiplicative numerals
+                               (concat multiplier number-joiner numeral)
+                               1 'font-shape-gstring))))
 
+;; Kaithi composition rules
+(let ((consonant            "[\x1108D-\x110AF]")
+      (nukta                "\x110BA")
+      (independent-vowel    "[\x11083-\x1108C]")
+      (vowel                "[\x1108D-\x110C2]")
+      (nasal                "[\x11080\x11081]")
+      (virama               "\x110B9")
+      (number-sign          "\x110BD")
+      (number-sign-above    "\x110CD")
+      (numerals             "[\x966-\x96F]+")
+      (zwj                  "\x200D"))
+  (set-char-table-range composition-function-table
+                        '(#x110B0 . #x110BA)
+                        (list (vector
+                               ;; Consonant based syllables
+                               (concat consonant nukta "?\\(?:" virama zwj "?" consonant nukta "?\\)*\\(?:"
+                                       virama zwj "?\\|" vowel "*" nukta "?" nasal "?\\)")
+                               1 'font-shape-gstring)
+                              (vector
+                               ;; Nasal vowels
+                               (concat independent-vowel nasal "?")
+                               1 'font-shape-gstring)))
+  (set-char-table-range composition-function-table
+                        '(#x110BD . #x110BD)
+                        (list (vector
+                               ;; Number sign
+                               (concat number-sign numerals)
+                               0 'font-shape-gstring)))
+  (set-char-table-range composition-function-table
+                        '(#x110CD . #x110CD)
+                        (list (vector
+                               ;; Number sign above
+                               (concat number-sign-above numerals)
+                               0 'font-shape-gstring))))
+
+;; Tirhuta composition rules
+(let ((consonant            "[\x1148F-\x114AF]")
+      (nukta                "\x114C3")
+      (independent-vowel    "[\x11481-\x1148E]")
+      (vowel                "[\x114B0-\x114BE]")
+      (nasal                "[\x114BF\x114C0]")
+      (virama               "\x114C2"))
+  (set-char-table-range composition-function-table
+                        '(#x114B0 . #x114C3)
+                        (list (vector
+                               ;; Consonant based syllables
+                               (concat consonant nukta "?\\(?:" virama consonant nukta "?\\)*\\(?:"
+                                       virama "\\|" vowel "*" nukta "?" nasal "?\\)")
+                               1 'font-shape-gstring)
+                              (vector
+                               ;; Nasal vowels
+                               (concat independent-vowel nasal "?")
+                               1 'font-shape-gstring))))
+
+;; Sharada composition rules
+(let ((consonant              "[\x11191-\x111B2]")
+      (nukta                  "\x111CA")
+      (independent-vowel      "[\x11183-\x11190]")
+      (vowel                  "[\x111B3-\x111BF\x111CE]")
+      (vowel-modifier         "\x111CB")
+      (extra-short-vowel-mark "\x111CC")
+      (nasal                  "[\x11181\x11180\x111CF]")
+      (virama                 "\x111C0")
+      (fricatives             "[\x111C2\x111C3]")
+      (sandhi-mark            "\x111C9")
+      (misc                   "[^\x11180-\x111C0\x111C2\x111C3\x111C9-\x111CC\x111CE-\x111CF]"))
+  (set-char-table-range composition-function-table
+                        '(#x111B3 . #x111CF)
+                        (list (vector
+                               ;; Consonant based syllables
+                               (concat consonant nukta "?" vowel-modifier "?\\(?:" virama
+                                       consonant nukta "?" vowel-modifier "?\\)*\\(?:" virama
+                                       "\\|" vowel "*" nukta "?" nasal "?" extra-short-vowel-mark
+                                       "?" vowel-modifier "?" sandhi-mark "?+" misc "?\\)")
+                               1 'font-shape-gstring)
+                              (vector
+                               ;; Nasal vowels
+                               (concat independent-vowel nasal "?")
+                               1 'font-shape-gstring)
+                              (vector
+                               ;; Fricatives with Consonants
+                               (concat fricatives "?" consonant vowel "?")
+                               0 'font-shape-gstring))))
+
+;; Siddham composition rules
+(let ((consonant            "[\x1158E-\x115AE]")
+      (nukta                "\x115C0")
+      (independent-vowel    "[\x11580-\x1158D\x115D8-\x115DB]")
+      (vowel                "[\x115AF-\x115BB\x115DC\x115DD]")
+      (nasal                "[\x115BC\x115BD]")
+      (virama               "\x115BF"))
+  (set-char-table-range composition-function-table
+                        '(#x115AF . #x115C0)
+                        (list (vector
+                               ;; Consonant based syllables
+                               (concat consonant nukta "?\\(?:" virama consonant nukta "?\\)*\\(?:"
+                                       virama "\\|" vowel "*" nukta "?" nasal "?\\)")
+                               1 'font-shape-gstring)
+                              (vector
+                               ;; Nasal vowels
+                               (concat independent-vowel nasal "?")
+                               1 'font-shape-gstring))))
+
+(provide 'indian)
 ;;; indian.el ends here

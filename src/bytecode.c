@@ -325,7 +325,7 @@ If the third argument is incorrect, Emacs may crash.  */)
 	 the original unibyte form.  */
       bytestr = Fstring_as_unibyte (bytestr);
     }
-  Lisp_Object fun = CALLN (Fmake_byte_code, 0, bytestr, vector, maxdepth);
+  Lisp_Object fun = CALLN (Fmake_byte_code, Qnil, bytestr, vector, maxdepth);
   return exec_byte_code (fun, 0, 0, NULL);
 }
 
@@ -1209,7 +1209,7 @@ exec_byte_code (Lisp_Object fun, ptrdiff_t args_template,
 	    Lisp_Object v2 = POP;
 	    Lisp_Object v1 = TOP;
 	    if (FIXNUMP (v1) && FIXNUMP (v2))
-	      TOP = BASE_EQ(v1, v2) ? Qt : Qnil;
+	      TOP = BASE_EQ (v1, v2) ? Qt : Qnil;
 	    else
 	      TOP = arithcompare (v1, v2, ARITH_EQUAL);
 	    NEXT;

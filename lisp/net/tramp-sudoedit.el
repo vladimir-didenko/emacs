@@ -117,6 +117,7 @@ See `tramp-actions-before-shell' for more info.")
     ;; `get-file-buffer' performed by default handler.
     (insert-directory . tramp-handle-insert-directory)
     (insert-file-contents . tramp-handle-insert-file-contents)
+    (list-system-processes . ignore)
     (load . tramp-handle-load)
     (lock-file . tramp-handle-lock-file)
     (make-auto-save-file-name . tramp-handle-make-auto-save-file-name)
@@ -126,6 +127,7 @@ See `tramp-actions-before-shell' for more info.")
     (make-nearby-temp-file . tramp-handle-make-nearby-temp-file)
     (make-process . ignore)
     (make-symbolic-link . tramp-sudoedit-handle-make-symbolic-link)
+    (process-attributes . ignore)
     (process-file . ignore)
     (rename-file . tramp-sudoedit-handle-rename-file)
     (set-file-acl . tramp-sudoedit-handle-set-file-acl)
@@ -145,7 +147,7 @@ See `tramp-actions-before-shell' for more info.")
     (unlock-file . tramp-handle-unlock-file)
     (vc-registered . ignore)
     (verify-visited-file-modtime . tramp-handle-verify-visited-file-modtime)
-    (write-region . tramp-sudoedit-handle-write-region))
+    (write-region . tramp-handle-write-region))
   "Alist of handler functions for Tramp SUDOEDIT method.")
 
 ;; It must be a `defsubst' in order to push the whole code into
@@ -736,38 +738,6 @@ ID-FORMAT valid values are `string' and `integer'."
 	       (or uid (tramp-get-remote-uid v 'integer))
 	       (or gid (tramp-get-remote-gid v 'integer)))
        (tramp-unquote-file-local-name filename))))
-
-(defun tramp-sudoedit-handle-write-region
-  (start end filename &optional append visit lockname mustbenew)
-  "Like `write-region' for Tramp files."
-  (setq filename (expand-file-name filename))
-  (with-parsed-tramp-file-name filename nil
-    (let* ((uid (or (file-attribute-user-id (file-attributes filename 'integer))
-		    (tramp-get-remote-uid v 'integer)))
-	   (gid (or (file-attribute-group-id (file-attributes filename 'integer))
-		    (tramp-get-remote-gid v 'integer)))
-	   (flag (and (eq mustbenew 'excl) 'nofollow))
-	   (modes (tramp-default-file-modes filename flag))
-	   (attributes (file-extended-attributes filename)))
-      (prog1
-	  (tramp-handle-write-region
-	   start end filename append visit lockname mustbenew)
-
-	;; Set the ownership, modes and extended attributes.  This is
-	;; not performed in `tramp-handle-write-region'.
-	(unless (and (= (file-attribute-user-id
-			 (file-attributes filename 'integer))
-			uid)
-                     (= (file-attribute-group-id
-			 (file-attributes filename 'integer))
-			gid))
-          (tramp-set-file-uid-gid filename uid gid))
-	(tramp-compat-set-file-modes filename modes flag)
-	;; We ignore possible errors, because ACL strings could be
-	;; incompatible.
-	(when attributes
-	  (ignore-errors
-	    (set-file-extended-attributes filename attributes)))))))
 
 
 ;; Internal functions.

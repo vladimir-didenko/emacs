@@ -45,6 +45,8 @@
 
 (defvar haiku-initialized)
 (defvar haiku-signal-invalid-refs)
+(defvar haiku-drag-track-function)
+(defvar haiku-allowed-ui-colors)
 
 (defvar haiku-dnd-selection-value nil
   "The local value of the special `XdndSelection' selection.")
@@ -63,7 +65,8 @@ the type of DATA inside the system message (see the doc string of
 `haiku-drag-message' for more details).")
 
 (defvar haiku-normal-selection-encoders '(haiku-select-encode-xstring
-                                          haiku-select-encode-utf-8-string)
+                                          haiku-select-encode-utf-8-string
+                                          haiku-select-encode-file-name)
   "List of functions which act as selection encoders.
 These functions accept two arguments SELECTION and VALUE, and
 return an association appropriate for a serialized system
@@ -72,6 +75,33 @@ will be put into the system selection SELECTION.  VALUE is the
 content that is being put into the selection by
 `gui-set-selection'.  See the doc string of `haiku-drag-message'
 for more details on the structure of the associations.")
+
+;; This list has to be set correctly, otherwise Emacs will crash upon
+;; encountering an invalid color.
+(setq haiku-allowed-ui-colors
+      ["B_PANEL_BACKGROUND_COLOR" "B_MENU_BACKGROUND_COLOR"
+       "B_WINDOW_TAB_COLOR" "B_KEYBOARD_NAVIGATION_COLOR"
+       "B_DESKTOP_COLOR" "B_MENU_SELECTED_BACKGROUND_COLOR"
+       "B_MENU_ITEM_TEXT_COLOR" "B_MENU_SELECTED_ITEM_TEXT_COLOR"
+       "B_MENU_SELECTED_BORDER_COLOR" "B_PANEL_TEXT_COLOR"
+       "B_DOCUMENT_BACKGROUND_COLOR" "B_DOCUMENT_TEXT_COLOR"
+       "B_CONTROL_BACKGROUND_COLOR" "B_CONTROL_TEXT_COLOR"
+       "B_CONTROL_BORDER_COLOR" "B_CONTROL_HIGHLIGHT_COLOR"
+       "B_NAVIGATION_PULSE_COLOR" "B_SHINE_COLOR"
+       "B_SHADOW_COLOR" "B_TOOLTIP_BACKGROUND_COLOR"
+       "B_TOOLTIP_TEXT_COLOR" "B_WINDOW_TEXT_COLOR"
+       "B_WINDOW_INACTIVE_TAB_COLOR" "B_WINDOW_INACTIVE_TEXT_COLOR"
+       "B_WINDOW_BORDER_COLOR" "B_WINDOW_INACTIVE_BORDER_COLOR"
+       "B_CONTROL_MARK_COLOR" "B_LIST_BACKGROUND_COLOR"
+       "B_LIST_SELECTED_BACKGROUND_COLOR" "B_LIST_ITEM_TEXT_COLOR"
+       "B_LIST_SELECTED_ITEM_TEXT_COLOR" "B_SCROLL_BAR_THUMB_COLOR"
+       "B_LINK_TEXT_COLOR" "B_LINK_HOVER_COLOR"
+       "B_LINK_VISITED_COLOR" "B_LINK_ACTIVE_COLOR"
+       "B_STATUS_BAR_COLOR" "B_SUCCESS_COLOR" "B_FAILURE_COLOR"])
+
+(defvar x-colors)
+;; Also update `x-colors' to take that into account.
+(setq x-colors (append haiku-allowed-ui-colors x-colors))
 
 (defun haiku-selection-bounds (value)
   "Return bounds of selection value VALUE.
@@ -198,6 +228,13 @@ VALUE will be encoded as UTF-8 and stored under the type
     (list "text/plain" 1296649541
           (encode-coding-string value 'utf-8-unix))))
 
+(defun haiku-select-encode-file-name (_selection value)
+  "Convert VALUE to a system message association.
+This takes the file name of VALUE's buffer (if it is an overlay
+or a pair of markers) and turns it into a file system reference."
+  (when (setq value (xselect--selection-bounds value))
+    (list "refs" 'ref (buffer-file-name (nth 2 value)))))
+
 (cl-defmethod gui-backend-get-selection (type data-type
                                               &context (window-system haiku))
   (if (eq data-type 'TARGETS)
@@ -237,7 +274,8 @@ VALUE will be encoded as UTF-8 and stored under the type
                             (or dir (and default-filename
                                          (file-name-directory default-filename)))
                             mustmatch only-dir-p
-                            (file-name-nondirectory default-filename))
+                            (and default-filename
+                                 (file-name-nondirectory default-filename)))
     (error "x-file-dialog on a tty frame")))
 
 (defun haiku-drag-and-drop (event)
@@ -245,26 +283,31 @@ VALUE will be encoded as UTF-8 and stored under the type
   (interactive "e")
   (let* ((string (caddr event))
 	 (window (posn-window (event-start event))))
-    (cond
-     ((assoc "refs" string)
-      (with-selected-window window
-        (raise-frame)
-        (dolist (filename (cddr (assoc "refs" string)))
-          (dnd-handle-one-url window 'private
-                              (concat "file:" filename)))))
-     ((assoc "text/plain" string)
-      (with-selected-window window
-        (raise-frame)
-        (dolist (text (cddr (assoc "text/plain" string)))
-          (goto-char (posn-point (event-start event)))
-          (dnd-insert-text window 'private
-                           (if (multibyte-string-p text)
-                               text
-                             (decode-coding-string text 'undecided))))))
-     (t (message "Don't know how to drop any of: %s" (mapcar #'car string))))))
+    (if (eq string 'lambda) ; This means the mouse moved.
+        (dnd-handle-movement (event-start event))
+      (cond
+       ((assoc "refs" string)
+        (with-selected-window window
+          (raise-frame)
+          (dolist (filename (cddr (assoc "refs" string)))
+            (dnd-handle-one-url window 'private
+                                (concat "file:" filename)))))
+       ((assoc "text/plain" string)
+        (with-selected-window window
+          (raise-frame)
+          (dolist (text (cddr (assoc "text/plain" string)))
+            (goto-char (posn-point (event-start event)))
+            (dnd-insert-text window 'private
+                             (if (multibyte-string-p text)
+                                 text
+                               (decode-coding-string text 'undecided))))))
+       ((not (eq (cdr (assq 'type string))
+                 3003)) ; Type of the placeholder message Emacs uses
+                        ; to cancel a drop on C-g.
+        (message "Don't know how to drop any of: %s"
+                 (mapcar #'car string)))))))
 
-(define-key special-event-map [drag-n-drop]
-            'haiku-drag-and-drop)
+(define-key special-event-map [drag-n-drop] 'haiku-drag-and-drop)
 
 (defvaralias 'haiku-use-system-tooltips 'use-system-tooltips)
 
@@ -274,11 +317,27 @@ This is necessary because on Haiku `use-system-tooltip' doesn't
 take effect on menu items until the menu bar is updated again."
   (force-mode-line-update t))
 
+;; Note that `mouse-position' can't return the actual frame the mouse
+;; pointer is under, so this only works for the frame where the drop
+;; started.
+(defun haiku-dnd-drag-handler ()
+  "Handle mouse movement during drag-and-drop."
+  (let ((track-mouse 'drag-source)
+        (mouse-position (mouse-pixel-position)))
+    (when (car mouse-position)
+      (dnd-handle-movement (posn-at-x-y (cadr mouse-position)
+                                        (cddr mouse-position)
+                                        (car mouse-position)))
+      (redisplay))))
+
+(setq haiku-drag-track-function #'haiku-dnd-drag-handler)
+
 (defun x-begin-drag (targets &optional action frame _return-frame allow-current-frame)
   "SKIP: real doc in xfns.c."
   (unless haiku-dnd-selection-value
     (error "No local value for XdndSelection"))
   (let ((message nil)
+        (mouse-highlight nil)
         (haiku-signal-invalid-refs nil))
     (dolist (target targets)
       (let ((selection-converter (cdr (assoc (intern target)
@@ -307,6 +366,62 @@ take effect on menu items until the menu bar is updated again."
                           message allow-current-frame))))
 
 (add-variable-watcher 'use-system-tooltips #'haiku-use-system-tooltips-watcher)
+
+
+;;;; Session management.
+
+(declare-function haiku-save-session-reply "haikufns.c")
+
+(defun emacs-session-save ()
+  "SKIP: real doc in x-win.el."
+  (with-temp-buffer ; Saving sessions is not yet supported.
+    (condition-case nil
+	;; A return of t means cancel the shutdown.
+	(run-hook-with-args-until-success
+	 'emacs-save-session-functions)
+      (error t))))
+
+(defun handle-save-session (_event)
+  "SKIP: real doc in xsmfns.c."
+  (interactive "e")
+  (let ((cancel-shutdown t))
+    (unwind-protect
+        (setq cancel-shutdown (emacs-session-save))
+      (haiku-save-session-reply (not cancel-shutdown)))
+    ;; The App Server will kill Emacs after receiving the reply, but
+    ;; the Deskbar will not, so kill ourself here.
+    (unless cancel-shutdown (kill-emacs))))
+
+
+;;;; Cursors.
+
+;; We use the same interface as X, but the cursor numbers are
+;; different, and there are also less cursors.
+
+(defconst x-pointer-X-cursor 5)			; B_CURSOR_ID_CROSS_HAIR
+(defconst x-pointer-arrow 1)			; B_CURSOR_ID_SYSTEM_DEFAULT
+(defconst x-pointer-bottom-left-corner 22)	; B_CURSOR_ID_RESIZE_SOUTH_WEST
+(defconst x-pointer-bottom-right-corner 21)	; B_CURSOR_ID_RESIZE_SOUTH_EAST
+(defconst x-pointer-bottom-side 17)		; B_CURSOR_ID_RESIZE_SOUTH
+(defconst x-pointer-clock 14)			; B_CURSOR_ID_PROGRESS
+(defconst x-pointer-cross 5)			; B_CURSOR_ID_CROSS_HAIR
+(defconst x-pointer-cross-reverse 5)		; B_CURSOR_ID_CROSS_HAIR
+(defconst x-pointer-crosshair 5)		; B_CURSOR_ID_CROSS_HAIR
+(defconst x-pointer-diamond-cross 5)		; B_CURSOR_ID_CROSS_HAIR
+(defconst x-pointer-hand1 7)			; B_CURSOR_ID_GRAB
+(defconst x-pointer-hand2 8)			; B_CURSOR_ID_GRABBING
+(defconst x-pointer-left-side 18)		; B_CURSOR_ID_RESIZE_WEST
+(defconst x-pointer-right-side 16)		; B_CURSOR_ID_RESIZE_EAST
+(defconst x-pointer-sb-down-arrow 17)		; B_CURSOR_ID_RESIZE_SOUTH
+(defconst x-pointer-sb-left-arrow 18)		; B_CURSOR_ID_RESIZE_WEST
+(defconst x-pointer-sb-right-arrow 16)		; B_CURSOR_ID_RESIZE_EAST
+(defconst x-pointer-sb-up-arrow 16)		; B_CURSOR_ID_RESIZE_NORTH
+(defconst x-pointer-target 5)			; B_CURSOR_ID_CROSS_HAIR
+(defconst x-pointer-top-left-corner 20)		; B_CURSOR_ID_RESIZE_NORTH_WEST
+(defconst x-pointer-top-right-corner 19)	; B_CURSOR_ID_RESIZE_NORTH_EAST
+(defconst x-pointer-top-side 16)		; B_CURSOR_ID_RESIZE_NORTH
+(defconst x-pointer-watch 14)			; B_CURSOR_ID_PROGRESS
+(defconst x-pointer-invisible 12)		; B_CURSOR_ID_NO_CURSOR
 
 (provide 'haiku-win)
 (provide 'term/haiku-win)

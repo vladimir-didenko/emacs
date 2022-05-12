@@ -131,16 +131,17 @@
 (cl-defstruct (oclosure--class
                (:constructor nil)
                (:constructor oclosure--class-make
-                ( name docstring slots parents
+                ( name docstring slots parents allparents
                   &aux (index-table (oclosure--index-table slots))))
                (:include cl--class)
                (:copier nil))
-  "Metaclass for OClosure classes.")
+  "Metaclass for OClosure classes."
+  (allparents nil :read-only t :type (list-of symbol)))
 
 (setf (cl--find-class 'oclosure)
       (oclosure--class-make 'oclosure
                             "The root parent of all OClosure classes"
-                            nil nil))
+                            nil nil '(oclosure)))
 (defun oclosure--p (oclosure)
   (not (not (oclosure-type oclosure))))
 
@@ -222,7 +223,7 @@ list of slot properties.  The currently known properties are the following:
   `:mutable': A non-nil value mean the slot can be mutated.
   `:type': Specifies the type of the values expected to appear in the slot."
   (declare (doc-string 2) (indent 1))
-  (unless (stringp docstring)
+  (unless (or (stringp docstring) (null docstring))
     (push docstring slots)
     (setq docstring nil))
   (let* ((options (when (consp name)
@@ -248,8 +249,6 @@ list of slot properties.  The currently known properties are the following:
        ,(when options (macroexp-warn-and-return name
                        (format "Ignored options: %S" options)
                        nil))
-       (eval-when-compile (unless (fboundp 'oclosure--define)
-                            (load "oclosure.el")))
        (eval-and-compile
          (oclosure--define ',name ,docstring ',parent-names ',slots
                            ,@(when predicate `(:predicate ',predicate))))
@@ -285,7 +284,9 @@ list of slot properties.  The currently known properties are the following:
     (oclosure--class-make name docstring slotdescs
                           (if (cdr parent-names)
                               (oclosure--class-parents parent-class)
-                            (list parent-class)))))
+                            (list parent-class))
+                          (cons name (oclosure--class-allparents
+                                      parent-class)))))
 
 (defmacro oclosure--define-functions (name copiers)
   (let* ((class (cl--find-class name))
@@ -326,7 +327,10 @@ list of slot properties.  The currently known properties are the following:
                               &rest props)
   (let* ((class (oclosure--build-class name docstring parent-names slots))
          (pred (lambda (oclosure)
-                 (eq name (oclosure-type oclosure))))
+                 (let ((type (oclosure-type oclosure)))
+                   (when type
+                     (memq name (oclosure--class-allparents
+                                 (cl--find-class type)))))))
          (predname (or (plist-get props :predicate)
                        (intern (format "%s--internal-p" name)))))
     (setf (cl--find-class name) class)
@@ -501,11 +505,44 @@ This has 2 uses:
   "OClosure function to access a specific slot of an object."
   type slot)
 
+(defun oclosure--accessor-cl-print (object stream)
+  (princ "#f(accessor " stream)
+  (prin1 (accessor--type object) stream)
+  (princ "." stream)
+  (prin1 (accessor--slot object) stream)
+  (princ ")" stream))
+
+(defun oclosure--accessor-docstring (f)
+  ;; This would like to be a (cl-defmethod function-documentation ...)
+  ;; but for circularity reason the defmethod is in `simple.el'.
+  (format "Access slot \"%S\" of OBJ of type `%S'.\n\n(fn OBJ)"
+          (accessor--slot f) (accessor--type f)))
+
 (oclosure-define (oclosure-accessor
                   (:parent accessor)
                   (:copier oclosure--accessor-copy (type slot index)))
   "OClosure function to access a specific slot of an OClosure function."
   index)
+
+(defun oclosure--slot-index (oclosure slotname)
+  (gethash slotname
+           (oclosure--class-index-table
+            (cl--find-class (oclosure-type oclosure)))))
+
+(defun oclosure--slot-value (oclosure slotname)
+  (let ((class (cl--find-class (oclosure-type oclosure)))
+        (index (oclosure--slot-index oclosure slotname)))
+    (oclosure--get oclosure index
+                   (oclosure--slot-mutable-p
+                    (nth index (oclosure--class-slots class))))))
+
+(defun oclosure--set-slot-value (oclosure slotname value)
+  (let ((class (cl--find-class (oclosure-type oclosure)))
+        (index (oclosure--slot-index oclosure slotname)))
+    (unless (oclosure--slot-mutable-p
+             (nth index (oclosure--class-slots class)))
+      (signal 'setting-constant (list oclosure slotname)))
+    (oclosure--set value oclosure index)))
 
 (defconst oclosure--mut-getter-prototype
   (oclosure-lambda (oclosure-accessor (type) (slot) (index)) (oclosure)

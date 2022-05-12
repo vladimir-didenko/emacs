@@ -105,6 +105,7 @@
 ;; at toplevel, so the compiler doesn't know under which circumstances
 ;; they're defined.
 (declare-function gud-until  "gud" (arg))
+(declare-function gud-go     "gud" (arg))
 (declare-function gud-print  "gud" (arg))
 (declare-function gud-down   "gud" (arg))
 (declare-function gud-up     "gud" (arg))
@@ -284,8 +285,8 @@ Possible values are:
   :type '(choice
           (const :tag "Always restore" t)
           (const :tag "Don't restore" nil)
-          (const :tag "Depends on `gdb-show-main'" 'if-gdb-show-main)
-          (const :tag "Depends on `gdb-many-windows'" 'if-gdb-many-windows))
+          (const :tag "Depends on `gdb-show-main'" if-gdb-show-main)
+          (const :tag "Depends on `gdb-many-windows'" if-gdb-many-windows))
   :group 'gdb
   :version "28.1")
 
@@ -955,12 +956,16 @@ detailed description of this mode.
 			  (forward-char 2)
 			  (gud-call "-exec-until *%a" arg)))
 	   "\C-u" "Continue to current line or address.")
-  ;; TODO Why arg here?
   (gud-def
-   gud-go (gud-call (if gdb-active-process
-                        (gdb-gud-context-command "-exec-continue")
-                      "-exec-run") arg)
-   nil "Start or continue execution.")
+   gud-go (progn
+            (when arg
+              (gud-call (concat "-exec-arguments "
+                                (read-string "Arguments to exec-run: "))))
+            (gud-call
+             (if gdb-active-process
+                 (gdb-gud-context-command "-exec-continue")
+               "-exec-run")))
+   "C-v" "Start or continue execution.  Use a prefix to specify arguments.")
 
   ;; For debugging Emacs only.
   (gud-def gud-pp
@@ -1581,7 +1586,7 @@ Buffer mode and name are selected according to buffer type.
 
 If buffer has trigger associated with it in `gdb-buffer-rules',
 this trigger is subscribed to `gdb-buf-publisher' and called with
-'update argument."
+`update' argument."
   (or (gdb-get-buffer buffer-type thread)
       (let ((rules (assoc buffer-type gdb-buffer-rules))
             (new (generate-new-buffer "limbo")))

@@ -1075,6 +1075,9 @@ struct glyph_row
      right-to-left paragraph.  */
   bool_bf reversed_p : 1;
 
+  /* Whether or not a stipple was drawn in this row at some point.  */
+  bool_bf stipple_p : 1;
+
   /* Continuation lines width at the start of the row.  */
   int continuation_lines_width;
 
@@ -3460,6 +3463,8 @@ extern Lisp_Object handle_tab_bar_click (struct frame *,
 					 int, int, bool, int);
 extern void handle_tool_bar_click (struct frame *,
                                    int, int, bool, int);
+extern void handle_tool_bar_click_with_device (struct frame *, int, int, bool,
+					       int, Lisp_Object);
 
 extern void expose_frame (struct frame *, int, int, int, int);
 extern bool gui_intersect_rectangles (const Emacs_Rectangle *,

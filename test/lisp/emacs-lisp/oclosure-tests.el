@@ -22,12 +22,23 @@
 (require 'ert)
 (require 'oclosure)
 (require 'cl-lib)
+(require 'eieio)
 
 (oclosure-define (oclosure-test
                   (:copier oclosure-test-copy)
                   (:copier oclosure-test-copy1 (fst)))
   "Simple OClosure."
-  fst snd name)
+  fst snd (name :mutable t))
+
+(cl-defmethod oclosure-test-gen ((_x compiled-function)) "#<bytecode>")
+
+(cl-defmethod oclosure-test-gen ((_x cons)) "#<cons>")
+
+(cl-defmethod oclosure-test-gen ((_x oclosure))
+  (format "#<oclosure:%s>" (cl-call-next-method)))
+
+(cl-defmethod oclosure-test-gen ((_x oclosure-test))
+  (format "#<oclosure-test:%s>" (cl-call-next-method)))
 
 (ert-deftest oclosure-test ()
   (let* ((i 42)
@@ -51,6 +62,10 @@
     (should (equal (funcall (oclosure-test-copy1 ocl1 9)) '(9 2 44)))
     (should (cl-typep ocl1 'oclosure-test))
     (should (cl-typep ocl1 'oclosure))
+    (should (member (oclosure-test-gen ocl1)
+                    '("#<oclosure-test:#<oclosure:#<cons>>>"
+                      "#<oclosure-test:#<oclosure:#<bytecode>>>")))
+    (should (stringp (documentation #'oclosure-test--fst)))
     ))
 
 (ert-deftest oclosure-test-limits ()
@@ -91,6 +106,27 @@
       (and (eq 'error (car err))
            (string-match "Duplicate slot: fst$" (cadr err)))))))
 
+(cl-defmethod oclosure-interactive-form ((ot oclosure-test))
+  (let ((snd (oclosure-test--snd ot)))
+    (if (stringp snd) (list 'interactive snd))))
+
+(ert-deftest oclosure-test-interactive-form ()
+  (should (equal (interactive-form
+                  (oclosure-lambda (oclosure-test (fst 1) (snd 2)) () fst))
+                 nil))
+  (should (equal (interactive-form
+                  (oclosure-lambda (oclosure-test (fst 1) (snd 2)) ()
+                    (interactive "r")
+                    fst))
+                 '(interactive "r")))
+  (should (equal (interactive-form
+                  (oclosure-lambda (oclosure-test (fst 1) (snd "P")) () fst))
+                 '(interactive "P")))
+  (should (not (commandp
+                (oclosure-lambda (oclosure-test (fst 1) (snd 2)) () fst))))
+  (should (commandp
+           (oclosure-lambda (oclosure-test (fst 1) (snd "P")) () fst))))
+
 (oclosure-define (oclosure-test-mut
                   (:parent oclosure-test)
                   (:copier oclosure-test-mut-copy))
@@ -109,5 +145,21 @@
     (should (equal (oclosure-test-mut--mut f) 10))
     (should (equal (funcall f 5) 15))
     (should (equal (funcall f2 15) 68))))
+
+(ert-deftest oclosure-test-slot-value ()
+  (require 'eieio)
+  (let ((ocl (oclosure-lambda
+                 (oclosure-test (fst 'fst1) (snd 'snd1) (name 'name1))
+                 (x)
+               (list name fst snd x))))
+    (should (equal 'fst1  (slot-value ocl 'fst)))
+    (should (equal 'snd1  (slot-value ocl 'snd)))
+    (should (equal 'name1  (slot-value ocl 'name)))
+    (setf (slot-value ocl 'name) 'new-name)
+    (should (equal 'new-name (slot-value ocl 'name)))
+    (should (equal '(new-name fst1 snd1 arg) (funcall ocl 'arg)))
+    (should-error (setf (slot-value ocl 'fst) 'new-fst) :type 'setting-constant)
+    (should (equal 'fst1  (slot-value ocl 'fst)))
+    ))
 
 ;;; oclosure-tests.el ends here.

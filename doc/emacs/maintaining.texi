@@ -1055,15 +1055,6 @@ prefix argument is a repeat count.
 Move to the next revision entry.  A numeric prefix argument is a
 repeat count.
 
-@item P
-Move to the log of the previous file, if showing logs for a multi-file
-VC fileset.  Otherwise, just move to the beginning of the log.  A
-numeric prefix argument is a repeat count.
-
-@item N
-Move to the log of the next file, if showing logs for a multi-file VC
-fileset.  A numeric prefix argument is a repeat count.
-
 @item a
 Annotate the revision on the current line (@pxref{Old Revisions}).
 
@@ -1324,6 +1315,12 @@ If point is on a file entry, mark all files with the same status; if
 point is on a directory entry, mark all files in that directory tree
 (@code{vc-dir-mark-all-files}).  With a prefix argument, mark all
 listed files and directories.
+
+@findex vc-dir-mark-by-regexp
+@item %
+You can use this command to mark files by regexp
+(@code{vc-dir-mark-by-regexp}).  If given a prefix, unmark files
+instead.
 
 @item G
 Add the file under point to the list of files that the VC should
@@ -1728,6 +1725,7 @@ doesn't seem to belong to a recognizable project, these commands
 prompt you for the project directory.
 
 @findex project-find-file
+@vindex vc-directory-exclusion-list
   The command @kbd{C-x p f} (@code{project-find-file}) is a convenient
 way of visiting files (@pxref{Visiting}) that belong to the current
 project.  Unlike @kbd{C-x C-f}, this command doesn't require to type
@@ -1736,7 +1734,9 @@ base name (i.e., omit the leading directories).  In addition, the
 completion candidates considered by the command include only the files
 belonging to the current project, and nothing else.  If there's a file
 name at point, this command offers that file as the first element of
-the ``future history''.
+the ``future history''.  If given a prefix, include all files under
+the project root, except for @acronym{VCS} directories listed in
+@code{vc-directory-exclusion-list}.
 
 @findex project-find-regexp
   The command @kbd{C-x p g} (@code{project-find-regexp}) is similar to
@@ -1831,11 +1831,14 @@ buffers as candidates for completion.
 
 @findex project-kill-buffers
 @vindex project-kill-buffer-conditions
+@vindex project-kill-buffers-display-buffer-list
   When you finish working on the project, you may wish to kill all the
 buffers that belong to the project, to keep your Emacs session
 smaller.  The command @kbd{C-x p k} (@code{project-kill-buffers})
 accomplishes that: it kills all the buffers that belong to the current
-project that satisfy any of @code{project-kill-buffer-conditions}.
+project that satisfy any of @code{project-kill-buffer-conditions}.  If
+@code{project-kill-buffers-display-buffer-list} is non-@code{nil}, the
+buffers to be killed will be displayed first.
 
 @node Switching Projects
 @subsection Switching Projects

@@ -471,7 +471,7 @@ Return the compile-time value of FORM."
   (let ((print-symbols-bare t))         ; Possibly redundant binding.
     (setf form (macroexp-macroexpand form byte-compile-macro-environment)))
   (if (eq (car-safe form) 'progn)
-      (cons 'progn
+      (cons (car form)
             (mapcar (lambda (subform)
                       (byte-compile-recurse-toplevel
                        subform non-toplevel-case))
@@ -1009,13 +1009,22 @@ CONST2 may be evaluated multiple times."
 
     ;; Similarly, replace TAGs in all jump tables with the correct PC index.
     (dolist (hash-table byte-compile-jump-tables)
-      (maphash #'(lambda (value tag)
-                   (setq pc (cadr tag))
-                   ;; We don't need to split PC here, as it is stored as a lisp
-                   ;; object in the hash table (whereas other goto-* ops store
-                   ;; it within 2 bytes in the byte string).
-                   (puthash value pc hash-table))
-               hash-table))
+      (let (alist)
+        (maphash #'(lambda (value tag)
+                     (setq pc (cadr tag))
+                     ;; We don't need to split PC here, as it is stored as a
+                     ;; lisp object in the hash table (whereas other goto-*
+                     ;; ops store it within 2 bytes in the byte string).
+                     ;; De-position any symbols with position in `value'.
+                     ;; Since this may change the hash table key, we remove
+                     ;; the entry from the table and reinsert it outside the
+                     ;; scope of the `maphash'.
+                     (setq value (byte-run-strip-symbol-positions value))
+                     (push (cons value pc) alist)
+                     (remhash value hash-table))
+                 hash-table)
+        (dolist (elt alist)
+          (puthash (car elt) (cdr elt) hash-table))))
     (let ((bytecode (apply 'unibyte-string (nreverse bytes))))
       (when byte-native-compiling
         ;; Spill LAP for the native compiler here.
@@ -1047,8 +1056,14 @@ Each function's symbol gets added to `byte-compile-noruntime-functions'."
 		(dolist (s xs)
 		  (pcase s
 		    (`(defun . ,f)
-		     (unless (seq-some #'autoloadp
-		                       (get (cdr s) 'function-history))
+		     ;; If `f' has a history, it's presumably because
+		     ;; it was already defined beforehand (typically
+		     ;; as an autoload).  It could also be because it
+		     ;; was defined twice during `form', in which case
+		     ;; we arguably should add it to b-c-noruntime-functions,
+                     ;; but it's not clear it's worth the trouble
+		     ;; trying to recognize that case.
+		     (unless (get f 'function-history)
                        (push f byte-compile-noruntime-functions)))))))))))))
 
 (defun byte-compile-eval-before-compile (form)
@@ -1164,27 +1179,27 @@ message buffer `default-directory'."
         (f2 (file-relative-name file dir)))
     (if (< (length f2) (length f1)) f2 f1)))
 
-(defun byte-compile--first-symbol (form)
-  "Return the \"first\" symbol found in form, or 0 if there is none.
+(defun byte-compile--first-symbol-with-pos (form)
+  "Return the \"first\" symbol with position found in form, or 0 if none.
 Here, \"first\" is by a depth first search."
   (let (sym)
     (cond
-     ((symbolp form) form)
+     ((symbol-with-pos-p form) form)
      ((consp form)
-      (or (and (symbolp (setq sym (byte-compile--first-symbol (car form))))
+      (or (and (symbol-with-pos-p (setq sym (byte-compile--first-symbol-with-pos (car form))))
                sym)
-          (and (symbolp (setq sym (byte-compile--first-symbol (cdr form))))
+          (and (symbolp (setq sym (byte-compile--first-symbol-with-pos (cdr form))))
                sym)
           0))
-     ((and (vectorp form)
+     ((and (or (vectorp form) (recordp form))
            (> (length form) 0))
       (let ((i 0)
             (len (length form))
             elt)
         (catch 'sym
           (while (< i len)
-            (when (symbolp
-                   (setq elt (byte-compile--first-symbol (aref form i))))
+            (when (symbol-with-pos-p
+                   (setq elt (byte-compile--first-symbol-with-pos (aref form i))))
               (throw 'sym elt))
             (setq i (1+ i)))
           0)))
@@ -1195,7 +1210,7 @@ Here, \"first\" is by a depth first search."
 Return nil if such is not found."
   (catch 'offset
     (dolist (form byte-compile-form-stack)
-      (let ((s (byte-compile--first-symbol form)))
+      (let ((s (byte-compile--first-symbol-with-pos form)))
         (if (symbol-with-pos-p s)
             (throw 'offset (symbol-with-pos-pos s)))))))
 
@@ -1430,7 +1445,7 @@ when printing the error message."
   (and (eq 'macro (car-safe f)) (setq f (cdr f)))
   ;; Advice wrappers have "catch all" args, so fetch the actual underlying
   ;; function to find the real arguments.
-  (while (advice--p f) (setq f (advice--cdr f)))
+  (setq f (advice--cd*r f))
   (if (eq (car-safe f) 'declared)
       (byte-compile-arglist-signature (nth 1 f))
     (condition-case nil
@@ -1553,15 +1568,39 @@ extra args."
 (dolist (elt '(format message error))
   (put elt 'byte-compile-format-like t))
 
+(defun byte-compile--suspicious-defcustom-choice (type)
+  "Say whether defcustom TYPE looks odd."
+  ;; Check whether there's anything like (choice (const :tag "foo" ;; 'bar)).
+  ;; We don't actually follow the syntax for defcustom types, but this
+  ;; should be good enough.
+  (catch 'found
+    (if (and (consp type)
+             (proper-list-p type))
+        (if (memq (car type) '(const other))
+            (when (assq 'quote type)
+              (throw 'found t))
+          (when (memq t (mapcar #'byte-compile--suspicious-defcustom-choice
+                                type))
+            (throw 'found t)))
+      nil)))
+
 ;; Warn if a custom definition fails to specify :group, or :type.
 (defun byte-compile-nogroup-warn (form)
   (let ((keyword-args (cdr (cdr (cdr (cdr form)))))
 	(name (cadr form)))
     (when (eq (car-safe name) 'quote)
-      (or (not (eq (car form) 'custom-declare-variable))
-	  (plist-get keyword-args :type)
-	  (byte-compile-warn-x (cadr name)
-	   "defcustom for `%s' fails to specify type" (cadr name)))
+      (when (eq (car form) 'custom-declare-variable)
+        (let ((type (plist-get keyword-args :type)))
+	  (cond
+           ((not type)
+	    (byte-compile-warn-x (cadr name)
+	                         "defcustom for `%s' fails to specify type"
+                                 (cadr name)))
+           ((byte-compile--suspicious-defcustom-choice type)
+	    (byte-compile-warn-x
+             (cadr name)
+	     "defcustom for `%s' has syntactically odd type `%s'"
+             (cadr name) type)))))
       (if (and (memq (car form) '(custom-declare-face custom-declare-variable))
 	       byte-compile-current-group)
 	  ;; The group will be provided implicitly.
@@ -3075,7 +3114,7 @@ lambda-expression."
                        ;; which may include "calls" to
                        ;; internal-make-closure (Bug#29988).
                        lexical-binding)
-                   (setq int `(interactive ,newform)))))
+                   (setq int `(,(car int) ,newform)))))
             ((cdr int)                  ; Invalid (interactive . something).
 	     (byte-compile-warn-x int "malformed interactive spec: %s"
 				  int))))

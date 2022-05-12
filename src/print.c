@@ -768,6 +768,16 @@ is used instead.  */)
   return object;
 }
 
+DEFUN ("flush-standard-output", Fflush_standard_output, Sflush_standard_output,
+       0, 0, 0,
+       doc: /* Flush standard-output.
+This can be useful after using `princ' and the like in scripts.  */)
+  (void)
+{
+  fflush (stdout);
+  return Qnil;
+}
+
 DEFUN ("external-debugging-output", Fexternal_debugging_output, Sexternal_debugging_output, 1, 1, 0,
        doc: /* Write CHARACTER to stderr.
 You can call `print' while debugging emacs, and pass it this function
@@ -944,7 +954,14 @@ print_error_message (Lisp_Object data, Lisp_Object stream, const char *context,
       errmsg = Fget (errname, Qerror_message);
       /* During loadup 'substitute-command-keys' might not be available.  */
       if (!NILP (Ffboundp (Qsubstitute_command_keys)))
-	errmsg = call1 (Qsubstitute_command_keys, errmsg);
+	{
+	  /* `substitute-command-keys' may bug out, which would lead
+	     to infinite recursion when we're called from
+	     skip_debugger, so ignore errors.  */
+	  Lisp_Object subs = safe_call1 (Qsubstitute_command_keys, errmsg);
+	  if (!NILP (subs))
+	    errmsg = subs;
+	}
 
       file_error = Fmemq (Qfile_error, error_conditions);
     }
@@ -1691,10 +1708,10 @@ print_vectorlike (Lisp_Object obj, Lisp_Object printcharfun, bool escapeflag,
 
     case PVEC_USER_PTR:
       {
+	void *finalizer = XUSER_PTR (obj)->finalizer;
 	print_c_string ("#<user-ptr ", printcharfun);
 	int i = sprintf (buf, "ptr=%p finalizer=%p",
-			 XUSER_PTR (obj)->p,
-			 XUSER_PTR (obj)->finalizer);
+			 XUSER_PTR (obj)->p, finalizer);
 	strout (buf, i, i, printcharfun);
 	printchar ('>', printcharfun);
       }
@@ -1865,7 +1882,8 @@ print_vectorlike (Lisp_Object obj, Lisp_Object printcharfun, bool escapeflag,
 	print_string (XTHREAD (obj)->name, printcharfun);
       else
 	{
-	  int len = sprintf (buf, "%p", XTHREAD (obj));
+	  void *p = XTHREAD (obj);
+	  int len = sprintf (buf, "%p", p);
 	  strout (buf, len, len, printcharfun);
 	}
       printchar ('>', printcharfun);
@@ -1877,7 +1895,8 @@ print_vectorlike (Lisp_Object obj, Lisp_Object printcharfun, bool escapeflag,
 	print_string (XMUTEX (obj)->name, printcharfun);
       else
 	{
-	  int len = sprintf (buf, "%p", XMUTEX (obj));
+	  void *p = XMUTEX (obj);
+	  int len = sprintf (buf, "%p", p);
 	  strout (buf, len, len, printcharfun);
 	}
       printchar ('>', printcharfun);
@@ -1889,7 +1908,8 @@ print_vectorlike (Lisp_Object obj, Lisp_Object printcharfun, bool escapeflag,
 	print_string (XCONDVAR (obj)->name, printcharfun);
       else
 	{
-	  int len = sprintf (buf, "%p", XCONDVAR (obj));
+	  void *p = XCONDVAR (obj);
+	  int len = sprintf (buf, "%p", p);
 	  strout (buf, len, len, printcharfun);
 	}
       printchar ('>', printcharfun);
@@ -2549,4 +2569,6 @@ printed.  If the function returns anything else, the object will not
 be printed.  */);
   Vprint_unreadable_function = Qnil;
   DEFSYM (Qprint_unreadable_function, "print-unreadable-function");
+
+  defsubr (&Sflush_standard_output);
 }

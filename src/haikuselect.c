@@ -27,8 +27,28 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include <stdlib.h>
 
-bool haiku_dnd_in_progress;
+/* The frame that is currently the source of a drag-and-drop
+   operation, or NULL if none is in progress.  The reason for this
+   variable is to prevent it from being deleted, which really breaks
+   the nested event loop inside be_drag_message.  */
+struct frame *haiku_dnd_frame;
+
 static void haiku_lisp_to_message (Lisp_Object, void *);
+
+static enum haiku_clipboard
+haiku_get_clipboard_name (Lisp_Object clipboard)
+{
+  if (EQ (clipboard, QPRIMARY))
+    return CLIPBOARD_PRIMARY;
+
+  if (EQ (clipboard, QSECONDARY))
+    return CLIPBOARD_SECONDARY;
+
+  if (EQ (clipboard, QCLIPBOARD))
+    return CLIPBOARD_CLIPBOARD;
+
+  signal_error ("Invalid clipboard", clipboard);
+}
 
 DEFUN ("haiku-selection-data", Fhaiku_selection_data, Shaiku_selection_data,
        2, 2, 0,
@@ -48,22 +68,15 @@ message in the format accepted by `haiku-drag-message', which see.  */)
   int rc;
 
   CHECK_SYMBOL (clipboard);
-
-  if (!EQ (clipboard, QPRIMARY) && !EQ (clipboard, QSECONDARY)
-      && !EQ (clipboard, QCLIPBOARD))
-    signal_error ("Invalid clipboard", clipboard);
+  clipboard_name = haiku_get_clipboard_name (clipboard);
 
   if (!NILP (name))
     {
       CHECK_STRING (name);
 
       block_input ();
-      if (EQ (clipboard, QPRIMARY))
-	dat = BClipboard_find_primary_selection_data (SSDATA (name), &len);
-      else if (EQ (clipboard, QSECONDARY))
-	dat = BClipboard_find_secondary_selection_data (SSDATA (name), &len);
-      else
-	dat = BClipboard_find_system_data (SSDATA (name), &len);
+      dat = be_find_clipboard_data (clipboard_name,
+				    SSDATA (name), &len);
       unblock_input ();
 
       if (!dat)
@@ -78,18 +91,11 @@ message in the format accepted by `haiku-drag-message', which see.  */)
 			  Qforeign_selection, Qt, str);
 
       block_input ();
-      BClipboard_free_data (dat);
+      free (dat);
       unblock_input ();
     }
   else
     {
-      if (EQ (clipboard, QPRIMARY))
-	clipboard_name = CLIPBOARD_PRIMARY;
-      else if (EQ (clipboard, QSECONDARY))
-	clipboard_name = CLIPBOARD_SECONDARY;
-      else
-	clipboard_name = CLIPBOARD_CLIPBOARD;
-
       block_input ();
       rc = be_lock_clipboard_message (clipboard_name, &message, false);
       unblock_input ();
@@ -134,17 +140,11 @@ In that case, the arguments after NAME are ignored.  */)
   int rc;
   void *message;
 
+  CHECK_SYMBOL (clipboard);
+  clipboard_name = haiku_get_clipboard_name (clipboard);
+
   if (CONSP (name) || NILP (name))
     {
-      if (EQ (clipboard, QPRIMARY))
-	clipboard_name = CLIPBOARD_PRIMARY;
-      else if (EQ (clipboard, QSECONDARY))
-	clipboard_name = CLIPBOARD_SECONDARY;
-      else if (EQ (clipboard, QCLIPBOARD))
-	clipboard_name = CLIPBOARD_CLIPBOARD;
-      else
-	signal_error ("Invalid clipboard", clipboard);
-
       rc = be_lock_clipboard_message (clipboard_name,
 				      &message, true);
 
@@ -159,7 +159,6 @@ In that case, the arguments after NAME are ignored.  */)
       return unbind_to (ref, Qnil);
     }
 
-  CHECK_SYMBOL (clipboard);
   CHECK_STRING (name);
   if (!NILP (data))
     CHECK_STRING (data);
@@ -167,20 +166,8 @@ In that case, the arguments after NAME are ignored.  */)
   dat = !NILP (data) ? SSDATA (data) : NULL;
   len = !NILP (data) ? SBYTES (data) : 0;
 
-  if (EQ (clipboard, QPRIMARY))
-    BClipboard_set_primary_selection_data (SSDATA (name), dat, len,
-					   !NILP (clear));
-  else if (EQ (clipboard, QSECONDARY))
-    BClipboard_set_secondary_selection_data (SSDATA (name), dat, len,
-					     !NILP (clear));
-  else if (EQ (clipboard, QCLIPBOARD))
-    BClipboard_set_system_data (SSDATA (name), dat, len, !NILP (clear));
-  else
-    {
-      unblock_input ();
-      signal_error ("Bad clipboard", clipboard);
-    }
-
+  be_set_clipboard_data (clipboard_name, SSDATA (name), dat, len,
+			 !NILP (clear));
   return Qnil;
 }
 
@@ -188,17 +175,10 @@ DEFUN ("haiku-selection-owner-p", Fhaiku_selection_owner_p, Shaiku_selection_own
        0, 1, 0,
        doc: /* Whether the current Emacs process owns the given SELECTION.
 The arg should be the name of the selection in question, typically one
-of the symbols `PRIMARY', `SECONDARY', or `CLIPBOARD'.  For
-convenience, the symbol nil is the same as `PRIMARY', and t is the
-same as `SECONDARY'.  */)
+of the symbols `PRIMARY', `SECONDARY', or `CLIPBOARD'.  */)
   (Lisp_Object selection)
 {
   bool value;
-
-  if (NILP (selection))
-    selection = QPRIMARY;
-  else if (EQ (selection, Qt))
-    selection = QSECONDARY;
 
   block_input ();
   if (EQ (selection, QPRIMARY))
@@ -270,7 +250,7 @@ haiku_message_to_lisp (void *message)
 	      if (!pbuf)
 		memory_full (SIZE_MAX);
 
-	      t1 = build_string (pbuf);
+	      t1 = DECODE_FILE (build_string (pbuf));
 
 	      free (pbuf);
 	      break;
@@ -521,7 +501,8 @@ haiku_lisp_to_message (Lisp_Object obj, void *message)
 	    case 'RREF':
 	      CHECK_STRING (data);
 
-	      if (be_add_refs_data (message, SSDATA (name), SSDATA (data))
+	      if (be_add_refs_data (message, SSDATA (name),
+				    SSDATA (ENCODE_FILE (data)))
 		  && haiku_signal_invalid_refs)
 		signal_error ("Invalid file name", data);
 	      break;
@@ -727,8 +708,8 @@ haiku_should_quit_drag (void)
 static void
 haiku_unwind_drag_message (void *message)
 {
+  haiku_dnd_frame = NULL;
   BMessage_delete (message);
-  haiku_dnd_in_progress = false;
 }
 
 DEFUN ("haiku-drag-message", Fhaiku_drag_message, Shaiku_drag_message,
@@ -776,7 +757,7 @@ ignored if it is dropped on top of FRAME.  */)
   if (!FRAME_VISIBLE_P (f))
     error ("Frame is invisible");
 
-  haiku_dnd_in_progress = true;
+  haiku_dnd_frame = f;
   be_message = be_create_simple_message ();
 
   record_unwind_protect_ptr (haiku_unwind_drag_message, be_message);
@@ -794,6 +775,110 @@ ignored if it is dropped on top of FRAME.  */)
   return unbind_to (idx, Qnil);
 }
 
+DEFUN ("haiku-roster-launch", Fhaiku_roster_launch, Shaiku_roster_launch,
+       2, 2, 0,
+       doc: /* Launch an application associated with FILE-OR-TYPE.
+Return the process ID of the application, or nil if no application was
+launched.
+
+FILE-OR-TYPE can either be a string denoting a MIME type, or a list
+with one argument FILE, denoting a file whose associated application
+will be launched.
+
+ARGS can either be a vector of strings containing the arguments that
+will be passed to the application, or a system message in the form
+accepted by `haiku-drag-message' that will be sent to the application
+after it starts.  */)
+  (Lisp_Object file_or_type, Lisp_Object args)
+{
+  char **cargs;
+  char *type, *file;
+  team_id team_id;
+  status_t rc;
+  ptrdiff_t i, nargs;
+  Lisp_Object tem, canonical;
+  void *message;
+  specpdl_ref depth;
+
+  type = NULL;
+  file = NULL;
+  cargs = NULL;
+  message = NULL;
+  nargs = 0;
+  depth = SPECPDL_INDEX ();
+
+  USE_SAFE_ALLOCA;
+
+  if (STRINGP (file_or_type))
+    SAFE_ALLOCA_STRING (type, file_or_type);
+  else
+    {
+      CHECK_LIST (file_or_type);
+      tem = XCAR (file_or_type);
+      canonical = Fexpand_file_name (tem, Qnil);
+
+      CHECK_STRING (tem);
+      SAFE_ALLOCA_STRING (file, ENCODE_FILE (canonical));
+      CHECK_LIST_END (XCDR (file_or_type), file_or_type);
+    }
+
+  if (VECTORP (args))
+    {
+      nargs = ASIZE (args);
+      cargs = SAFE_ALLOCA (nargs * sizeof *cargs);
+
+      for (i = 0; i < nargs; ++i)
+	{
+	  tem = AREF (args, i);
+	  CHECK_STRING (tem);
+	  maybe_quit ();
+
+	  cargs[i] = SAFE_ALLOCA (SBYTES (tem) + 1);
+	  memcpy (cargs[i], SDATA (tem), SBYTES (tem) + 1);
+	}
+    }
+  else
+    {
+      message = be_create_simple_message ();
+
+      record_unwind_protect_ptr (BMessage_delete, message);
+      haiku_lisp_to_message (args, message);
+    }
+
+  block_input ();
+  rc = be_roster_launch (type, file, cargs, nargs, message,
+			 &team_id);
+  unblock_input ();
+
+  if (rc == B_OK)
+    return SAFE_FREE_UNBIND_TO (depth,
+				make_uint (team_id));
+
+  return SAFE_FREE_UNBIND_TO (depth, Qnil);
+}
+
+static Lisp_Object
+haiku_note_drag_motion_1 (void *data)
+{
+  if (!NILP (Vhaiku_drag_track_function))
+    return call0 (Vhaiku_drag_track_function);
+
+  return Qnil;
+}
+
+static Lisp_Object
+haiku_note_drag_motion_2 (enum nonlocal_exit exit, Lisp_Object error)
+{
+  return Qnil;
+}
+
+void
+haiku_note_drag_motion (void)
+{
+  internal_catch_all (haiku_note_drag_motion_1, NULL,
+		      haiku_note_drag_motion_2);
+}
+
 void
 syms_of_haikuselect (void)
 {
@@ -802,6 +887,12 @@ syms_of_haikuselect (void)
 Otherwise, an error will be signalled if adding a file reference to a
 system message failed.  */);
   haiku_signal_invalid_refs = true;
+
+  DEFVAR_LISP ("haiku-drag-track-function", Vhaiku_drag_track_function,
+     doc: /* If non-nil, a function to call upon mouse movement while dragging a message.
+The function is called without any arguments.  `mouse-position' can be
+used to retrieve the current position of the mouse.  */);
+  Vhaiku_drag_track_function = Qnil;
 
   DEFSYM (QSECONDARY, "SECONDARY");
   DEFSYM (QCLIPBOARD, "CLIPBOARD");
@@ -827,4 +918,7 @@ system message failed.  */);
   defsubr (&Shaiku_selection_put);
   defsubr (&Shaiku_selection_owner_p);
   defsubr (&Shaiku_drag_message);
+  defsubr (&Shaiku_roster_launch);
+
+  haiku_dnd_frame = NULL;
 }

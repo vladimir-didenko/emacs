@@ -951,7 +951,10 @@ Faces `compilation-error-face', `compilation-warning-face',
 
 (defcustom compilation-auto-jump-to-first-error nil
   "If non-nil, automatically jump to the first error during compilation."
-  :type 'boolean
+  :type '(choice (const :tag "Never" nil)
+                 (const :tag "Always" t)
+                 (const :tag "If location known" if-location-known)
+                 (const :tag "First known location" first-known))
   :version "23.1")
 
 (defvar-local compilation-auto-jump-to-next nil
@@ -1182,14 +1185,39 @@ POS and RES.")
 	      l2
 	    (setcdr l1 (cons (list ,key) l2)))))))
 
+(defun compilation--file-known-p ()
+  "Say whether the file under point can be found."
+  (when-let* ((msg (get-text-property (point) 'compilation-message))
+              (loc (compilation--message->loc msg))
+              (elem (compilation-find-file-1
+                     (point-marker)
+                     (caar (compilation--loc->file-struct loc))
+                     (cadr (car (compilation--loc->file-struct loc)))
+                     (compilation--file-struct->formats
+                      (compilation--loc->file-struct loc)))))
+    (car elem)))
+
 (defun compilation-auto-jump (buffer pos)
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (goto-char pos)
       (let ((win (get-buffer-window buffer 0)))
         (if win (set-window-point win pos)))
-      (if compilation-auto-jump-to-first-error
-	  (compile-goto-error)))))
+      (when compilation-auto-jump-to-first-error
+        (cl-case compilation-auto-jump-to-first-error
+          ('if-location-known
+           (when (compilation--file-known-p)
+	     (compile-goto-error)))
+          ('first-known
+           (let (match)
+             (while (and (not (compilation--file-known-p))
+                         (setq match (text-property-search-forward
+                                      'compilation-message nil nil t)))
+               (goto-char (prop-match-beginning match))))
+           (when (compilation--file-known-p)
+	     (compile-goto-error)))
+          (otherwise
+           (compile-goto-error)))))))
 
 ;; This function is the central driver, called when font-locking to gather
 ;; all information needed to later jump to corresponding source code.
@@ -1520,7 +1548,8 @@ to `compilation-error-regexp-alist' if RULES is nil."
         ;; FIXME-omake: Doing it here seems wrong, at least it should depend on
         ;; whether or not omake's own error messages are recognized.
         (cond
-         ((not omake-included) nil)
+         ((or (not omake-included) (not pat))
+          nil)
          ((string-match "\\`\\([^^]\\|\\^\\( \\*\\|\\[\\)\\)" pat)
           nil) ;; Not anchored or anchored but already allows empty spaces.
          (t (setq pat (concat "^\\(?:      \\)?" (substring pat 1)))))
@@ -1539,7 +1568,7 @@ to `compilation-error-regexp-alist' if RULES is nil."
           (error "HYPERLINK should be an integer: %s" (nth 5 item)))
 
         (goto-char start)
-        (while (re-search-forward pat end t)
+        (while (and pat (re-search-forward pat end t))
           (when (setq props (compilation-error-properties
                              file line end-line col end-col
                              (or type 2) fmt rule))
@@ -1751,6 +1780,13 @@ Otherwise, construct a buffer name from NAME-OF-MODE."
 If nil, ask to kill it."
   :type 'boolean
   :version "24.3")
+
+(defcustom compilation-max-output-line-length 400
+  "Output lines that are longer than this value will be hidden.
+If nil, don't hide anything."
+  :type '(choice (const :tag "Hide nothing" nil)
+                 integer)
+  :version "29.1")
 
 (defun compilation--update-in-progress-mode-line ()
   ;; `compilation-in-progress' affects the mode-line of all
@@ -2426,19 +2462,56 @@ and runs `compilation-filter-hook'."
               ;; We used to use `insert-before-markers', so that windows with
               ;; point at `process-mark' scroll along with the output, but we
               ;; now use window-point-insertion-type instead.
-              (insert string)
+              (if (not compilation-max-output-line-length)
+                  (insert string)
+                (dolist (line (string-lines string nil t))
+                  (compilation--insert-abbreviated-line
+                   line compilation-max-output-line-length)))
               (unless comint-inhibit-carriage-motion
                 (comint-carriage-motion (process-mark proc) (point)))
               (set-marker (process-mark proc) (point))
               ;; Update the number of errors in compilation-mode-line-errors
               (compilation--ensure-parse (point))
-              ;; (setq-local compilation-buffer-modtime (current-time))
               (run-hooks 'compilation-filter-hook))
 	  (goto-char pos)
           (narrow-to-region min max)
 	  (set-marker pos nil)
 	  (set-marker min nil)
 	  (set-marker max nil))))))
+
+(defun compilation--insert-abbreviated-line (string width)
+  (if (and (> (current-column) 0)
+           (get-text-property (1- (point)) 'button))
+      ;; We already have an abbreviation; just add the string to it.
+      (let ((beg (point)))
+        (insert string)
+        (add-text-properties
+         beg
+         ;; Don't make the final newline invisible.
+         (if (= (aref string (1- (length string))) ?\n)
+             (1- (point))
+           (point))
+         (text-properties-at (1- beg))))
+    (insert string)
+    ;; If we exceeded the limit, hide the last portion of the line.
+    (when (> (current-column) width)
+      (let ((start (save-excursion
+                     (move-to-column width)
+                     (point))))
+        (buttonize-region
+         start (point)
+         (lambda (start)
+           (let ((inhibit-read-only t))
+             (remove-text-properties start (save-excursion
+                                             (goto-char start)
+                                             (line-end-position))
+                                     (text-properties-at start)))))
+        (put-text-property
+         start (if (= (aref string (1- (length string))) ?\n)
+                   ;; Don't hide the final newline.
+                   (1- (point))
+                 (point))
+         'display (if (char-displayable-p ?…) "[…]" "[...]"))))))
 
 (defsubst compilation-buffer-internal-p ()
   "Test if inside a compilation buffer."
@@ -2929,19 +3002,7 @@ and overlay is highlighted between MK and END-MK."
   (remove-hook 'pre-command-hook
 	       #'compilation-goto-locus-delete-o))
 
-(defun compilation-find-file (marker filename directory &rest formats)
-  "Find a buffer for file FILENAME.
-If FILENAME is not found at all, ask the user where to find it.
-Pop up the buffer containing MARKER and scroll to MARKER if we ask
-the user where to find the file.
-Search the directories in `compilation-search-path'.
-A nil in `compilation-search-path' means to try the
-\"current\" directory, which is passed in DIRECTORY.
-If DIRECTORY is relative, it is combined with `default-directory'.
-If DIRECTORY is nil, that means use `default-directory'.
-FORMATS, if given, is a list of formats to reformat FILENAME when
-looking for it: for each element FMT in FORMATS, this function
-attempts to find a file whose name is produced by (format FMT FILENAME)."
+(defun compilation-find-file-1 (marker filename directory &optional formats)
   (or formats (setq formats '("%s")))
   (let ((dirs compilation-search-path)
         (spec-dir (if directory
@@ -2990,6 +3051,23 @@ attempts to find a file whose name is produced by (format FMT FILENAME)."
                             (find-file-noselect name))
                 fmts (cdr fmts)))
         (setq dirs (cdr dirs))))
+    (list buffer spec-dir)))
+
+(defun compilation-find-file (marker filename directory &rest formats)
+  "Find a buffer for file FILENAME.
+If FILENAME is not found at all, ask the user where to find it.
+Pop up the buffer containing MARKER and scroll to MARKER if we ask
+the user where to find the file.
+Search the directories in `compilation-search-path'.
+A nil in `compilation-search-path' means to try the
+\"current\" directory, which is passed in DIRECTORY.
+If DIRECTORY is relative, it is combined with `default-directory'.
+If DIRECTORY is nil, that means use `default-directory'.
+FORMATS, if given, is a list of formats to reformat FILENAME when
+looking for it: for each element FMT in FORMATS, this function
+attempts to find a file whose name is produced by (format FMT FILENAME)."
+  (pcase-let ((`(,buffer ,spec-dir)
+               (compilation-find-file-1 marker filename directory formats)))
     (while (null buffer)    ;Repeat until the user selects an existing file.
       ;; The file doesn't exist.  Ask the user where to find it.
       (save-excursion            ;This save-excursion is probably not right.

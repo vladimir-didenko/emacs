@@ -1264,7 +1264,8 @@ and `dired-compress-files-alist'."
            (when (zerop
                   (dired-shell-command
                    (format-spec (cdr rule)
-                                `((?o . ,(shell-quote-argument out-file))
+                                `((?o . ,(shell-quote-argument
+                                          (file-local-name out-file)))
                                   (?i . ,(mapconcat
                                           (lambda (in-file)
                                             (shell-quote-argument
@@ -1896,22 +1897,23 @@ rename them using `vc-rename-file'."
   "Rename FILE to NEWNAME.
 Signal a `file-already-exists' error if a file NEWNAME already exists
 unless OK-IF-ALREADY-EXISTS is non-nil."
-  (dired-handle-overwrite newname)
-  (dired-maybe-create-dirs (file-name-directory newname))
-  (if (and dired-vc-rename-file
-           (vc-backend file)
-           (ignore-errors (vc-responsible-backend newname)))
-      (vc-rename-file file newname)
-    ;; error is caught in -create-files
-    (rename-file file newname ok-if-already-exists))
-  ;; Silently rename the visited file of any buffer visiting this file.
-  (and (get-file-buffer file)
-       (with-current-buffer (get-file-buffer file)
-	 (set-visited-file-name newname nil t)))
-  (dired-remove-file file)
-  ;; See if it's an inserted subdir, and rename that, too.
-  (when (file-directory-p file)
-    (dired-rename-subdir file newname)))
+  (let ((file-is-dir-p (file-directory-p file)))
+    (dired-handle-overwrite newname)
+    (dired-maybe-create-dirs (file-name-directory newname))
+    (if (and dired-vc-rename-file
+             (vc-backend file)
+             (ignore-errors (vc-responsible-backend newname)))
+        (vc-rename-file file newname)
+      ;; error is caught in -create-files
+      (rename-file file newname ok-if-already-exists))
+    ;; Silently rename the visited file of any buffer visiting this file.
+    (and (get-file-buffer file)
+         (with-current-buffer (get-file-buffer file)
+	   (set-visited-file-name newname nil t)))
+    (dired-remove-file file)
+    ;; See if it's an inserted subdir, and rename that, too.
+    (when file-is-dir-p
+      (dired-rename-subdir file newname))))
 
 (defun dired-rename-subdir (from-dir to-dir)
   (setq from-dir (file-name-as-directory from-dir)
@@ -1924,7 +1926,7 @@ unless OK-IF-ALREADY-EXISTS is non-nil."
     (while blist
       (with-current-buffer (car blist)
 	(if (and buffer-file-name
-		 (file-in-directory-p buffer-file-name expanded-from-dir))
+                 (dired-in-this-tree-p buffer-file-name expanded-from-dir))
 	    (let ((modflag (buffer-modified-p))
 		  (to-file (replace-regexp-in-string
 			    (concat "^" (regexp-quote from-dir))
@@ -1943,7 +1945,7 @@ unless OK-IF-ALREADY-EXISTS is non-nil."
     (while alist
       (setq elt (car alist)
 	    alist (cdr alist))
-      (if (file-in-directory-p (car elt) expanded-dir)
+      (if (dired-in-this-tree-p (car elt) expanded-dir)
 	  ;; ELT's subdir is affected by the rename
 	  (dired-rename-subdir-2 elt dir to)))
     (if (equal dir default-directory)
@@ -2467,6 +2469,10 @@ neighboring Dired window).
 If `dired-copy-preserve-time' is non-nil, this command preserves
 the modification time of each old file in the copy, similar to
 the \"-p\" option for the \"cp\" shell command.
+
+The `dired-keep-marker-copy' user option controls how this
+command handles file marking.  The default is to mark all new
+copies of files with a \"C\" mark.
 
 This command copies symbolic links by creating new ones,
 similar to the \"-d\" option for the \"cp\" shell command.
@@ -3280,9 +3286,14 @@ To continue searching for next match, use command \\[fileloop-continue]."
 ;;;###autoload
 (defun dired-do-query-replace-regexp (from to &optional delimited)
   "Do `query-replace-regexp' of FROM with TO, on all marked files.
+As each match is found, the user must type a character saying
+what to do with it.  Type SPC or `y' to replace the match,
+DEL or `n' to skip and go to the next match.  For more directions,
+type \\[help-command] at that time.
+
 Third arg DELIMITED (prefix arg) means replace only word-delimited matches.
-If you exit (\\[keyboard-quit], RET or q), you can resume the query replace
-with the command \\[tags-loop-continue]."
+If you exit the query-replace loop (\\[keyboard-quit], RET or q), you can
+resume the query replace with the command \\[fileloop-continue]."
   (interactive
    (let ((common
 	  (query-replace-read-args
@@ -3334,7 +3345,7 @@ REGEXP should use constructs supported by your local `grep' command."
                                   (project--files-in-directory mark ignores "*")
                                   files))
                    (push mark files)))
-               (nreverse marks))
+               (reverse marks))
               (message "Searching...")
               (setq xrefs
                     (xref-matches-in-files regexp files))
@@ -3348,6 +3359,11 @@ REGEXP should use constructs supported by your local `grep' command."
 (defun dired-do-find-regexp-and-replace (from to)
   "Replace matches of FROM with TO, in all marked files.
 
+As each match is found, the user must type a character saying
+what to do with it.  Type SPC or `y' to replace the match,
+DEL or `n' to skip and go to the next match.  For more directions,
+type \\[help-command] at that time.
+
 If no files are marked, use the file under point.
 
 For any marked directory, matches in all of its files are replaced,
@@ -3355,7 +3371,10 @@ recursively.  However, files matching `grep-find-ignored-files'
 and subdirectories matching `grep-find-ignored-directories' are skipped
 in the marked directories.
 
-REGEXP should use constructs supported by your local `grep' command."
+REGEXP should use constructs supported by your local `grep' command.
+
+Also see `query-replace' for user options that affect how this
+function works."
   (interactive
    (let ((common
           (query-replace-read-args

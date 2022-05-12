@@ -98,6 +98,7 @@
 (require 'comint)
 (require 'pcomplete)
 (eval-when-compile (require 'files-x)) ;with-connection-local-variables
+(require 'subr-x)
 
 ;;; Customization and Buffer Variables
 
@@ -527,7 +528,7 @@ Shell buffers.  It implements `shell-completion-execonly' for
     the shell.  This is useful for entering passwords.  Or, add the function
     `comint-watch-for-password-prompt' to `comint-output-filter-functions'.
 
-If you want to make multiple shell buffers, rename the `*shell*' buffer
+If you want to make multiple shell buffers, rename the \"*shell*\" buffer
 using \\[rename-buffer] or \\[rename-uniquely] and start a new shell.
 
 If you want to make shell buffers limited in length, add the function
@@ -574,7 +575,7 @@ buffer.
 
 By default, shell mode does nothing special when it receives a
 \"bell\" character (C-g or ^G).  If you
-  (add-hook 'comint-output-filter-functions 'shell-filter-ring-bell nil t)
+  (add-hook \\='comint-output-filter-functions #\\='shell-filter-ring-bell nil t)
 from `shell-mode-hook', Emacs will call the `ding' function
 whenever it receives the bell character in output from a
 command."
@@ -1032,7 +1033,9 @@ Environment variables are expanded, see function `substitute-in-file-name'."
   "Toggle directory tracking in this shell buffer (Shell Dirtrack mode).
 
 The `dirtrack' package provides an alternative implementation of
-this feature; see the function `dirtrack-mode'."
+this feature; see the function `dirtrack-mode'.  Also see
+`comint-osc-directory-tracker' for an escape-sequence based
+solution."
   :lighter nil
   (setq list-buffers-directory (if shell-dirtrack-mode default-directory))
   (if shell-dirtrack-mode

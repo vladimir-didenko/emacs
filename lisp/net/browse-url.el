@@ -728,9 +728,18 @@ Use variable `browse-url-filename-alist' to map filenames to URLs."
                      browse-url-filename-alist))
       (setq file (browse-url-url-encode-chars file "[*\"()',=;?% ]"))
     ;; Encode all other file names properly.
-    (setq file (mapconcat #'url-hexify-string
-                          (file-name-split file)
-                          "/")))
+    (let ((bits (file-name-split file)))
+      (setq file
+            (string-join
+             ;; On Windows, the first bit here might be "c:" or the
+             ;; like, so don't encode the ":" in the first bit.
+             (cons (let ((url-unreserved-chars
+                          (if (file-name-absolute-p file)
+                              (cons ?: url-unreserved-chars)
+                            url-unreserved-chars)))
+                     (url-hexify-string (car bits)))
+                   (mapcar #'url-hexify-string (cdr bits)))
+             "/"))))
   (dolist (map browse-url-filename-alist)
     (when (and map (string-match (car map) file))
       (setq file (replace-match (cdr map) t nil file))))
@@ -851,7 +860,11 @@ If ARGS are omitted, the default is to pass
          ((featurep 'pgtk)
           (setq classname (pgtk-backend-display-class))
           (if (equal classname "GdkWaylandDisplay")
-              (setenv "WAYLAND_DISPLAY" dpy)
+              (progn
+                ;; The `display' frame parameter is probably wrong.
+                ;; See bug#53969 for some context.
+                ;; (setenv "WAYLAND_DISPLAY" dpy)
+                )
             (setenv "DISPLAY" dpy)))
          (t
           (setenv "DISPLAY" dpy)))))
@@ -1006,6 +1019,8 @@ instead of `browse-url-new-window-flag'."
      'browse-url-default-windows-browser)
     ((memq system-type '(darwin))
      'browse-url-default-macosx-browser)
+    ((featurep 'haiku)
+     'browse-url-default-haiku-browser)
     ((browse-url-can-use-xdg-open) 'browse-url-xdg-open)
 ;;;    ((executable-find browse-url-gnome-moz-program) 'browse-url-gnome-moz)
     ((executable-find browse-url-mozilla-program) 'browse-url-mozilla)
@@ -1225,6 +1240,24 @@ The optional argument NEW-WINDOW is not used."
     (start-process (concat "WebPositive " url) nil "WebPositive" url)))
 
 (function-put 'browse-url-webpositive 'browse-url-browser-kind 'external)
+
+(declare-function haiku-roster-launch "haikuselect.c")
+
+;;;###autoload
+(defun browse-url-default-haiku-browser (url &optional _new-window)
+  "Browse URL with the system default browser.
+Default to the URL around or before point."
+  (interactive (browse-url-interactive-arg "URL: "))
+  (setq url (browse-url-encode-url url))
+  (let* ((scheme (save-match-data
+                   (if (string-match "\\(.+\\):/" url)
+                       (match-string 1 url)
+                     "http")))
+         (mime (concat "application/x-vnd.Be.URL." scheme)))
+    (haiku-roster-launch mime (vector url))))
+
+(function-put 'browse-url-default-haiku-browser
+              'browse-url-browser-kind 'external)
 
 ;;;###autoload
 (defun browse-url-emacs (url &optional same-window)
@@ -1600,13 +1633,11 @@ from `browse-url-elinks-wrapper'."
 
 ;;; Adding buttons to a buffer to call `browse-url' when you hit them.
 
-(defvar browse-url-button-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map "\r" #'browse-url-button-open)
-    (define-key map [mouse-2] #'browse-url-button-open)
-    (define-key map "w" #'browse-url-button-copy)
-    map)
-  "The keymap used for `browse-url' buttons.")
+(defvar-keymap browse-url-button-map
+  :doc "The keymap used for `browse-url' buttons."
+  "RET"       #'browse-url-button-open
+  "<mouse-2>" #'browse-url-button-open
+  "w"         #'browse-url-button-copy)
 
 (defface browse-url-button
   '((t :inherit link))

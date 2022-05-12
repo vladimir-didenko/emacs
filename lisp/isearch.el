@@ -868,14 +868,16 @@ This variable is set and changed during isearch.  To change the
 default behavior used for searches, see `search-default-mode'
 instead.")
 
-(defvar isearch-lax-whitespace t
+(defcustom isearch-lax-whitespace t
   "If non-nil, a space will match a sequence of whitespace chars.
 When you enter a space or spaces in ordinary incremental search, it
 will match any sequence matched by the regexp defined by the variable
 `search-whitespace-regexp'.  If the value is nil, each space you type
 matches literally, against one space.  You can toggle the value of this
 variable by the command `isearch-toggle-lax-whitespace', usually bound to
-`M-s SPC' during isearch.")
+`M-s SPC' during isearch."
+  :type 'boolean
+  :version "25.1")
 
 (defvar isearch-regexp-lax-whitespace nil
   "If non-nil, a space will match a sequence of whitespace chars.
@@ -1812,20 +1814,20 @@ The following additional command keys are active while editing.
 	  (minibuffer-history-symbol)
 	  ;; Search string might have meta information on text properties.
 	  (minibuffer-allow-text-properties t))
-     (when isearch-lazy-highlight
-       (add-hook 'minibuffer-setup-hook #'minibuffer-lazy-highlight-setup))
      (setq isearch-new-string
-	   (read-from-minibuffer
-	    (isearch-message-prefix nil isearch-nonincremental)
-	    (cons isearch-string (1+ (or (isearch-fail-pos)
-					 (length isearch-string))))
-	    minibuffer-local-isearch-map nil
-	    (if isearch-regexp
-		(cons 'regexp-search-ring
-		      (1+ (or regexp-search-ring-yank-pointer -1)))
-	      (cons 'search-ring
-		    (1+ (or search-ring-yank-pointer -1))))
-	    nil t)
+	   (minibuffer-with-setup-hook
+               (minibuffer-lazy-highlight-setup)
+             (read-from-minibuffer
+	      (isearch-message-prefix nil isearch-nonincremental)
+	      (cons isearch-string (1+ (or (isearch-fail-pos)
+					   (length isearch-string))))
+	      minibuffer-local-isearch-map nil
+	      (if isearch-regexp
+		  (cons 'regexp-search-ring
+		        (1+ (or regexp-search-ring-yank-pointer -1)))
+	        (cons 'search-ring
+		      (1+ (or search-ring-yank-pointer -1))))
+	      nil t))
 	   isearch-new-message
 	   (mapconcat 'isearch-text-char-description
 		      isearch-new-string "")))))
@@ -2329,7 +2331,12 @@ arg means replace backward.  Note that using the prefix arg
 is possible only when `isearch-allow-scroll' is non-nil or
 `isearch-allow-prefix' is non-nil, and it doesn't always provide the
 correct matches for `query-replace', so the preferred way to run word
-replacements from Isearch is `M-s w ... M-%'."
+replacements from Isearch is `M-s w ... M-%'.
+
+As each match is found, the user must type a character saying
+what to do with it.  Type SPC or `y' to replace the match,
+DEL or `n' to skip and go to the next match.  For more directions,
+type \\[help-command] at that time."
   (interactive
    (list current-prefix-arg))
   (barf-if-buffer-read-only)
@@ -2383,7 +2390,12 @@ replacements from Isearch is `M-s w ... M-%'."
 
 (defun isearch-query-replace-regexp (&optional arg)
   "Start `query-replace-regexp' with string to replace from last search string.
-See `isearch-query-replace' for more information."
+See `isearch-query-replace' for more information.
+
+As each match is found, the user must type a character saying
+what to do with it.  Type SPC or `y' to replace the match,
+DEL or `n' to skip and go to the next match.  For more directions,
+type \\[help-command] at that time."
   (interactive
    (list current-prefix-arg))
   (isearch-query-replace arg t))
@@ -2629,9 +2641,10 @@ is bound to outside of Isearch."
                        ;; Key search depends on mode (bug#47755)
                        (isearch-mode nil))
                    (key-binding (this-command-keys-vector) t))))
-    (if (and (window-minibuffer-p w)
-	     (not (minibuffer-window-active-p w))) ; in echo area
-	(isearch-yank-x-selection)
+    (if (or mouse-yank-at-point
+            (and (window-minibuffer-p w)
+	         (not (minibuffer-window-active-p w)))) ; in echo area
+        (isearch-yank-x-selection)
       (when (functionp binding)
 	(call-interactively binding)))))
 
@@ -4361,57 +4374,81 @@ Attempt to do the search exactly the way the pending Isearch would."
   :group 'lazy-count
   :version "29.1")
 
-(defvar minibuffer-lazy-highlight-transform #'identity
-  "Function to transform minibuffer text into a `isearch-string' for highlighting.")
-
-(defvar minibuffer-lazy-highlight--overlay nil
-  "Overlay for minibuffer prompt updates.")
-
-(defun minibuffer-lazy-highlight--count ()
-  "Display total match count in the minibuffer prompt."
-  (when minibuffer-lazy-highlight--overlay
-    (overlay-put minibuffer-lazy-highlight--overlay
-                 'before-string
-                 (and isearch-lazy-count-total
-                      (not isearch-error)
-                      (format minibuffer-lazy-count-format
-                              isearch-lazy-count-total)))))
-
-(defun minibuffer-lazy-highlight--after-change (_beg _end _len)
-  "Update lazy highlight state in minibuffer selected window."
-  (when isearch-lazy-highlight
-    (let ((inhibit-redisplay t) ;; Avoid cursor flickering
-          (string (minibuffer-contents)))
-      (with-minibuffer-selected-window
-        (setq isearch-string (funcall minibuffer-lazy-highlight-transform string))
-        (isearch-lazy-highlight-new-loop)))))
-
-(defun minibuffer-lazy-highlight--exit ()
-  "Unwind changes from `minibuffer-lazy-highlight-setup'."
-  (remove-hook 'after-change-functions
-               #'minibuffer-lazy-highlight--after-change)
-  (remove-hook 'lazy-count-update-hook #'minibuffer-lazy-highlight--count)
-  (remove-hook 'minibuffer-exit-hook #'minibuffer-lazy-highlight--exit)
-  (setq minibuffer-lazy-highlight--overlay nil)
-  (when lazy-highlight-cleanup
-    (lazy-highlight-cleanup)))
-
-(defun minibuffer-lazy-highlight-setup ()
+(cl-defun minibuffer-lazy-highlight-setup
+    (&key (highlight isearch-lazy-highlight)
+          (cleanup lazy-highlight-cleanup)
+          (transform #'identity)
+          (filter nil)
+          (regexp isearch-regexp)
+          (regexp-function isearch-regexp-function)
+          (case-fold isearch-case-fold-search)
+          (lax-whitespace (if regexp
+                              isearch-regexp-lax-whitespace
+                            isearch-lax-whitespace)))
   "Set up minibuffer for lazy highlight of matches in the original window.
 
-This function is intended to be added to `minibuffer-setup-hook'.
-Note that several other isearch variables influence the lazy
-highlighting, including `isearch-regexp',
-`isearch-lazy-highlight' and `isearch-lazy-count'."
-  (remove-hook 'minibuffer-setup-hook #'minibuffer-lazy-highlight-setup)
-  (add-hook 'after-change-functions
-            #'minibuffer-lazy-highlight--after-change)
-  (add-hook 'lazy-count-update-hook #'minibuffer-lazy-highlight--count)
-  (add-hook 'minibuffer-exit-hook #'minibuffer-lazy-highlight--exit)
-  (setq minibuffer-lazy-highlight--overlay
-        (and minibuffer-lazy-count-format
-             (make-overlay (point-min) (point-min) (current-buffer) t)))
-  (minibuffer-lazy-highlight--after-change nil nil nil))
+This function return a closure intended to be added to
+`minibuffer-setup-hook'.  It accepts the following keyword
+arguments, all of which have a default based on the current
+isearch settings.
+
+HIGHLIGHT: Whether to perform lazy highlight.
+CLEANUP: Whether to clean up the lazy highlight when the minibuffer
+exits.
+TRANSFORM: A function taking one argument, the minibuffer contents,
+and returning the `isearch-string' to use for lazy highlighting.
+FILTER: A function to add to `isearch-filter-predicate'.
+REGEXP: The value of `isearch-regexp' to use for lazy highlighting.
+REGEXP-FUNCTION: The value of `isearch-regexp-function' to use for
+lazy highlighting.
+CASE-FOLD: The value of `isearch-case-fold' to use for lazy
+highlighting.
+LAX-WHITESPACE: The value of `isearch-lax-whitespace' and
+`isearch-regexp-lax-whitespace' to use for lazy highlighting."
+  (if (not highlight)
+      #'ignore
+    (let ((unwind (make-symbol "minibuffer-lazy-highlight--unwind"))
+          (after-change (make-symbol "minibuffer-lazy-highlight--after-change"))
+          (display-count (make-symbol "minibuffer-lazy-highlight--display-count"))
+          overlay)
+      (fset unwind
+            (lambda ()
+              (remove-function isearch-filter-predicate filter)
+              (remove-hook 'lazy-count-update-hook display-count)
+              (when overlay (delete-overlay overlay))
+              (remove-hook 'after-change-functions after-change)
+              (remove-hook 'minibuffer-exit-hook unwind)
+              (let ((lazy-highlight-cleanup cleanup))
+                (lazy-highlight-cleanup))))
+      (fset after-change
+            (lambda (_beg _end _len)
+              (let ((inhibit-redisplay t) ;; Avoid cursor flickering
+                    (string (minibuffer-contents)))
+                (with-minibuffer-selected-window
+                  (let* ((isearch-forward t)
+                         (isearch-regexp regexp)
+                         (isearch-regexp-function regexp-function)
+                         (isearch-case-fold-search case-fold)
+                         (isearch-lax-whitespace lax-whitespace)
+                         (isearch-regexp-lax-whitespace lax-whitespace)
+                         (isearch-string (funcall transform string)))
+                    (isearch-lazy-highlight-new-loop))))))
+      (fset display-count
+            (lambda ()
+              (overlay-put overlay 'before-string
+                           (and isearch-lazy-count-total
+                                (not isearch-error)
+                                (format minibuffer-lazy-count-format
+                                        isearch-lazy-count-total)))))
+      (lambda ()
+        (add-hook 'minibuffer-exit-hook unwind)
+        (add-hook 'after-change-functions after-change)
+        (when minibuffer-lazy-count-format
+          (setq overlay (make-overlay (point-min) (point-min) (current-buffer) t))
+          (add-hook 'lazy-count-update-hook display-count))
+        (when filter
+          (add-function :after-while isearch-filter-predicate filter))
+        (funcall after-change nil nil nil)))))
 
 
 (defun isearch-resume (string regexp word forward message case-fold)
@@ -4428,6 +4465,23 @@ CASE-FOLD non-nil means the search was case-insensitive."
 	isearch-case-fold-search case-fold)
   (isearch-search)
   (isearch-update))
+
+
+(defvar isearch-fold-quotes-mode--state)
+(define-minor-mode isearch-fold-quotes-mode
+  "Minor mode to aid searching for \\=` characters in help modes."
+  :lighter ""
+  (if isearch-fold-quotes-mode
+      (setq-local isearch-fold-quotes-mode--state
+                  (buffer-local-set-state
+                   search-default-mode
+                   (lambda (string &optional _lax)
+                     (thread-last
+                       (regexp-quote string)
+                       (replace-regexp-in-string "`" "[`‘]")
+                       (replace-regexp-in-string "'" "['’]")
+                       (replace-regexp-in-string "\"" "[\"“”]")))))
+    (buffer-local-restore-state isearch-fold-quotes-mode--state)))
 
 (provide 'isearch)
 

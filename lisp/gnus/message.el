@@ -3180,8 +3180,7 @@ Like `text-mode', but with these additional commands:
     (mail-abbrevs-setup))
    ((message-mail-alias-type-p 'ecomplete)
     (ecomplete-setup)))
-  ;; FIXME: merge the completion tables from ecomplete/bbdb/...?
-  ;;(add-hook 'completion-at-point-functions #'message-ecomplete-capf nil t)
+  (add-hook 'completion-at-point-functions #'eudc-capf-complete -1 t)
   (add-hook 'completion-at-point-functions #'message-completion-function nil t)
   (unless buffer-file-name
     (message-set-auto-save-file-name))
@@ -8167,39 +8166,7 @@ which specify the range to operate on."
 ;; Support for toolbar
 (defvar tool-bar-mode)
 
-;; Note: The :set function in the `message-tool-bar*' variables will only
-;; affect _new_ message buffers.  We might add a function that walks thru all
-;; message-mode buffers and force the update.
-(defun message-tool-bar-update (&optional symbol value)
-  "Update message mode toolbar.
-Setter function for custom variables."
-  (setq-default message-tool-bar-map nil)
-  (when symbol
-    ;; When used as ":set" function:
-    (set-default symbol value)))
-
-(defcustom message-tool-bar (if (eq gmm-tool-bar-style 'gnome)
-				'message-tool-bar-gnome
-			      'message-tool-bar-retro)
-  "Specifies the message mode tool bar.
-
-It can be either a list or a symbol referring to a list.  See
-`gmm-tool-bar-from-list' for the format of the list.  The
-default key map is `message-mode-map'.
-
-Pre-defined symbols include `message-tool-bar-gnome' and
-`message-tool-bar-retro'."
-  :type '(repeat gmm-tool-bar-list-item)
-  :type '(choice (const :tag "GNOME style" message-tool-bar-gnome)
-		 (const :tag "Retro look"  message-tool-bar-retro)
-		 (repeat :tag "User defined list" gmm-tool-bar-item)
-		 (symbol))
-  :version "23.1" ;; No Gnus
-  :initialize #'custom-initialize-default
-  :set #'message-tool-bar-update
-  :group 'message)
-
-(defcustom message-tool-bar-gnome
+(defcustom message-tool-bar
   '((ispell-message "spell" nil
 		    :vert-only t
 		    :visible (not flyspell-mode))
@@ -8215,47 +8182,23 @@ Pre-defined symbols include `message-tool-bar-gnome' and
     (message-insert-importance-high "important" nil :visible nil)
     (message-insert-importance-low "unimportant" nil :visible nil)
     (message-insert-disposition-notification-to "receipt" nil :visible nil))
-  "List of items for the message tool bar (GNOME style).
+  "Specifies the message mode tool bar.
 
-See `gmm-tool-bar-from-list' for details on the format of the list."
-  :type '(repeat gmm-tool-bar-item)
-  :version "23.1" ;; No Gnus
-  :initialize #'custom-initialize-default
-  :set #'message-tool-bar-update
+It can be either a list or a symbol referring to a list.  See
+`gmm-tool-bar-from-list' for the format of the list.  The
+default key map is `message-mode-map'."
+  :type '(repeat gmm-tool-bar-list-item)
+  :type '(choice (repeat :tag "User defined list" gmm-tool-bar-item)
+		 (symbol))
+  :version "29.1"
   :group 'message)
 
-(defcustom message-tool-bar-retro
-  '(;; Old Emacs 21 icon for consistency.
-    (message-send-and-exit "mail/send")
-    (message-kill-buffer "close")
-    (message-dont-send "cancel")
-    (mml-attach-file "attach" mml-mode-map)
-    (ispell-message "spell")
-    (mml-preview "preview" mml-mode-map)
-    (message-insert-importance-high "gnus/important")
-    (message-insert-importance-low "gnus/unimportant")
-    (message-insert-disposition-notification-to "gnus/receipt"))
-  "List of items for the message tool bar (retro style).
-
-See `gmm-tool-bar-from-list' for details on the format of the list."
-  :type '(repeat gmm-tool-bar-item)
-  :version "23.1" ;; No Gnus
-  :initialize #'custom-initialize-default
-  :set #'message-tool-bar-update
-  :group 'message)
-
-(defcustom message-tool-bar-zap-list
-  '(new-file open-file dired kill-buffer write-file
-	     print-buffer customize help)
-  "List of icon items from the global tool bar.
-These items are not displayed on the message mode tool bar.
-
-See `gmm-tool-bar-from-list' for the format of the list."
-  :type 'gmm-tool-bar-zap-list
-  :version "23.1" ;; No Gnus
-  :initialize #'custom-initialize-default
-  :set #'message-tool-bar-update
-  :group 'message)
+(defvar message-tool-bar-gnome nil)
+(make-obsolete-variable 'message-tool-bar-gnome nil "29.1")
+(defvar message-tool-bar-retro nil)
+(make-obsolete-variable 'message-tool-bar-gnome nil "29.1")
+(defvar message-tool-bar-zap-list t)
+(make-obsolete-variable 'message-tool-bar-zap-list nil "29.1")
 
 (defvar image-load-path)
 (declare-function image-load-path-for-library "image"
@@ -8420,7 +8363,8 @@ set to nil."
 	(t
 	 (expand-abbrev))))
 
-(add-to-list 'completion-category-defaults '(email (styles substring)))
+(add-to-list 'completion-category-defaults '(email (styles substring
+                                                           partial-completion)))
 
 (defun message--bbdb-query-with-words (words)
   ;; FIXME: This (or something like this) should live on the BBDB side.
@@ -9008,7 +8952,7 @@ used to take the screenshot."
 This is meant to be used for MIME handlers: Setting the handler
 for \"x-scheme-handler/mailto;\" to \"emacs -f message-mailto %u\"
 will then start up Emacs ready to compose mail.  For emacsclient use
-  emacsclient -e '(message-mailto \"%u\")'"
+  emacsclient -e \\='(message-mailto \"%u\")'"
   (interactive)
   ;; <a href="mailto:someone@example.com?subject=This%20is%20the%20subject&cc=someone_else@example.com&body=This%20is%20the%20body">Send email</a>
   (message-mail)

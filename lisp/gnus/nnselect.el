@@ -269,8 +269,8 @@ If this variable is nil, or if the provided function returns nil,
 
 (defun nnselect-generate-artlist (group &optional specs)
   "Generate the artlist for GROUP using SPECS.
-SPECS should be an alist including an 'nnselect-function and an
-'nnselect-args.  The former applied to the latter should create
+SPECS should be an alist including an `nnselect-function' and an
+`nnselect-args'.  The former applied to the latter should create
 the artlist.  If SPECS is nil retrieve the specs from the group
 parameters."
   (let* ((specs
@@ -388,6 +388,7 @@ artlist; otherwise store the ARTLIST in the group parameters."
 		     (gnus-group-find-parameter artgroup
 						'gnus-fetch-old-headers t))
 		    fetch-old)))
+              (gnus-request-group artgroup)
 	      (erase-buffer)
 	      (pcase (setq gnus-headers-retrieved-by
 			   (or
