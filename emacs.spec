@@ -5,7 +5,7 @@
 
 Name: emacs
 Version: 29.0.50
-Release: alt5.git3b7315d0
+Release: alt6.gited02be04
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -275,7 +275,7 @@ autoreconf -i -I m4
 # TODO: Find why it is required. Also without this export emacs binary will not start.
 # Another issue is that alternatives link /usr/bin/emacs will not start even if we
 # explicitly export path below.
-export LIBRARY_PATH=%_libdir/gcc/x86_64-alt-linux/11
+export LIBRARY_PATH=%_libdir/gcc/x86_64-alt-linux/12
 
 pushd build-gtk3
 %configure %_configure_mostly --without-gpm --with-pgtk --with-cairo --with-toolkit-scroll-bars
@@ -505,6 +505,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Thu Jun 2 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt6.gited02be04
+- 29.0.50-gited02be04
+
 * Thu May 12 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt5.git3b7315d0
 - 29.0.50-git3b7315d0
 
