@@ -619,7 +619,6 @@ extern Lisp_Object char_table_ref (Lisp_Object, int) ATTRIBUTE_PURE;
 extern void char_table_set (Lisp_Object, int, Lisp_Object);
 
 /* Defined in data.c.  */
-extern bool symbols_with_pos_enabled;
 extern AVOID args_out_of_range_3 (Lisp_Object, Lisp_Object, Lisp_Object);
 extern AVOID wrong_type_argument (Lisp_Object, Lisp_Object);
 extern Lisp_Object default_value (Lisp_Object symbol);
@@ -2092,19 +2091,17 @@ XSUB_CHAR_TABLE (Lisp_Object a)
 INLINE Lisp_Object
 CHAR_TABLE_REF_ASCII (Lisp_Object ct, ptrdiff_t idx)
 {
-  struct Lisp_Char_Table *tbl = NULL;
-  Lisp_Object val;
-  do
+  for (struct Lisp_Char_Table *tbl = XCHAR_TABLE (ct); ;
+       tbl = XCHAR_TABLE (tbl->parent))
     {
-      tbl = tbl ? XCHAR_TABLE (tbl->parent) : XCHAR_TABLE (ct);
-      val = (! SUB_CHAR_TABLE_P (tbl->ascii) ? tbl->ascii
-	     : XSUB_CHAR_TABLE (tbl->ascii)->contents[idx]);
+      Lisp_Object val = (SUB_CHAR_TABLE_P (tbl->ascii)
+			 ? XSUB_CHAR_TABLE (tbl->ascii)->contents[idx]
+			 : tbl->ascii);
       if (NILP (val))
 	val = tbl->defalt;
+      if (!NILP (val) || NILP (tbl->parent))
+	return val;
     }
-  while (NILP (val) && ! NILP (tbl->parent));
-
-  return val;
 }
 
 /* Almost equivalent to Faref (CT, IDX) with optimization for ASCII
@@ -4487,6 +4484,7 @@ extern void dir_warning (const char *, Lisp_Object);
 extern void init_obarray_once (void);
 extern void init_lread (void);
 extern void syms_of_lread (void);
+extern void mark_lread (void);
 
 INLINE Lisp_Object
 intern (const char *str)
@@ -5496,7 +5494,7 @@ struct for_each_tail_internal
    intended for use only by the above macros.
 
    Use Brent’s teleporting tortoise-hare algorithm.  See:
-   Brent RP. BIT. 1980;20(2):176-84. doi:10.1007/BF01933190
+   Brent RP. BIT. 1980;20(2):176-184. doi:10.1007/BF01933190
    https://maths-people.anu.edu.au/~brent/pd/rpb051i.pdf
 
    This macro uses maybe_quit because of an excess of caution.  The

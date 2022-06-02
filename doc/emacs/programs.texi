@@ -280,11 +280,6 @@ changes in the text.
 than @code{imenu-auto-rescan-maxout} in bytes, and scanning is
 stopped if it takes more than @code{imenu-max-index-time} seconds.
 
-@findex imenu-flush-cache
-  You can force Imenu to forget the buffer's index with @w{@kbd{M-x
-imenu-flush-cache @key{RET}}}.  This causes Imenu to rescan the
-current buffer next time you invoke @kbd{M-g i} in that buffer.
-
 @vindex imenu-sort-function
   You can customize the way the menus are sorted by setting the
 variable @code{imenu-sort-function}.  By default, names are ordered as
@@ -1444,9 +1439,13 @@ performs completion using the function, variable, or property names
 defined in the current Emacs session.
 
   In all other respects, in-buffer symbol completion behaves like
-minibuffer completion.  For instance, if Emacs cannot complete to a
-unique symbol, it displays a list of completion alternatives in
-another window.  @xref{Completion}.
+minibuffer completion.  For instance, if Emacs cannot complete to
+a unique symbol, it displays a list of completion alternatives in
+another window.  Then you can use the keys @kbd{M-@key{DOWN}} and
+@kbd{M-@key{UP}} to navigate through the completions displayed
+in the completions buffer without leaving the original buffer,
+and the key @kbd{M-@key{RET}} to insert the currently highlighted
+completion to the buffer.  @xref{Completion}.
 
   In Text mode and related modes, @kbd{M-@key{TAB}} completes words
 based on the spell-checker's dictionary.  @xref{Spelling}.

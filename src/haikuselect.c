@@ -145,6 +145,8 @@ In that case, the arguments after NAME are ignored.  */)
 
   if (CONSP (name) || NILP (name))
     {
+      be_update_clipboard_count (clipboard_name);
+
       rc = be_lock_clipboard_message (clipboard_name,
 				      &message, true);
 
@@ -179,16 +181,11 @@ of the symbols `PRIMARY', `SECONDARY', or `CLIPBOARD'.  */)
   (Lisp_Object selection)
 {
   bool value;
+  enum haiku_clipboard name;
 
   block_input ();
-  if (EQ (selection, QPRIMARY))
-    value = BClipboard_owns_primary ();
-  else if (EQ (selection, QSECONDARY))
-    value = BClipboard_owns_secondary ();
-  else if (EQ (selection, QCLIPBOARD))
-    value = BClipboard_owns_clipboard ();
-  else
-    value = false;
+  name = haiku_get_clipboard_name (selection);
+  value = be_clipboard_owner_p (name);
   unblock_input ();
 
   return value ? Qt : Qnil;
@@ -295,6 +292,14 @@ haiku_message_to_lisp (void *message)
 	      t1 = make_int ((intmax_t) *(ssize_t *) buf);
 	      break;
 
+	    case 'DBLE':
+	      t1 = make_float (*(double *) buf);
+	      break;
+
+	    case 'FLOT':
+	      t1 = make_float (*(float *) buf);
+	      break;
+
 	    default:
 	      t1 = make_uninit_string (buf_size);
 	      memcpy (SDATA (t1), buf, buf_size);
@@ -353,6 +358,14 @@ haiku_message_to_lisp (void *message)
 	  t2 = Qpoint;
 	  break;
 
+	case 'DBLE':
+	  t2 = Qdouble;
+	  break;
+
+	case 'FLOT':
+	  t2 = Qfloat;
+	  break;
+
 	default:
 	  t2 = make_int (type_code);
 	}
@@ -398,6 +411,10 @@ lisp_to_type_code (Lisp_Object obj)
     return 'SSZT';
   else if (EQ (obj, Qpoint))
     return 'BPNT';
+  else if (EQ (obj, Qfloat))
+    return 'FLOT';
+  else if (EQ (obj, Qdouble))
+    return 'DBLE';
   else
     return -1;
 }
@@ -416,7 +433,8 @@ haiku_lisp_to_message (Lisp_Object obj, void *message)
   ssize_t ssizet_data;
   intmax_t t4;
   uintmax_t t5;
-  float t6, t7;
+  float t6, t7, float_data;
+  double double_data;
   int rc;
   specpdl_ref ref;
 
@@ -518,6 +536,30 @@ haiku_lisp_to_message (Lisp_Object obj, void *message)
 	      if (be_add_point_data (message, SSDATA (name),
 				     t6, t7))
 		signal_error ("Invalid point", data);
+	      break;
+
+	    case 'FLOT':
+	      CHECK_NUMBER (data);
+	      float_data = XFLOATINT (data);
+
+	      rc = be_add_message_data (message, SSDATA (name),
+					type_code, &float_data,
+					sizeof float_data);
+
+	      if (rc)
+		signal_error ("Failed to add float", data);
+	      break;
+
+	    case 'DBLE':
+	      CHECK_NUMBER (data);
+	      double_data = XFLOATINT (data);
+
+	      rc = be_add_message_data (message, SSDATA (name),
+					type_code, &double_data,
+					sizeof double_data);
+
+	      if (rc)
+		signal_error ("Failed to add double", data);
 	      break;
 
 	    case 'SHRT':
@@ -734,6 +776,10 @@ system.  If TYPE is `ssize_t', then DATA is an integer that can hold
 values from -1 to the maximum value of the C data type `ssize_t' on
 the current system.  If TYPE is `point', then DATA is a cons of float
 values describing the X and Y coordinates of an on-screen location.
+If TYPE is `float', then DATA is a low-precision floating point
+number, whose exact precision is not guaranteed.  If TYPE is `double',
+then DATA is a floating point number that can represent any value a
+Lisp float can represent.
 
 If the field name is not a string but the symbol `type', then it
 associates to a 32-bit unsigned integer describing the type of the
@@ -778,8 +824,13 @@ ignored if it is dropped on top of FRAME.  */)
 DEFUN ("haiku-roster-launch", Fhaiku_roster_launch, Shaiku_roster_launch,
        2, 2, 0,
        doc: /* Launch an application associated with FILE-OR-TYPE.
-Return the process ID of the application, or nil if no application was
-launched.
+Return the process ID of any process created, the symbol
+`already-running' if ARGS was sent to a program that's already
+running, or nil if launching the application failed because no
+application was found for FILE-OR-TYPE.
+
+Signal an error if FILE-OR-TYPE is invalid, or if ARGS is a message
+but the application doesn't accept messages.
 
 FILE-OR-TYPE can either be a string denoting a MIME type, or a list
 with one argument FILE, denoting a file whose associated application
@@ -850,9 +901,19 @@ after it starts.  */)
 			 &team_id);
   unblock_input ();
 
+  /* `be_roster_launch' can potentially take a while in IO, but
+     signals from async input will interrupt that operation.  If the
+     user wanted to quit, act like it.  */
+  maybe_quit ();
+
   if (rc == B_OK)
     return SAFE_FREE_UNBIND_TO (depth,
 				make_uint (team_id));
+  else if (rc == B_ALREADY_RUNNING)
+    return Qalready_running;
+  else if (rc == B_BAD_VALUE)
+    signal_error ("Invalid type or bad arguments",
+		  list2 (file_or_type, args));
 
   return SAFE_FREE_UNBIND_TO (depth, Qnil);
 }
@@ -913,6 +974,9 @@ used to retrieve the current position of the mouse.  */);
   DEFSYM (Qsize_t, "size_t");
   DEFSYM (Qssize_t, "ssize_t");
   DEFSYM (Qpoint, "point");
+  DEFSYM (Qfloat, "float");
+  DEFSYM (Qdouble, "double");
+  DEFSYM (Qalready_running, "already-running");
 
   defsubr (&Shaiku_selection_data);
   defsubr (&Shaiku_selection_put);

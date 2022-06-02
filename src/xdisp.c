@@ -11234,7 +11234,7 @@ argument if the size of the buffer is large or unknown.
 
 Optional argument MODE-LINES nil or omitted means do not include the
 height of the mode-, tab- or header-line of WINDOW in the return value.
-If it is the symbol `mode-line', 'tab-line' or `header-line', include
+If it is the symbol `mode-line', `tab-line' or `header-line', include
 only the height of that line, if present, in the return value.  If t,
 include the height of any of these, if present, in the return value.
 
@@ -13200,8 +13200,9 @@ gui_consider_frame_title (Lisp_Object frame)
 	 mode_line_noprop_buf; then display the title.  */
       record_unwind_protect (unwind_format_mode_line,
 			     format_mode_line_unwind_data
-			     (NULL, current_buffer, Qnil, false));
+			     (f, current_buffer, selected_window, false));
 
+      Fselect_window (f->selected_window, Qt);
       set_buffer_internal_1
 	(XBUFFER (XWINDOW (f->selected_window)->contents));
       fmt = FRAME_ICONIFIED_P (f) ? Vicon_title_format : Vframe_title_format;
@@ -22471,6 +22472,13 @@ compute_line_metrics (struct it *it)
 }
 
 
+static void
+clear_position (struct it *it)
+{
+  it->position.charpos = 0;
+  it->position.bytepos = 0;
+}
+
 /* Append one space to the glyph row of iterator IT if doing a
    window-based redisplay.  The space has the same face as
    IT->face_id.  Value is true if a space was added.
@@ -22506,7 +22514,7 @@ append_space_for_newline (struct it *it, bool default_face_p)
       struct face *face;
 
       it->what = IT_CHARACTER;
-      memset (&it->position, 0, sizeof it->position);
+      clear_position (it);
       it->object = Qnil;
       it->len = 1;
 
@@ -22835,7 +22843,7 @@ extend_face_to_end_of_line (struct it *it)
 	      const int stretch_width =
 		indicator_column - it->current_x - char_width;
 
-	      memset (&it->position, 0, sizeof it->position);
+	      clear_position (it);
 
 	      /* Only generate a stretch glyph if there is distance
 		 between current_x and the indicator position.  */
@@ -22869,7 +22877,7 @@ extend_face_to_end_of_line (struct it *it)
 
 	      if (stretch_width > 0)
 		{
-		  memset (&it->position, 0, sizeof it->position);
+		  clear_position (it);
 		  append_stretch_glyph (it, Qnil, stretch_width,
 					it->ascent + it->descent,
 					stretch_ascent);
@@ -22919,7 +22927,7 @@ extend_face_to_end_of_line (struct it *it)
 		(((it->ascent + it->descent)
 		  * FONT_BASE (font)) / FONT_HEIGHT (font));
 	      saved_pos = it->position;
-	      memset (&it->position, 0, sizeof it->position);
+	      clear_position (it);
 	      saved_avoid_cursor = it->avoid_cursor_p;
 	      it->avoid_cursor_p = true;
 	      saved_face_id = it->face_id;
@@ -22957,7 +22965,7 @@ extend_face_to_end_of_line (struct it *it)
       enum display_element_type saved_what = it->what;
 
       it->what = IT_CHARACTER;
-      memset (&it->position, 0, sizeof it->position);
+      clear_position (it);
       it->object = Qnil;
       it->c = it->char_to_display = ' ';
       it->len = 1;
@@ -28434,7 +28442,7 @@ calc_pixel_width_or_height (double *res, struct it *it, Lisp_Object prop,
 
       /* '(NUM)': absolute number of pixels.  */
       if (NUMBERP (car))
-{
+	{
 	  double fact;
 	  int offset =
 	    width_p && align_to && *align_to < 0 ? it->lnum_pixel_width : 0;
@@ -32651,7 +32659,7 @@ display_and_set_cursor (struct window *w, bool on,
 {
   struct frame *f = XFRAME (w->frame);
   int new_cursor_type;
-  int new_cursor_width;
+  int new_cursor_width UNINIT;
   bool active_cursor;
   struct glyph_row *glyph_row;
   struct glyph *glyph;
@@ -36242,7 +36250,7 @@ they return to their normal size when the minibuffer is closed, or the
 echo area becomes empty.
 
 This variable does not affect resizing of the minibuffer window of
-minibuffer-only frames.  These are handled by 'resize-mini-frames'
+minibuffer-only frames.  These are handled by `resize-mini-frames'
 only.  */);
   /* Contrary to the doc string, we initialize this to nil, so that
      loading loadup.el won't try to resize windows before loading
@@ -36466,7 +36474,7 @@ see biditest.el in the test suite.  */);
     doc: /* Non-nil means inhibit the Bidirectional Parentheses Algorithm.
 Disabling the BPA makes redisplay faster, but might produce incorrect
 display reordering of bidirectional text with embedded parentheses and
-other bracket characters whose 'paired-bracket' Unicode property is
+other bracket characters whose `paired-bracket' Unicode property is
 non-nil, see `get-char-code-property'.  */);
   bidi_inhibit_bpa = false;
 

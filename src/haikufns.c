@@ -34,6 +34,9 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #include "haiku_support.h"
 #include "termhooks.h"
 
+#include "bitmaps/leftptr.xbm"
+#include "bitmaps/leftpmsk.xbm"
+
 #include <stdlib.h>
 
 #include <kernel/OS.h>
@@ -99,6 +102,22 @@ get_geometry_from_preferences (struct haiku_display_info *dpyinfo,
     }
 
   return parms;
+}
+
+/* Update the left and top offsets of F after its decorators
+   change.  */
+static void
+haiku_update_after_decoration_change (struct frame *f)
+{
+  /* Don't reset offsets during initial frame creation, since the
+     contents of f->left_pos and f->top_pos won't be applied to the
+     window until `x-create-frame' finishes, so setting them here will
+     overwrite the offsets that the window should be moved to.  */
+
+  if (!FRAME_OUTPUT_DATA (f)->configury_done)
+    return;
+
+  be_send_move_frame_event (FRAME_HAIKU_WINDOW (f));
 }
 
 void
@@ -249,6 +268,22 @@ haiku_set_tab_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
     haiku_change_tab_bar_height (f, nlines * FRAME_LINE_HEIGHT (f));
 }
 
+void
+gamma_correct (struct frame *f, Emacs_Color *color)
+{
+  if (f->gamma)
+    {
+      color->red = (pow (color->red / 65535.0, f->gamma)
+		    * 65535.0 + 0.5);
+      color->green = (pow (color->green / 65535.0, f->gamma)
+		      * 65535.0 + 0.5);
+      color->blue = (pow (color->blue / 65535.0, f->gamma)
+		     * 65535.0 + 0.5);
+      color->pixel = RGB_TO_ULONG (color->red / 256,
+				   color->green / 256,
+				   color->blue / 256);
+    }
+}
 
 int
 haiku_get_color (const char *name, Emacs_Color *color)
@@ -323,12 +358,12 @@ haiku_display_info_for_name (Lisp_Object name)
 {
   CHECK_STRING (name);
 
-  if (!NILP (Fstring_equal (name, build_string ("be"))))
+  if (!strcmp (SSDATA (name), "be"))
     {
-      if (!x_display_list)
+      if (x_display_list)
 	return x_display_list;
 
-      error ("Haiku windowing not initialized");
+      return haiku_term_init ();
     }
 
   error ("Haiku displays can only be named \"be\"");
@@ -498,8 +533,12 @@ haiku_set_z_group (struct frame *f, Lisp_Object new_value,
     rc = 0;
 
   unblock_input ();
+
   if (!rc)
     error ("Invalid z-group specification");
+
+  /* Setting the Z-group can change the frame's decorator.  */
+  haiku_update_after_decoration_change (f);
 }
 
 static void
@@ -578,37 +617,34 @@ unwind_create_tip_frame (Lisp_Object frame)
   tip_frame = Qnil;
 }
 
+static unsigned long
+haiku_decode_color (struct frame *f, Lisp_Object color_name)
+{
+  Emacs_Color cdef;
+
+  CHECK_STRING (color_name);
+
+  if (!haiku_get_color (SSDATA (color_name), &cdef))
+    return cdef.pixel;
+
+  signal_error ("Undefined color", color_name);
+}
+
 static void
 haiku_set_foreground_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  struct haiku_output *output = FRAME_OUTPUT_DATA (f);
-  unsigned long old_fg;
+  struct haiku_output *output;
+  unsigned long fg, old_fg;
 
-  Emacs_Color color;
-
-  if (haiku_get_color (SSDATA (arg), &color))
-    {
-      store_frame_param (f, Qforeground_color, oldval);
-      unblock_input ();
-      error ("Bad color");
-    }
-
+  fg = haiku_decode_color (f, arg);
   old_fg = FRAME_FOREGROUND_PIXEL (f);
-  FRAME_FOREGROUND_PIXEL (f) = color.pixel;
+  FRAME_FOREGROUND_PIXEL (f) = fg;
+  output = FRAME_OUTPUT_DATA (f);
 
   if (FRAME_HAIKU_WINDOW (f))
     {
-
-      block_input ();
       if (output->cursor_color.pixel == old_fg)
-	{
-	  output->cursor_color.pixel = old_fg;
-	  output->cursor_color.red = RED_FROM_ULONG (old_fg);
-	  output->cursor_color.green = GREEN_FROM_ULONG (old_fg);
-	  output->cursor_color.blue = BLUE_FROM_ULONG (old_fg);
-	}
-
-      unblock_input ();
+	haiku_query_color (fg, &output->cursor_color);
 
       update_face_from_frame_parameter (f, Qforeground_color, arg);
 
@@ -763,7 +799,7 @@ haiku_create_frame (Lisp_Object parms)
                          "foreground", "Foreground", RES_TYPE_STRING);
   gui_default_parameter (f, parms, Qbackground_color, build_string ("white"),
                          "background", "Background", RES_TYPE_STRING);
-  gui_default_parameter (f, parms, Qmouse_color, build_string ("black"),
+  gui_default_parameter (f, parms, Qmouse_color, build_string ("font-color"),
                          "pointerColor", "Foreground", RES_TYPE_STRING);
   gui_default_parameter (f, parms, Qline_spacing, Qnil,
                          "lineSpacing", "LineSpacing", RES_TYPE_NUMBER);
@@ -824,10 +860,7 @@ haiku_create_frame (Lisp_Object parms)
 
   f->terminal->reference_count++;
 
-  block_input ();
-  FRAME_OUTPUT_DATA (f)->window
-    = BWindow_new (&FRAME_OUTPUT_DATA (f)->view);
-  unblock_input ();
+  FRAME_OUTPUT_DATA (f)->window = BWindow_new (&FRAME_OUTPUT_DATA (f)->view);
 
   if (!FRAME_OUTPUT_DATA (f)->window)
     xsignal1 (Qerror, build_unibyte_string ("Could not create window"));
@@ -839,7 +872,8 @@ haiku_create_frame (Lisp_Object parms)
 
   Vframe_list = Fcons (frame, Vframe_list);
 
-  Lisp_Object parent_frame = gui_display_get_arg (dpyinfo, parms, Qparent_frame, NULL, NULL,
+  Lisp_Object parent_frame = gui_display_get_arg (dpyinfo, parms,
+						  Qparent_frame, NULL, NULL,
 						  RES_TYPE_SYMBOL);
 
   if (EQ (parent_frame, Qunbound)
@@ -1056,7 +1090,10 @@ haiku_create_tip_frame (Lisp_Object parms)
 
   gui_default_parameter (f, parms, Qbackground_color, build_string ("white"),
                          "background", "Background", RES_TYPE_STRING);
-  gui_default_parameter (f, parms, Qmouse_color, build_string ("black"),
+
+  /* FIXME: is there a better method to tell Emacs to not recolor the
+     cursors other than setting the color to a special value?  */
+  gui_default_parameter (f, parms, Qmouse_color, build_string ("font-color"),
                          "pointerColor", "Foreground", RES_TYPE_STRING);
   gui_default_parameter (f, parms, Qcursor_color, build_string ("black"),
                          "cursorColor", "Foreground", RES_TYPE_STRING);
@@ -1112,6 +1149,23 @@ haiku_create_tip_frame (Lisp_Object parms)
 
   /* FIXME - can this be done in a similar way to normal frames?
      https://lists.gnu.org/r/emacs-devel/2007-10/msg00641.html */
+
+  {
+    Lisp_Object disptype;
+
+    if (be_get_display_planes () == 1)
+      disptype = Qmono;
+    else if (be_is_display_grayscale ())
+      disptype = Qgrayscale;
+    else
+      disptype = Qcolor;
+
+    if (NILP (Fframe_parameter (frame, Qdisplay_type)))
+      {
+	AUTO_FRAME_ARG (arg, Qdisplay_type, disptype);
+	Fmodify_frame_parameters (frame, arg);
+      }
+  }
 
   /* Set up faces after all frame parameters are known.  This call
      also merges in face attributes specified for new frames.
@@ -1292,6 +1346,8 @@ haiku_set_undecorated (struct frame *f, Lisp_Object new_value,
   FRAME_UNDECORATED (f) = !NILP (new_value);
   BWindow_change_decoration (FRAME_HAIKU_WINDOW (f), NILP (new_value));
   unblock_input ();
+
+  haiku_update_after_decoration_change (f);
 }
 
 static void
@@ -1306,6 +1362,8 @@ haiku_set_override_redirect (struct frame *f, Lisp_Object new_value,
 				 !NILP (new_value));
   FRAME_OVERRIDE_REDIRECT (f) = !NILP (new_value);
   unblock_input ();
+
+  haiku_update_after_decoration_change (f);
 }
 
 static void
@@ -1352,122 +1410,129 @@ haiku_set_menu_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval
 static Lisp_Object
 frame_geometry (Lisp_Object frame, Lisp_Object attribute)
 {
-  struct frame *f = decode_live_frame (frame);
-  check_window_system (f);
+  struct frame *f, *parent;
+  void *window;
+  int outer_x, outer_y, outer_width, outer_height;
+  int right_off, bottom_off, top_off;
+  int native_x, native_y;
+
+  f = decode_window_system_frame (frame);
+  parent = FRAME_PARENT_FRAME (f);
+  window = FRAME_HAIKU_WINDOW (f);
+
+  be_lock_window (window);
+  be_get_window_decorator_frame (window, &outer_x, &outer_y,
+				 &outer_width, &outer_height);
+  be_get_window_decorator_dimensions (window, NULL, &top_off,
+				      &right_off, &bottom_off);
+  be_unlock_window (window);
+
+  native_x = FRAME_OUTPUT_DATA (f)->frame_x;
+  native_y = FRAME_OUTPUT_DATA (f)->frame_y;
+
+  if (parent)
+    {
+      /* Adjust all the coordinates by the coordinates of the parent
+	 frame.  */
+      outer_x -= FRAME_OUTPUT_DATA (parent)->frame_x;
+      outer_y -= FRAME_OUTPUT_DATA (parent)->frame_y;
+      native_x -= FRAME_OUTPUT_DATA (parent)->frame_x;
+      native_y -= FRAME_OUTPUT_DATA (parent)->frame_y;
+    }
 
   if (EQ (attribute, Qouter_edges))
-    return list4i (f->left_pos, f->top_pos,
-		   f->left_pos, f->top_pos);
+    return list4i (outer_x, outer_y,
+		   outer_x + outer_width,
+		   outer_y + outer_height);
   else if (EQ (attribute, Qnative_edges))
-    return list4i (f->left_pos, f->top_pos,
-		   f->left_pos + FRAME_PIXEL_WIDTH (f),
-		   f->top_pos + FRAME_PIXEL_HEIGHT (f));
+    return list4i (native_x, native_y,
+		   native_x + FRAME_PIXEL_WIDTH (f),
+		   native_y + FRAME_PIXEL_HEIGHT (f));
   else if (EQ (attribute, Qinner_edges))
-    return list4i (f->left_pos + FRAME_INTERNAL_BORDER_WIDTH (f),
-		   f->top_pos + FRAME_INTERNAL_BORDER_WIDTH (f) +
-		   FRAME_MENU_BAR_HEIGHT (f) + FRAME_TOOL_BAR_HEIGHT (f),
-		   f->left_pos - FRAME_INTERNAL_BORDER_WIDTH (f) +
-		   FRAME_PIXEL_WIDTH (f),
-		   f->top_pos + FRAME_PIXEL_HEIGHT (f) -
-		   FRAME_INTERNAL_BORDER_WIDTH (f));
+    return list4i (native_x + FRAME_INTERNAL_BORDER_WIDTH (f),
+		   native_y + FRAME_INTERNAL_BORDER_WIDTH (f)
+		   + FRAME_MENU_BAR_HEIGHT (f) + FRAME_TOOL_BAR_HEIGHT (f),
+		   native_x - FRAME_INTERNAL_BORDER_WIDTH (f)
+		   + FRAME_PIXEL_WIDTH (f),
+		   native_y + FRAME_PIXEL_HEIGHT (f)
+		   - FRAME_INTERNAL_BORDER_WIDTH (f));
 
   else
-    return
-      list (Fcons (Qouter_position,
-		   Fcons (make_fixnum (f->left_pos),
-			  make_fixnum (f->top_pos))),
-	    Fcons (Qouter_size,
-		   Fcons (make_fixnum (FRAME_PIXEL_WIDTH (f)),
-			  make_fixnum (FRAME_PIXEL_HEIGHT (f)))),
-	    Fcons (Qexternal_border_size,
-		   Fcons (make_fixnum (0), make_fixnum (0))),
-	    Fcons (Qtitle_bar_size,
-		   Fcons (make_fixnum (0), make_fixnum (0))),
-	    Fcons (Qmenu_bar_external, Qnil),
-	    Fcons (Qmenu_bar_size, Fcons (make_fixnum (FRAME_PIXEL_WIDTH (f) -
-						       (FRAME_INTERNAL_BORDER_WIDTH (f) * 2)),
-					  make_fixnum (FRAME_MENU_BAR_HEIGHT (f)))),
-	    Fcons (Qtool_bar_external, Qnil),
-	    Fcons (Qtool_bar_position, Qtop),
-	    Fcons (Qtool_bar_size, Fcons (make_fixnum (FRAME_PIXEL_WIDTH (f) -
-						       (FRAME_INTERNAL_BORDER_WIDTH (f) * 2)),
-					  make_fixnum (FRAME_TOOL_BAR_HEIGHT (f)))),
-	    Fcons (Qinternal_border_width, make_fixnum (FRAME_INTERNAL_BORDER_WIDTH (f))));
+    return list (Fcons (Qouter_position,
+			Fcons (make_fixnum (outer_x),
+			       make_fixnum (outer_y))),
+		 Fcons (Qouter_size,
+			Fcons (make_fixnum (outer_width),
+			       make_fixnum (outer_height))),
+		 Fcons (Qexternal_border_size,
+			Fcons (make_fixnum (right_off),
+			       make_fixnum (bottom_off))),
+		 Fcons (Qtitle_bar_size,
+			Fcons (make_fixnum (outer_width),
+			       make_fixnum (top_off))),
+		 Fcons (Qmenu_bar_external, Qnil),
+		 Fcons (Qmenu_bar_size,
+			Fcons (make_fixnum (FRAME_PIXEL_WIDTH (f)
+					    - (FRAME_INTERNAL_BORDER_WIDTH (f) * 2)),
+			       make_fixnum (FRAME_MENU_BAR_HEIGHT (f)))),
+		 Fcons (Qtool_bar_external, Qnil),
+		 Fcons (Qtool_bar_position, Qtop),
+		 Fcons (Qtool_bar_size,
+			Fcons (make_fixnum (FRAME_PIXEL_WIDTH (f)
+					    - (FRAME_INTERNAL_BORDER_WIDTH (f) * 2)),
+			       make_fixnum (FRAME_TOOL_BAR_HEIGHT (f)))),
+		 Fcons (Qinternal_border_width,
+			make_fixnum (FRAME_INTERNAL_BORDER_WIDTH (f))));
 }
 
 void
 haiku_set_background_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  Emacs_Color color;
-  struct face *defface;
+  unsigned long background;
 
-  CHECK_STRING (arg);
+  background = haiku_decode_color (f, arg);
 
-  block_input ();
-  if (haiku_get_color (SSDATA (arg), &color))
-    {
-      store_frame_param (f, Qbackground_color, oldval);
-      unblock_input ();
-      error ("Bad color");
-    }
-
-  FRAME_OUTPUT_DATA (f)->cursor_fg = color.pixel;
-  FRAME_BACKGROUND_PIXEL (f) = color.pixel;
+  FRAME_OUTPUT_DATA (f)->cursor_fg = background;
+  FRAME_BACKGROUND_PIXEL (f) = background;
 
   if (FRAME_HAIKU_VIEW (f))
     {
       BView_draw_lock (FRAME_HAIKU_VIEW (f), false, 0, 0, 0, 0);
-      BView_SetViewColor (FRAME_HAIKU_VIEW (f), color.pixel);
+      BView_SetViewColor (FRAME_HAIKU_VIEW (f), background);
       BView_draw_unlock (FRAME_HAIKU_VIEW (f));
 
-      defface = FACE_FROM_ID_OR_NULL (f, DEFAULT_FACE_ID);
-      if (defface)
-	{
-	  defface->background = color.pixel;
-	  update_face_from_frame_parameter (f, Qbackground_color, arg);
-	  clear_frame (f);
-	}
-    }
+      FRAME_OUTPUT_DATA (f)->cursor_fg = background;
+      update_face_from_frame_parameter (f, Qbackground_color, arg);
 
-  if (FRAME_VISIBLE_P (f))
-    SET_FRAME_GARBAGED (f);
-  unblock_input ();
+      if (FRAME_VISIBLE_P (f))
+	redraw_frame (f);
+    }
 }
 
 void
 haiku_set_cursor_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
-  Emacs_Color color, fore_pixel;
+  unsigned long fore_pixel, pixel;
 
-  CHECK_STRING (arg);
-  block_input ();
+  pixel = haiku_decode_color (f, arg);
 
-  if (haiku_get_color (SSDATA (arg), &color))
+  if (!NILP (Vx_cursor_fore_pixel))
     {
-      store_frame_param (f, Qcursor_color, oldval);
-      unblock_input ();
-      error ("Bad color");
-    }
-
-  FRAME_CURSOR_COLOR (f) = color;
-
-  if (STRINGP (Vx_cursor_fore_pixel))
-    {
-      if (haiku_get_color (SSDATA (Vx_cursor_fore_pixel),
-			   &fore_pixel))
-	error ("Bad color %s", SSDATA (Vx_cursor_fore_pixel));
-      FRAME_OUTPUT_DATA (f)->cursor_fg = fore_pixel.pixel;
+      fore_pixel = haiku_decode_color (f, Vx_cursor_fore_pixel);
+      FRAME_OUTPUT_DATA (f)->cursor_fg = fore_pixel;
     }
   else
     FRAME_OUTPUT_DATA (f)->cursor_fg = FRAME_BACKGROUND_PIXEL (f);
 
+  haiku_query_color (pixel, &FRAME_CURSOR_COLOR (f));
+
   if (FRAME_VISIBLE_P (f))
     {
-      gui_update_cursor (f, 0);
-      gui_update_cursor (f, 1);
+      gui_update_cursor (f, false);
+      gui_update_cursor (f, true);
     }
+
   update_face_from_frame_parameter (f, Qcursor_color, arg);
-  unblock_input ();
 }
 
 void
@@ -1787,6 +1852,23 @@ struct user_cursor_info
   ptrdiff_t default_offset;
 };
 
+struct user_cursor_bitmap_info
+{
+  /* A bitmap to use instead of the font cursor to create cursors in a
+     certain color.  */
+  const void *bits;
+
+  /* The mask for that bitmap.  */
+  const void *mask;
+
+  /* The dimensions of the cursor bitmap.  */
+  int width, height;
+
+  /* The position inside the cursor bitmap corresponding to the
+     position of the mouse pointer.  */
+  int x, y;
+};
+
 #define INIT_USER_CURSOR(lisp, cursor)			\
   { (lisp), offsetof (struct haiku_output, cursor),	\
       offsetof (struct haiku_display_info, cursor) }
@@ -1811,7 +1893,104 @@ struct user_cursor_info custom_cursors[] =
     INIT_USER_CURSOR (NULL,				no_cursor),
   };
 
-/* Free all cursors not default in F.  */
+struct user_cursor_bitmap_info cursor_bitmaps[] =
+  {
+    { ibeam_ptr_bits, ibeam_ptrmask_bits, 15, 15, 7, 7 },	/* text_cursor */
+    { left_ptr_bits, left_ptrmsk_bits, 16, 16, 3, 1 },		/* nontext_cursor */
+    { left_ptr_bits, left_ptrmsk_bits, 16, 16, 3, 1 },		/* modeline_cursor */
+    { hand_ptr_bits, hand_ptrmask_bits, 15, 15, 4, 3 },		/* hand_cursor */
+    { hourglass_bits, hourglass_mask_bits, 15, 15, 7, 7 },	/* hourglass_cursor */
+    { horizd_ptr_bits, horizd_ptrmask_bits, 15, 15, 7, 7 },	/* horizontal_drag_cursor */
+    { vertd_ptr_bits, vertd_ptrmask_bits, 15, 15, 7, 7 },	/* vertical_drag_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* left_edge_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* top_left_corner_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* top_edge_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* top_right_corner_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* right_edge_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* bottom_right_corner_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* bottom_edge_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* bottom_left_corner_cursor */
+    { NULL, NULL, 0, 0, 0, 0 },					/* no_cursor */
+  };
+
+/* Array of cursor bitmaps for each system cursor ID.  This is used to
+   color in user-specified cursors.  */
+struct user_cursor_bitmap_info cursor_bitmaps_for_id[28] =
+  {
+    { NULL, NULL, 0, 0, 0, 0					},
+    { left_ptr_bits, left_ptrmsk_bits, 16, 16, 3, 1		},
+    { ibeam_ptr_bits, ibeam_ptrmask_bits, 15, 15, 7, 7		},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { cross_ptr_bits, cross_ptrmask_bits, 30, 30, 15, 15	},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { hand_ptr_bits, hand_ptrmask_bits, 15, 15, 4, 3		},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { hourglass_bits, hourglass_mask_bits, 15, 15, 7, 7		},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { horizd_ptr_bits, horizd_ptrmask_bits, 15, 15, 7, 7	},
+    { vertd_ptr_bits, vertd_ptrmask_bits, 15, 15, 7, 7		},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+    { NULL, NULL, 0, 0, 0, 0					},
+  };
+
+static void *
+haiku_create_colored_cursor (struct user_cursor_bitmap_info *info,
+			     uint32_t foreground, uint32_t background)
+{
+  const char *bits, *mask;
+  void *bitmap, *cursor;
+  int width, height, bytes_per_line, x, y;
+
+  bits = info->bits;
+  mask = info->mask;
+  width = info->width;
+  height = info->height;
+  bytes_per_line = (width + 7) / 8;
+
+  bitmap = BBitmap_new (width, height, false);
+
+  if (!bitmap)
+    memory_full (SIZE_MAX);
+
+  for (y = 0; y < height; ++y)
+    {
+      for (x = 0; x < width; ++x)
+	{
+	  if (mask[x / 8] >> (x % 8) & 1)
+	    haiku_put_pixel (bitmap, x, y,
+			     (bits[x / 8] >> (x % 8) & 1
+			      ? (foreground | 255u << 24)
+			      : (background | 255u << 24)));
+	  else
+	    haiku_put_pixel (bitmap, x, y, 0);
+	}
+
+      mask += bytes_per_line;
+      bits += bytes_per_line;
+    }
+
+  cursor = be_create_pixmap_cursor (bitmap, info->x, info->y);
+  BBitmap_free (bitmap);
+
+  return cursor;
+}
+
+/* Free all cursors on F that were allocated specifically for the
+   frame.  */
 void
 haiku_free_custom_cursors (struct frame *f)
 {
@@ -1833,13 +2012,12 @@ haiku_free_custom_cursors (struct frame *f)
       display_cursor = (Emacs_Cursor *) ((char *) dpyinfo
 					 + cursor->default_offset);
 
-      if (*frame_cursor != *display_cursor
-	  && *frame_cursor)
+      if (*frame_cursor != *display_cursor && *frame_cursor)
 	{
-	  BCursor_delete (*frame_cursor);
-
 	  if (output->current_cursor == *frame_cursor)
 	    output->current_cursor = *display_cursor;
+
+	  be_delete_cursor (*frame_cursor);
 	}
 
       *frame_cursor = *display_cursor;
@@ -1850,8 +2028,21 @@ static void
 haiku_set_mouse_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 {
   struct haiku_output *output;
-  Emacs_Cursor *frame_cursor, old;
-  int i, n;
+  Emacs_Cursor *frame_cursor, old, *recolored;
+  int i, n, rc;
+  bool color_specified_p;
+  Emacs_Color color;
+
+  CHECK_STRING (arg);
+  color_specified_p = true;
+
+  if (!strcmp (SSDATA (arg), "font-color"))
+    color_specified_p = false;
+  else
+    rc = haiku_get_color (SSDATA (arg), &color);
+
+  if (color_specified_p && rc)
+    signal_error ("Undefined color", arg);
 
   output = FRAME_OUTPUT_DATA (f);
 
@@ -1875,25 +2066,45 @@ haiku_set_mouse_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 
 	  n = XFIXNUM (*custom_cursors[i].lisp_cursor);
 
-	  /* Create and set the custom cursor.  */
-	  block_input ();
-	  *frame_cursor = BCursor_from_id (n);
-	  unblock_input ();
-
-	  /* This function can be called before the frame's window is
-	     created.  */
-	  if (FRAME_HAIKU_WINDOW (f))
+	  if (color_specified_p && cursor_bitmaps_for_id[n].bits)
 	    {
-	      if (output->current_cursor == old)
-		{
-		  output->current_cursor = *frame_cursor;
+	      recolored
+		= haiku_create_colored_cursor (&cursor_bitmaps_for_id[n],
+					       color.pixel,
+					       FRAME_BACKGROUND_PIXEL (f));
 
-		  block_input ();
-		  BView_set_view_cursor (FRAME_HAIKU_VIEW (f),
-					 *frame_cursor);
-		  unblock_input ();
+	      if (recolored)
+		{
+		  *frame_cursor = recolored;
+		  continue;
 		}
 	    }
+
+	  /* Create and set the custom cursor.  */
+	  *frame_cursor = be_create_cursor_from_id (n);
+	}
+      else if (color_specified_p && cursor_bitmaps[i].bits)
+	{
+	  recolored
+	    = haiku_create_colored_cursor (&cursor_bitmaps[i], color.pixel,
+					   FRAME_BACKGROUND_PIXEL (f));
+
+	  if (recolored)
+	    *frame_cursor = recolored;
+	}
+    }
+
+  /* This function can be called before the frame's window is
+     created.  */
+  if (FRAME_HAIKU_WINDOW (f))
+    {
+      if (output->current_cursor == old
+	  && old != *frame_cursor)
+	{
+	  output->current_cursor = *frame_cursor;
+
+	  BView_set_view_cursor (FRAME_HAIKU_VIEW (f),
+				 *frame_cursor);
 	}
     }
 
@@ -2046,7 +2257,7 @@ DEFUN ("x-display-pixel-height", Fx_display_pixel_height, Sx_display_pixel_heigh
   check_haiku_display_info (terminal);
 
   be_get_screen_dimensions (&width, &height);
-  return make_fixnum (width);
+  return make_fixnum (height);
 }
 
 DEFUN ("x-display-mm-height", Fx_display_mm_height, Sx_display_mm_height, 0, 1, 0,
@@ -2786,6 +2997,57 @@ call this function yourself.  */)
   return Qnil;
 }
 
+DEFUN ("haiku-display-monitor-attributes-list",
+       Fhaiku_display_monitor_attributes_list,
+       Shaiku_display_monitor_attributes_list,
+       0, 1, 0,
+       doc: /* Return a list of physical monitor attributes on the display TERMINAL.
+
+The optional argument TERMINAL specifies which display to ask about.
+TERMINAL should be a terminal object, a frame or a display name (a string).
+If omitted or nil, that stands for the selected frame's display.
+
+Internal use only, use `display-monitor-attributes-list' instead.  */)
+  (Lisp_Object terminal)
+{
+  struct MonitorInfo monitor;
+  struct haiku_display_info *dpyinfo;
+  Lisp_Object frames, tail, tem;
+
+  dpyinfo = check_haiku_display_info (terminal);
+  frames = Qnil;
+
+  FOR_EACH_FRAME (tail, tem)
+    {
+      maybe_quit ();
+
+      if (FRAME_HAIKU_P (XFRAME (tem))
+	  && !FRAME_TOOLTIP_P (XFRAME (tem)))
+	frames = Fcons (tem, frames);
+    }
+
+  monitor.geom.x = 0;
+  monitor.geom.y = 0;
+  be_get_screen_dimensions ((int *) &monitor.geom.width,
+			    (int *) &monitor.geom.height);
+
+  monitor.mm_width = (monitor.geom.width
+		      / (dpyinfo->resx / 25.4));
+  monitor.mm_height = (monitor.geom.height
+		       / (dpyinfo->resy / 25.4));
+  monitor.name = (char *) "BeOS monitor";
+
+  if (!be_get_explicit_workarea ((int *) &monitor.work.x,
+				 (int *) &monitor.work.y,
+				 (int *) &monitor.work.width,
+				 (int *) &monitor.work.height))
+    monitor.work = monitor.geom;
+
+  return make_monitor_attribute_list (&monitor, 1, 0,
+				      make_vector (1, frames),
+				      "fallback");
+}
+
 frame_parm_handler haiku_frame_parm_handlers[] =
   {
     gui_set_autoraise,
@@ -2854,6 +3116,9 @@ syms_of_haikufns (void)
   DEFSYM (Qstatic_color, "static-color");
   DEFSYM (Qstatic_gray, "static-gray");
   DEFSYM (Qtrue_color, "true-color");
+  DEFSYM (Qmono, "mono");
+  DEFSYM (Qgrayscale, "grayscale");
+  DEFSYM (Qcolor, "color");
 
   defsubr (&Sx_hide_tip);
   defsubr (&Sxw_display_color_p);
@@ -2888,6 +3153,7 @@ syms_of_haikufns (void)
   defsubr (&Sx_display_save_under);
   defsubr (&Shaiku_frame_restack);
   defsubr (&Shaiku_save_session_reply);
+  defsubr (&Shaiku_display_monitor_attributes_list);
 
   tip_timer = Qnil;
   staticpro (&tip_timer);

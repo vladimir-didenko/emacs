@@ -4107,7 +4107,7 @@ buffer.  */)
   n_end = marker_position (OVERLAY_END (overlay));
 
   /* If the overlay has changed buffers, do a thorough redisplay.  */
-  if (!EQ (buffer, obuffer))
+  if (!BASE_EQ (buffer, obuffer))
     {
       /* Redisplay where the overlay was.  */
       if (ob)
@@ -5598,8 +5598,11 @@ the mode line appears at the bottom.  */);
 		     &BVAR (current_buffer, header_line_format),
 		     Qnil,
 		     doc: /* Analogous to `mode-line-format', but controls the header line.
-The header line appears, optionally, at the top of a window;
-the mode line appears at the bottom.  */);
+The header line appears, optionally, at the top of a window; the mode
+line appears at the bottom.
+
+Also see `header-line-indent-mode' if `display-line-number-mode' is
+used.  */);
 
   DEFVAR_PER_BUFFER ("mode-line-format", &BVAR (current_buffer, mode_line_format),
 		     Qnil,

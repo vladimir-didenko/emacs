@@ -201,20 +201,12 @@ move_minibuffers_onto_frame (struct frame *of, bool for_deletion)
     return;
   if (FRAME_LIVE_P (f)
       && !EQ (f->minibuffer_window, of->minibuffer_window)
-      && WINDOW_LIVE_P (f->minibuffer_window) /* F not a tootip frame */
+      && WINDOW_LIVE_P (f->minibuffer_window) /* F not a tooltip frame */
       && WINDOW_LIVE_P (of->minibuffer_window))
     {
       zip_minibuffer_stacks (f->minibuffer_window, of->minibuffer_window);
       if (for_deletion && XFRAME (MB_frame) != of)
 	MB_frame = selected_frame;
-      if (!for_deletion
-	  && MINI_WINDOW_P (XWINDOW (FRAME_SELECTED_WINDOW (of))))
-	{
-	  Lisp_Object old_frame;
-	  XSETFRAME (old_frame, of);
-	  Fset_frame_selected_window (old_frame,
-				      Fframe_first_window (old_frame), Qnil);
-	}
     }
 }
 
@@ -265,7 +257,7 @@ without invoking the usual minibuffer commands.  */)
 
 static void read_minibuf_unwind (void);
 static void minibuffer_unwind (void);
-static void run_exit_minibuf_hook (void);
+static void run_exit_minibuf_hook (Lisp_Object minibuf);
 
 
 /* Read a Lisp object from VAL and return it.  If VAL is an empty
@@ -749,7 +741,7 @@ read_minibuf (Lisp_Object map, Lisp_Object initial, Lisp_Object prompt,
      separately from read_minibuf_unwind because we need to make sure that
      read_minibuf_unwind is fully executed even if exit-minibuffer-hook
      signals an error.  --Stef  */
-  record_unwind_protect_void (run_exit_minibuf_hook);
+  record_unwind_protect (run_exit_minibuf_hook, minibuffer);
 
   /* Now that we can restore all those variables, start changing them.  */
 
@@ -1076,9 +1068,14 @@ static EMACS_INT minibuf_c_loop_level (EMACS_INT depth)
 }
 
 static void
-run_exit_minibuf_hook (void)
+run_exit_minibuf_hook (Lisp_Object minibuf)
 {
+  specpdl_ref count = SPECPDL_INDEX ();
+  record_unwind_current_buffer ();
+  if (BUFFER_LIVE_P (XBUFFER (minibuf)))
+    Fset_buffer (minibuf);
   safe_run_hooks (Qminibuffer_exit_hook);
+  unbind_to (count, Qnil);
 }
 
 /* This variable records the expired minibuffer's frame between the

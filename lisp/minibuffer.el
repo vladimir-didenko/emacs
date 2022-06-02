@@ -902,10 +902,10 @@ If the value is t, the *Completions* buffer is displayed whenever completion
 is requested but cannot be done.
 If the value is `lazy', the *Completions* buffer is only displayed after
 the second failed attempt to complete.
-If the value is 'always', the *Completions* buffer is always shown
+If the value is `always', the *Completions* buffer is always shown
 after a completion attempt, and the list of completions is updated if
 already visible.
-If the value is 'visible', the *Completions* buffer is displayed
+If the value is `visible', the *Completions* buffer is displayed
 whenever completion is requested but cannot be done for the first time,
 but remains visible thereafter, and the list of completions in it is
 updated for subsequent attempts to complete.."
@@ -1001,7 +1001,11 @@ and DOC describes the way this style of completion works.")
 The available styles are listed in `completion-styles-alist'.
 
 Note that `completion-category-overrides' may override these
-styles for specific categories, such as files, buffers, etc."
+styles for specific categories, such as files, buffers, etc.
+
+Note that Tramp host name completion (e.g., \"/ssh:ho<TAB>\")
+currently doesn't work if this list doesn't contain at least one
+of `basic', `emacs22' or `emacs21'."
   :type completion--styles-type
   :version "23.1")
 
@@ -1418,9 +1422,10 @@ scroll the window of possible completions."
     (let ((window minibuffer-scroll-window))
       (with-current-buffer (window-buffer window)
         (cond
-         ;; Here this is possible only when second-tab, so jump now.
-         (completion-auto-select
-          (switch-to-completions))
+         ;; Here this is possible only when second-tab, but instead of
+         ;; scrolling the completion list window, switch to it below,
+         ;; outside of `with-current-buffer'.
+         ((eq completion-auto-select 'second-tab))
          ;; Reverse tab
          ((equal (this-command-keys) [backtab])
           (if (pos-visible-in-window-p (point-min) window)
@@ -1434,15 +1439,22 @@ scroll the window of possible completions."
               ;; If end is in view, scroll up to the end.
               (set-window-start window (point-min) nil)
             ;; Else scroll down one screen.
-            (with-selected-window window (scroll-up)))))
-        nil)))
+            (with-selected-window window (scroll-up))))))
+      (when (eq completion-auto-select 'second-tab)
+        (switch-to-completions))
+      nil))
    ;; If we're cycling, keep on cycling.
    ((and completion-cycling completion-all-sorted-completions)
     (minibuffer-force-complete beg end)
     t)
-   (t (pcase (completion--do-completion beg end)
-        (#b000 nil)
-        (_     t)))))
+   (t (prog1 (pcase (completion--do-completion beg end)
+               (#b000 nil)
+               (_     t))
+        (when (and (eq completion-auto-select t)
+                   (window-live-p minibuffer-scroll-window)
+                   (eq t (frame-visible-p (window-frame minibuffer-scroll-window))))
+          ;; When the completion list window was displayed, select it.
+          (switch-to-completions))))))
 
 (defun completion--cache-all-sorted-completions (beg end comps)
   (add-hook 'after-change-functions
@@ -2070,11 +2082,11 @@ Runs of equal candidate strings are eliminated.  GROUP-FUN is a
       (when prefix
         (let ((beg (point))
               (end (progn (insert prefix) (point))))
-          (put-text-property beg end 'mouse-face nil)))
+          (add-text-properties beg end `(mouse-face nil completion--string ,(car str)))))
       (completion--insert (car str) group-fun)
       (let ((beg (point))
             (end (progn (insert suffix) (point))))
-        (put-text-property beg end 'mouse-face nil)
+        (add-text-properties beg end `(mouse-face nil completion--string ,(car str)))
         ;; Put the predefined face only when suffix
         ;; is added via annotation-function without prefix,
         ;; and when the caller doesn't use own face.
@@ -2543,7 +2555,10 @@ Also respects the obsolete wrapper hook `completion-in-region-functions'.
   ;; FIXME: Only works if completion-in-region-mode was activated via
   ;; completion-at-point called directly.
   "M-?" #'completion-help-at-point
-  "TAB" #'completion-at-point)
+  "TAB" #'completion-at-point
+  "M-<up>"   #'minibuffer-previous-completion
+  "M-<down>" #'minibuffer-next-completion
+  "M-RET"    #'minibuffer-choose-completion)
 
 ;; It is difficult to know when to exit completion-in-region-mode (i.e. hide
 ;; the *Completions*).  Here's how previous packages did it:
@@ -2590,6 +2605,7 @@ Also respects the obsolete wrapper hook `completion-in-region-functions'.
     (cl-assert completion-in-region-mode-predicate)
     (setq completion-in-region-mode--predicate
 	  completion-in-region-mode-predicate)
+    (setq-local minibuffer-completion-auto-choose nil)
     (add-hook 'post-command-hook #'completion-in-region--postch)
     (push `(completion-in-region-mode . ,completion-in-region-mode-map)
           minor-mode-overriding-map-alist)))
@@ -4369,30 +4385,25 @@ selected by these commands to the minibuffer."
   :version "29.1")
 
 (defun minibuffer-next-completion (&optional n)
-  "Run `next-completion' from the minibuffer in its completions window.
+  "Move to the next item in its completions window from the minibuffer.
 When `minibuffer-completion-auto-choose' is non-nil, then also
 insert the selected completion to the minibuffer."
   (interactive "p")
-  (with-minibuffer-completions-window
-    (when completions-highlight-face
-      (setq-local cursor-face-highlight-nonselected-window t))
-    (next-completion (or n 1))
-    (when minibuffer-completion-auto-choose
-      (let ((completion-use-base-affixes t))
-        (choose-completion nil t t)))))
+  (let ((auto-choose minibuffer-completion-auto-choose))
+    (with-minibuffer-completions-window
+      (when completions-highlight-face
+        (setq-local cursor-face-highlight-nonselected-window t))
+      (next-completion (or n 1))
+      (when auto-choose
+        (let ((completion-use-base-affixes t))
+          (choose-completion nil t t))))))
 
 (defun minibuffer-previous-completion (&optional n)
-  "Run `previous-completion' from the minibuffer in its completions window.
+  "Move to the previous item in its completions window from the minibuffer.
 When `minibuffer-completion-auto-choose' is non-nil, then also
 insert the selected completion to the minibuffer."
   (interactive "p")
-  (with-minibuffer-completions-window
-    (when completions-highlight-face
-      (setq-local cursor-face-highlight-nonselected-window t))
-    (previous-completion (or n 1))
-    (when minibuffer-completion-auto-choose
-      (let ((completion-use-base-affixes t))
-        (choose-completion nil t t)))))
+  (minibuffer-next-completion (- (or n 1))))
 
 (defun minibuffer-choose-completion (&optional no-exit no-quit)
   "Run `choose-completion' from the minibuffer in its completions window.

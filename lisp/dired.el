@@ -254,7 +254,7 @@ The target is used in the prompt for file copy, rename etc."
 Dragging the mouse and then releasing it over the window of
 another program will result in that program opening the file, or
 creating a copy of it.  This feature is supported only on X
-Windows and Haiku.
+Windows, Haiku, and Nextstep (macOS or GNUstep).
 
 If the value is `link', then a symbolic link will be created to
 the file instead by the other program (usually a file manager)."
@@ -1764,9 +1764,17 @@ when Emacs exits or the user drags another file.")
                       (setq dired-last-dragged-remote-file filename)
                       (add-hook 'kill-emacs-hook
                                 #'dired-remove-last-dragged-local-file))
-                    (gui-backend-set-selection 'XdndSelection filename)
+                    (gui-backend-set-selection
+                     ;; FIXME: this seems arbitrarily confusing.
+                     ;; Should drag-and-drop for common items (such as
+                     ;; files and text) should be abstracted into
+                     ;; dnd.el?
+                     'XdndSelection
+                     (propertize filename 'text/uri-list
+                                 (concat "file://"
+                                         (expand-file-name filename))))
                     (x-begin-drag '("text/uri-list" "text/x-dnd-username"
-                                    "FILE_NAME" "FILE" "HOST_NAME")
+                                    "FILE_NAME" "FILE" "HOST_NAME" "_DT_NETFILE")
                                   (if (eq 'dired-mouse-drag-files 'link)
                                       'XdndActionLink
                                     'XdndActionCopy)
@@ -3957,7 +3965,11 @@ this subdir."
     (let ((inhibit-read-only t))
       (dired-repeat-over-lines
        (prefix-numeric-value arg)
-       (lambda () (delete-char 1) (insert dired-marker-char)))))))
+       (lambda ()
+         (when (or (not (looking-at-p dired-re-dot))
+                   (not (equal dired-marker-char dired-del-marker)))
+           (delete-char 1)
+           (insert dired-marker-char))))))))
 
 (defun dired-unmark (arg &optional interactive)
   "Unmark the file at point in the Dired buffer.

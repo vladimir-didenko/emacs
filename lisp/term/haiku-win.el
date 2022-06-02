@@ -52,7 +52,8 @@
   "The local value of the special `XdndSelection' selection.")
 
 (defvar haiku-dnd-selection-converters '((STRING . haiku-dnd-convert-string)
-                                         (text/uri-list . haiku-dnd-convert-uri-list))
+                                         (FILE_NAME . haiku-dnd-convert-file-name)
+                                         (text/uri-list . haiku-dnd-convert-text-uri-list))
   "Alist of X selection types to functions that act as selection converters.
 The functions should accept a single argument VALUE, describing
 the value of the drag-and-drop selection, and return a list of
@@ -141,11 +142,25 @@ VALUE as a unibyte string, or nil if VALUE was not a string."
     (list "text/plain" (string-to-unibyte
                         (encode-coding-string value 'utf-8)))))
 
-(defun haiku-dnd-convert-uri-list (value)
+(defun haiku-dnd-convert-file-name (value)
   "Convert VALUE to a file system reference if it is a file name."
   (when (and (stringp value)
+             (not (file-remote-p value))
              (file-exists-p value))
     (list "refs" (propertize (expand-file-name value) 'type 'ref))))
+
+(defun haiku-dnd-convert-text-uri-list (value)
+  "Convert VALUE to a list of URLs."
+  (cond
+   ((stringp value) (list "text/uri-list"
+                          (concat (url-encode-url value) "\n")))
+   ((vectorp value) (list "text/uri-list"
+                          (with-temp-buffer
+                            (cl-loop for tem across value
+                                     do (progn
+                                          (insert (url-encode-url tem))
+                                          (insert "\n")))
+                            (buffer-string))))))
 
 (declare-function x-open-connection "haikufns.c")
 (declare-function x-handle-args "common-win")
@@ -170,7 +185,6 @@ The resources should be a list of strings in COMMAND-LINE-RESOURCES."
   "Set up the window system.  WINDOW-SYSTEM must be HAIKU.
 DISPLAY may be set to the name of a display that will be initialized."
   (cl-assert (not haiku-initialized))
-
   (create-default-fontset)
   (when x-command-line-resources
     (haiku--handle-x-command-line-resources
@@ -292,6 +306,11 @@ or a pair of markers) and turns it into a file system reference."
           (dolist (filename (cddr (assoc "refs" string)))
             (dnd-handle-one-url window 'private
                                 (concat "file:" filename)))))
+       ((assoc "text/uri-list" string)
+        (dolist (text (cddr (assoc "text/uri-list" string)))
+          (let ((uri-list (split-string text "[\0\r\n]" t)))
+            (dolist (bf uri-list)
+              (dnd-handle-one-url window 'private bf)))))
        ((assoc "text/plain" string)
         (with-selected-window window
           (raise-frame)
@@ -340,12 +359,17 @@ take effect on menu items until the menu bar is updated again."
         (mouse-highlight nil)
         (haiku-signal-invalid-refs nil))
     (dolist (target targets)
-      (let ((selection-converter (cdr (assoc (intern target)
-                                             haiku-dnd-selection-converters))))
+      (let* ((target-atom (intern target))
+             (selection-converter (cdr (assoc target-atom
+                                              haiku-dnd-selection-converters))))
         (when selection-converter
           (let ((selection-result
                  (funcall selection-converter
-                          haiku-dnd-selection-value)))
+                          (if (stringp haiku-dnd-selection-value)
+                              (or (get-text-property 0 target-atom
+                                                     haiku-dnd-selection-value)
+                                  haiku-dnd-selection-value)
+                            haiku-dnd-selection-value))))
             (when selection-result
               (let ((field (cdr (assoc (car selection-result) message))))
                 (unless (cadr field)

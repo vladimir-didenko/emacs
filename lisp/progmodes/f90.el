@@ -612,7 +612,7 @@ and variable-name parts, respectively."
     '("^[ \t0-9]*\\(?:pure\\|elemental\\)?[ \t]*\
 \\(real\\|integer\\|c\\(haracter\\|omplex\\)\\|\
 enumerator\\|generic\\|procedure\\|logical\\|double[ \t]*precision\\)\
-\\(.*::\\|[ \t]*(.*)\\)?\\(\\(?:[^&!\n]*\\(?:&\n\\)?\\)+\\)"
+\\(.*::\\|[ \t]*(.*)\\)?\\([^&!\n]*\\(?:&\n[^&!\n]*\\)*\\)"
       (1 font-lock-type-face t) (4 font-lock-variable-name-face append))
     ;; Derived type/class variables.
     ;; TODO ? If we just highlighted the "type" part, rather than
@@ -825,9 +825,7 @@ Can be overridden by the value of `font-lock-maximum-decoration'.")
          :style toggle :help "Expand abbreviations while typing in this buffer"]
         ["Add Imenu Menu" f90-add-imenu-menu
          :active   (not (lookup-key (current-local-map) [menu-bar index]))
-         :included (fboundp 'imenu-add-to-menubar)
-         :help "Add an index menu to the menu-bar"
-         ]))
+         :help "Add an index menu to the menu-bar"]))
     map)
   "Keymap used in F90 mode.")
 

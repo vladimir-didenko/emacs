@@ -1003,6 +1003,7 @@ untar into a directory named DIR; otherwise, signal an error."
 
 (defun package-autoload-ensure-default-file (file)
   "Make sure that the autoload file FILE exists and if not create it."
+  (declare (obsolete nil "29.1"))
   (unless (file-exists-p file)
     (require 'autoload)
     (let ((coding-system-for-write 'utf-8-emacs-unix))
@@ -1021,8 +1022,11 @@ untar into a directory named DIR; otherwise, signal an error."
          (autoload-timestamps nil)
          (backup-inhibited t)
          (version-control 'never))
-    (package-autoload-ensure-default-file output-file)
-    (make-directory-autoloads pkg-dir output-file)
+    (loaddefs-generate
+     pkg-dir output-file
+     nil
+     "(add-to-list 'load-path (directory-file-name
+                         (or (file-name-directory #$) (car load-path))))")
     (let ((buf (find-buffer-visiting output-file)))
       (when buf (kill-buffer buf)))
     auto-name))
@@ -1629,7 +1633,9 @@ The variable `package-load-list' controls which packages to load."
          (qs (if (file-readable-p elc) elc
                (if (file-readable-p package-quickstart-file)
                    package-quickstart-file))))
-    (if qs
+    ;; The quickstart file presumes that it has a blank slate,
+    ;; so don't use it if we already activated some packages.
+    (if (and qs (not (bound-and-true-p package-activated-list)))
         ;; Skip load-source-file-function which would slow us down by a factor
         ;; 2 when loading the .el file (this assumes we were careful to
         ;; save this file so it doesn't need any decoding).
@@ -2164,13 +2170,17 @@ to install it but still mark it as selected."
               (package-desc-priority-version (cadr available))))))
     package-alist)))
 
-(defun package-update-all (&optional inhibit-queries)
-  "Upgrade all packages."
-  (interactive "P")
+;;;###autoload
+(defun package-update-all (&optional query)
+  "Refresh package list and upgrade all packages.
+If QUERY, ask the user before updating packages.  When called
+interactively, QUERY is always true."
+  (interactive (list (not noninteractive)))
+  (package-refresh-contents)
   (let ((updateable (package--updateable-packages)))
     (if (not updateable)
         (message "No packages to update")
-      (when (and (not inhibit-queries)
+      (when (and query
                  (not (yes-or-no-p
                        (if (length= updateable 1)
                            "One package to update.  Do it? "
@@ -2178,6 +2188,14 @@ to install it but still mark it as selected."
                                  (length updateable))))))
         (user-error "Updating aborted"))
       (mapc #'package-update updateable))))
+
+(defun package--dependencies (pkg)
+  "Return a list of all dependencies PKG has.
+This is done recursively."
+  ;; Can we have circular dependencies?  Assume "nope".
+  (when-let* ((desc (cadr (assq pkg package-archive-contents)))
+              (deps (mapcar #'car (package-desc-reqs desc))))
+    (delete-dups (apply #'nconc deps (mapcar #'package--dependencies deps)))))
 
 (defun package-strip-rcs-id (str)
   "Strip RCS version ID from the version string STR.
@@ -3571,17 +3589,34 @@ immediately."
     (setq package-menu--mark-upgrades-pending t)
     (message "Waiting for refresh to finish...")))
 
-(defun package-menu--list-to-prompt (packages)
+(defun package-menu--list-to-prompt (packages &optional include-dependencies)
   "Return a string listing PACKAGES that's usable in a prompt.
 PACKAGES is a list of `package-desc' objects.
 Formats the returned string to be usable in a minibuffer
-prompt (see `package-menu--prompt-transaction-p')."
+prompt (see `package-menu--prompt-transaction-p').
+
+If INCLUDE-DEPENDENCIES, also include the number of uninstalled
+dependencies."
   ;; The case where `package' is empty is handled in
   ;; `package-menu--prompt-transaction-p' below.
-  (format "%d (%s)"
+  (format "%d (%s)%s"
           (length packages)
-          (mapconcat #'package-desc-full-name packages " ")))
-
+          (mapconcat #'package-desc-full-name packages " ")
+          (let ((deps
+                 (seq-remove
+                  #'package-installed-p
+                  (delete-dups
+                   (apply
+                    #'nconc
+                    (mapcar (lambda (package)
+                              (package--dependencies
+                               (package-desc-name package)))
+                            packages))))))
+            (if (and include-dependencies deps)
+                (if (length= deps 1)
+                    (format " plus 1 dependency")
+                  (format " plus %d dependencies" (length deps)))
+              ""))))
 
 (defun package-menu--prompt-transaction-p (delete install upgrade)
   "Prompt the user about DELETE, INSTALL, and UPGRADE.
@@ -3590,11 +3625,14 @@ Either may be nil, but not all."
   (y-or-n-p
    (concat
     (when delete
-      (format "Packages to delete: %s.  " (package-menu--list-to-prompt delete)))
+      (format "Packages to delete: %s.  "
+              (package-menu--list-to-prompt delete)))
     (when install
-      (format "Packages to install: %s.  " (package-menu--list-to-prompt install)))
+      (format "Packages to install: %s.  "
+              (package-menu--list-to-prompt install t)))
     (when upgrade
-      (format "Packages to upgrade: %s.  " (package-menu--list-to-prompt upgrade)))
+      (format "Packages to upgrade: %s.  "
+              (package-menu--list-to-prompt upgrade)))
     "Proceed? ")))
 
 
@@ -4254,18 +4292,19 @@ activations need to be changed, such as when `package-load-list' is modified."
                   (locate-library (package--autoloads-file-name pkg))))
                (pfile (prin1-to-string file)))
           (insert "(let ((load-true-file-name " pfile ")\
-(load-file-name " pfile "))\n")
+\(load-file-name " pfile "))\n")
           (insert-file-contents file)
           ;; Fixup the special #$ reader form and throw away comments.
           (while (re-search-forward "#\\$\\|^;\\(.*\n\\)" nil 'move)
-            (unless (nth 8 (syntax-ppss))
+            (unless (ppss-string-terminator (save-match-data (syntax-ppss)))
               (replace-match (if (match-end 1) "" pfile) t t)))
           (unless (bolp) (insert "\n"))
           (insert ")\n")))
       (pp `(defvar package-activated-list) (current-buffer))
       (pp `(setq package-activated-list
-                 (append ',(mapcar #'package-desc-name package--quickstart-pkgs)
-                         package-activated-list))
+                 (delete-dups
+                  (append ',(mapcar #'package-desc-name package--quickstart-pkgs)
+                          package-activated-list)))
           (current-buffer))
       (let ((info-dirs (butlast Info-directory-list)))
         (when info-dirs

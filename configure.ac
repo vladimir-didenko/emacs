@@ -1079,8 +1079,12 @@ AS_IF([test $gl_gcc_warnings = no],
   # option problematic.
   nw="$nw -Wsuggest-attribute=pure"
 
+  # Emacs doesn't need this paranoia.
+  nw="$nw -Wbidi-chars=any,ucn"
+
   if test "$emacs_cv_clang" = yes; then
     nw="$nw -Wdouble-promotion"
+    nm="$nm -Wunknown-pragmas"
   fi
 
   # This causes too much noise in the MinGW build.
@@ -1100,6 +1104,7 @@ AS_IF([test $gl_gcc_warnings = no],
   gl_WARN_ADD([-Wno-type-limits])      # Too many warnings for now
   gl_WARN_ADD([-Wno-unused-parameter]) # Too many warnings for now
   gl_WARN_ADD([-Wno-format-nonliteral])
+  gl_WARN_ADD([-Wno-bidi-chars])
 
   # clang is unduly picky about some things.
   if test "$emacs_cv_clang" = yes; then
@@ -2076,6 +2081,16 @@ Either fix this, or re-configure with the option '--without-ns'.])])
        AC_MSG_ERROR([Mac OS X 10.6 or newer is required]);
     fi
   fi
+
+  AC_CACHE_CHECK([for Mac OS X 12.0 or later],
+                 [emacs_cv_macosx_12_0],
+                 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#include <AvailabilityMacros.h>
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= 120000
+Mac OS X 12.x or later.
+#endif
+                 ]])], [emacs_cv_macosx_12_0=no],
+                 [emacs_cv_macosx_12_0=yes]))
 
   if test "${with_native_image_api}" = yes; then
      AC_DEFINE(HAVE_NATIVE_IMAGE_API, 1, [Define to use native OS APIs for images.])
@@ -6212,6 +6227,9 @@ case "$opsys" in
      if test "$NS_IMPL_COCOA" = "yes"; then
         libs_nsgui="$libs_nsgui -framework IOKit -framework Carbon \
                     -framework IOSurface -framework QuartzCore"
+        if test "$emacs_cv_macosx_12_0" = "yes"; then
+	  libs_nsgui="$libs_nsgui -framework UniformTypeIdentifiers"
+	fi
      fi
    else
      libs_nsgui=
