@@ -41,10 +41,12 @@
   '((t :inherit variable-pitch))
   "Face used for a section.")
 
-(defvar shortdoc--groups nil)
+;;;###autoload
+(progn
+  (defvar shortdoc--groups nil)
 
-(defmacro define-short-documentation-group (group &rest functions)
-  "Add GROUP to the list of defined documentation groups.
+  (defmacro define-short-documentation-group (group &rest functions)
+    "Add GROUP to the list of defined documentation groups.
 FUNCTIONS is a list of elements on the form:
 
   (FUNC
@@ -88,8 +90,7 @@ string will be `read' and evaluated.
 
   (FUNC
    :no-eval EXAMPLE-FORM
-   :result RESULT-FORM   ;Use `:result-string' if value is in string form
-   )
+   :result RESULT-FORM)   ;Use `:result-string' if value is in string form
 
 Using `:no-value' is the same as using `:no-eval'.
 
@@ -102,17 +103,16 @@ execution of the documented form depends on some conditions.
 
   (FUNC
    :no-eval EXAMPLE-FORM
-   :eg-result RESULT-FORM ;Use `:eg-result-string' if value is in string form
-   )
+   :eg-result RESULT-FORM) ;Use `:eg-result-string' if value is in string form
 
 A FUNC form can have any number of `:no-eval' (or `:no-value'),
 `:no-eval*', `:result', `:result-string', `:eg-result' and
 `:eg-result-string' properties."
-  (declare (indent defun))
-  `(progn
-     (setq shortdoc--groups (delq (assq ',group shortdoc--groups)
-                                  shortdoc--groups))
-     (push (cons ',group ',functions) shortdoc--groups)))
+    (declare (indent defun))
+    `(progn
+       (setq shortdoc--groups (delq (assq ',group shortdoc--groups)
+                                    shortdoc--groups))
+       (push (cons ',group ',functions) shortdoc--groups))))
 
 (define-short-documentation-group alist
   "Alist Basics"
@@ -260,11 +260,16 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :no-manual t
    :eval (string-blank-p " \n"))
   (string-lessp
-   :eval (string-lessp "foo" "bar"))
+   :eval (string-lessp "foo" "bar")
+   :eval (string-lessp "pic4.png" "pic32.png")
+   :eval (string-lessp "1.1" "1 2"))
   (string-greaterp
    :eval (string-greaterp "foo" "bar"))
   (string-version-lessp
-   :eval (string-version-lessp "pic4.png" "pic32.png"))
+   :eval (string-version-lessp "pic4.png" "pic32.png")
+   :eval (string-version-lessp "1.1" "1 2"))
+  (string-collate-lessp
+   :eval (string-collate-lessp "1.1" "1 2"))
   (string-prefix-p
    :eval (string-prefix-p "foo" "foobar"))
   (string-suffix-p
@@ -348,6 +353,13 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
   (abbreviate-file-name
    :no-eval (abbreviate-file-name "/home/some-user")
    :eg-result "~some-user")
+  (file-parent-directory
+   :eval (file-parent-directory "/foo/bar")
+   :eval (file-parent-directory "~")
+   :eval (file-parent-directory "/tmp/")
+   :eval (file-parent-directory "foo/bar")
+   :eval (file-parent-directory "foo")
+   :eval (file-parent-directory "/"))
   "Quoted File Names"
   (file-name-quote
    :args (name)
@@ -463,7 +475,9 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :no-eval* (directory-files-and-attributes "/tmp/foo"))
   (file-expand-wildcards
    :no-eval (file-expand-wildcards "/tmp/*.png")
-   :eg-result ("/tmp/foo.png" "/tmp/zot.png"))
+   :eg-result ("/tmp/foo.png" "/tmp/zot.png")
+   :no-eval (file-expand-wildcards "/*/foo.png")
+   :eg-result ("/tmp/foo.png" "/var/foo.png"))
   (locate-dominating-file
    :no-eval (locate-dominating-file "foo.png" "/tmp/foo/bar/zot")
    :eg-result "/tmp/foo.png")
@@ -684,11 +698,6 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
   (plist-put
    :no-eval (setq plist (plist-put plist 'd 4))
    :eq-result (a 1 b 2 c 3 d 4))
-  (lax-plist-get
-   :eval (lax-plist-get '("a" 1 "b" 2 "c" 3) "b"))
-  (lax-plist-put
-   :no-eval (setq plist (lax-plist-put plist "d" 4))
-   :eq-result '("a" 1 "b" 2 "c" 3 "d" 4))
   (plist-member
    :eval (plist-member '(a 1 b 2 c 3) 'b))
   "Data About Lists"
@@ -887,6 +896,8 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :eval (seq-subseq '(a b c d e) 2 4))
   (seq-take
    :eval (seq-take '(a b c d e) 3))
+  (seq-split
+   :eval (seq-split [0 1 2 3 5] 2))
   (seq-take-while
    :eval (seq-take-while #'cl-evenp [2 4 9 6 5]))
   (seq-uniq

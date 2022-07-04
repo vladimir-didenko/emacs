@@ -135,6 +135,11 @@ with the current prefix.  The files are chosen according to
 
 (defcustom help-enable-variable-value-editing nil
   "If non-nil, allow editing values in *Help* buffers.
+
+To edit the value of a variable, use \\[describe-variable] to
+display a \"*Help*\" buffer, move point after the text
+\"Its value is\" and type \\`e'.
+
 Values that aren't readable by the Emacs Lisp reader can't be
 edited even if this option is enabled."
   :type 'boolean
@@ -617,7 +622,7 @@ the C sources, too."
   (pcase-dolist (`(,type . ,handler)
                  (list (cons "compiler macro"
                              (function-get function 'compiler-macro))
-                       (cons "`byte-compile' property"
+                       (cons (substitute-command-keys "`byte-compile' property")
                              (function-get function 'byte-compile))
                        (cons "byte-code optimizer"
                              (function-get function 'byte-optimizer))))
@@ -720,19 +725,22 @@ the C sources, too."
   ;; Ignore lambda constructs, keyboard macros, etc.
   (let* ((obsolete (and (symbolp function)
 			(get function 'byte-obsolete-info)))
-         (use (car obsolete)))
+         (use (car obsolete))
+         (start (point)))
     (when obsolete
-      (insert "  This "
+      (insert "This "
 	      (if (eq (car-safe (symbol-function function)) 'macro)
 		  "macro"
 		"function")
 	      " is obsolete")
       (when (nth 2 obsolete)
         (insert (format " since %s" (nth 2 obsolete))))
-      (insert (cond ((stringp use) (concat ";\n  " use))
-                    (use (format-message ";\n  use `%s' instead." use))
+      (insert (cond ((stringp use) (concat "; " use))
+                    (use (format-message "; use `%s' instead." use))
                     (t "."))
-              "\n"))))
+              "\n")
+      (fill-region-as-paragraph start (point))
+      (ensure-empty-lines))))
 
 (add-hook 'help-fns-describe-function-functions
           #'help-fns--globalized-minor-mode)
@@ -1039,6 +1047,8 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
          nil t)
         (ensure-empty-lines))))
 
+  (help-fns--obsolete function)
+
   (pcase-let* ((`(,real-function ,def ,_aliased ,real-def)
                 (help-fns--analyze-function function))
                (doc-raw (condition-case nil
@@ -1046,8 +1056,7 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
                             ;; for invalid functions i.s.o. signaling an error.
                             (documentation function t)
                           ;; E.g. an alias for a not yet defined function.
-                          ((invalid-function void-function) nil)))
-               (key-bindings-buffer (current-buffer)))
+                          ((invalid-function void-function) nil))))
 
     ;; If the function is autoloaded, and its docstring has
     ;; key substitution constructs, load the library.
@@ -1064,7 +1073,7 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
                      (help-fns--signature
                       function doc-raw
                       (if (subrp def) (indirect-function real-def) real-def)
-                      real-function key-bindings-buffer)
+                      real-function describe-function-orig-buffer)
                    ;; E.g. an alias for a not yet defined function.
                    ((invalid-function void-function) doc-raw))))
         (help-fns--ensure-empty-line)
@@ -1078,7 +1087,6 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
         (set-buffer-file-coding-system 'utf-8)))))
 
 ;; Add defaults to `help-fns-describe-function-functions'.
-(add-hook 'help-fns-describe-function-functions #'help-fns--obsolete)
 (add-hook 'help-fns-describe-function-functions #'help-fns--interactive-only)
 (add-hook 'help-fns-describe-function-functions #'help-fns--parent-mode)
 (add-hook 'help-fns-describe-function-functions #'help-fns--compiler-macro 100)
@@ -1235,10 +1243,11 @@ it is displayed along with the global value."
 		    (terpri)
                     (let ((buf (current-buffer)))
                       (with-temp-buffer
-                        (lisp-mode-variables nil)
+                        (lisp-data-mode)
                         (set-syntax-table emacs-lisp-mode-syntax-table)
                         (insert print-rep)
                         (pp-buffer)
+                        (font-lock-ensure)
                         (let ((pp-buffer (current-buffer)))
                           (with-current-buffer buf
                             (insert-buffer-substring pp-buffer)))))
@@ -1333,6 +1342,7 @@ it is displayed along with the global value."
                              alias 'variable-documentation))))
 
 	      (with-current-buffer standard-output
+                (help-fns--var-obsolete variable)
 		(insert (or doc "Not documented as a variable.")))
 
               ;; Output the indented administrative bits.
@@ -1353,9 +1363,6 @@ it is displayed along with the global value."
 
 (defun help-fns--editable-variable (start end variable value buffer)
   (when (and (readablep value)
-             (or (not (symbolp value))
-                 (and (not (and (symbolp value) (boundp value)))
-                      (not (and (symbolp value) (fboundp value)))))
              help-enable-variable-value-editing)
     (add-text-properties
      start end
@@ -1363,6 +1370,7 @@ it is displayed along with the global value."
            'help-fns--edit-variable (list variable value buffer
                                           (current-buffer))
            'keymap (define-keymap
+                     :parent button-map
                      "e" #'help-fns-edit-variable)))))
 
 (defvar help-fns--edit-variable)
@@ -1370,8 +1378,8 @@ it is displayed along with the global value."
 (put 'help-fns-edit-variable 'disabled t)
 (defun help-fns-edit-variable ()
   "Edit the variable under point."
-  (interactive)
   (declare (completion ignore))
+  (interactive)
   (let ((var (get-text-property (point) 'help-fns--edit-variable)))
     (unless var
       (error "No variable under point"))
@@ -1379,13 +1387,16 @@ it is displayed along with the global value."
     (prin1 (nth 1 var) (current-buffer))
     (pp-buffer)
     (goto-char (point-min))
-    (insert (format ";; Edit the `%s' variable.\n" (nth 0 var))
-            ";; C-c C-c to update the value and exit.\n\n")
     (help-fns--edit-value-mode)
+    (insert (format ";; Edit the `%s' variable.\n" (nth 0 var))
+            (substitute-command-keys
+             ";; `\\[help-fns-edit-mode-done]' to update the value and exit; \
+`\\[help-fns-edit-mode-cancel]' to cancel.\n\n"))
     (setq-local help-fns--edit-variable var)))
 
 (defvar-keymap help-fns--edit-value-mode-map
-  "C-c C-c" #'help-fns-edit-mode-done)
+  "C-c C-c" #'help-fns-edit-mode-done
+  "C-c C-k" #'help-fns-edit-mode-cancel)
 
 (define-derived-mode help-fns--edit-value-mode emacs-lisp-mode "Elisp"
   :interactive nil)
@@ -1410,6 +1421,11 @@ current buffer."
     (when (buffer-live-p help-buffer)
       (with-current-buffer help-buffer
         (revert-buffer)))))
+
+(defun help-fns-edit-mode-cancel ()
+  "Kill the buffer without updating the value."
+  (interactive nil help-fns--edit-value-mode)
+  (help-fns-edit-mode-done t))
 
 (defun help-fns--run-describe-functions (functions &rest args)
   (with-current-buffer standard-output
@@ -1527,19 +1543,21 @@ variable.\n")))
       (princ watchpoints)
       (terpri))))
 
-(add-hook 'help-fns-describe-variable-functions #'help-fns--var-obsolete)
 (defun help-fns--var-obsolete (variable)
   (let* ((obsolete (get variable 'byte-obsolete-variable))
-	 (use (car obsolete)))
+	 (use (car obsolete))
+         (start (point)))
     (when obsolete
-      (princ "  This variable is obsolete")
+      (insert "This variable is obsolete")
       (if (nth 2 obsolete)
-          (princ (format " since %s" (nth 2 obsolete))))
-      (princ (cond ((stringp use) (concat ";\n  " use))
-		   (use (format-message ";\n  use `%s' instead."
-                                        (car obsolete)))
-		   (t ".")))
-      (terpri))))
+          (insert (format " since %s" (nth 2 obsolete))))
+      (insert (cond ((stringp use) (concat "; " use))
+		    (use (format-message "; use `%s' instead."
+                                         (car obsolete)))
+		    (t "."))
+              "\n")
+      (fill-region-as-paragraph start (point))
+      (ensure-empty-lines))))
 
 (add-hook 'help-fns-describe-variable-functions #'help-fns--var-alias)
 (defun help-fns--var-alias (variable)

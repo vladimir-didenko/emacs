@@ -368,6 +368,11 @@ typedef EMACS_INT Lisp_Word;
    ((ok) ? (void) 0 : wrong_type_argument (predicate, x))
 #define lisp_h_CONSP(x) TAGGEDP (x, Lisp_Cons)
 #define lisp_h_BASE_EQ(x, y) (XLI (x) == XLI (y))
+#define lisp_h_BASE2_EQ(x, y)				    \
+  (BASE_EQ (x, y)					    \
+   || (symbols_with_pos_enabled				    \
+       && SYMBOL_WITH_POS_P (x)				    \
+       && BASE_EQ (XSYMBOL_WITH_POS (x)->sym, y)))
 
 /* FIXME: Do we really need to inline the whole thing?
  * What about keeping the part after `symbols_with_pos_enabled` in
@@ -453,6 +458,7 @@ typedef EMACS_INT Lisp_Word;
 # define CHECK_TYPE(ok, predicate, x) lisp_h_CHECK_TYPE (ok, predicate, x)
 # define CONSP(x) lisp_h_CONSP (x)
 # define BASE_EQ(x, y) lisp_h_BASE_EQ (x, y)
+# define BASE2_EQ(x, y) lisp_h_BASE2_EQ (x, y)
 # define FLOATP(x) lisp_h_FLOATP (x)
 # define FIXNUMP(x) lisp_h_FIXNUMP (x)
 # define NILP(x) lisp_h_NILP (x)
@@ -1316,6 +1322,14 @@ INLINE bool
 (BASE_EQ) (Lisp_Object x, Lisp_Object y)
 {
   return lisp_h_BASE_EQ (x, y);
+}
+
+/* Return true if X and Y are the same object, reckoning X to be the
+   same as a bare symbol Y if X is Y with position.  */
+INLINE bool
+(BASE2_EQ) (Lisp_Object x, Lisp_Object y)
+{
+  return lisp_h_BASE2_EQ (x, y);
 }
 
 /* Return true if X and Y are the same object, reckoning a symbol with
@@ -3437,7 +3451,7 @@ union specbinding
 #define WRAP_SPECPDL_REF 1
 #endif
 
-/* Abstract reference to to a specpdl entry.
+/* Abstract reference to a specpdl entry.
    The number is always a multiple of sizeof (union specbinding).  */
 #ifdef WRAP_SPECPDL_REF
 /* Use a proper type for specpdl_ref if it does not make the code slower,
@@ -3631,6 +3645,10 @@ struct handler
   struct bc_frame *act_rec;
   int poll_suppress_count;
   int interrupt_input_blocked;
+
+#ifdef HAVE_X_WINDOWS
+  int x_error_handler_depth;
+#endif
 };
 
 extern Lisp_Object memory_signal_data;
@@ -4016,6 +4034,10 @@ extern ptrdiff_t string_char_to_byte (Lisp_Object, ptrdiff_t);
 extern ptrdiff_t string_byte_to_char (Lisp_Object, ptrdiff_t);
 extern Lisp_Object string_to_multibyte (Lisp_Object);
 extern Lisp_Object string_make_unibyte (Lisp_Object);
+extern Lisp_Object plist_get (Lisp_Object plist, Lisp_Object prop);
+extern Lisp_Object plist_put (Lisp_Object plist, Lisp_Object prop,
+			      Lisp_Object val);
+extern Lisp_Object plist_member (Lisp_Object plist, Lisp_Object prop);
 extern void syms_of_fns (void);
 
 /* Defined in sort.c  */

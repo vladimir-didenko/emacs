@@ -1735,13 +1735,24 @@ maybe_swap_for_eln (bool no_native, Lisp_Object *filename, int *fd,
 	{
 	  if (!NILP (find_symbol_value (
 		       Qnative_comp_warning_on_missing_source)))
-	    call2 (intern_c_string ("display-warning"),
-		   Qcomp,
-		   CALLN (Fformat,
-			  build_string ("Cannot look-up eln file as no source "
-					"file was found for %s"),
-			  *filename));
-	  return;
+	    {
+	      /* If we have an installation without any .el files,
+		 there's really no point in giving a warning here,
+		 because that will trigger a cascade of warnings.  So
+		 just do a sanity check and refuse to do anything if we
+		 can't find even central .el files.  */
+	      if (NILP (Flocate_file_internal (build_string ("simple.el"),
+					       Vload_path,
+					       Qnil, Qnil)))
+		return;
+	      call2 (intern_c_string ("display-warning"),
+		     Qcomp,
+		     CALLN (Fformat,
+			    build_string ("Cannot look up eln file as "
+					  "no source file was found for %s"),
+			    *filename));
+	      return;
+	    }
 	}
     }
   Lisp_Object eln_rel_name = Fcomp_el_to_eln_rel_filename (src_name);
@@ -2216,7 +2227,7 @@ readevalloop (Lisp_Object readcharfun,
      lexical environment, otherwise, turn off lexical binding.  */
   lex_bound = find_symbol_value (Qlexical_binding);
   specbind (Qinternal_interpreter_environment,
-	    (NILP (lex_bound) || EQ (lex_bound, Qunbound)
+	    (NILP (lex_bound) || BASE_EQ (lex_bound, Qunbound)
 	     ? Qnil : list1 (Qt)));
   specbind (Qmacroexp__dynvars, Vmacroexp__dynvars);
 
@@ -2633,7 +2644,7 @@ enum { UNICODE_CHARACTER_NAME_LENGTH_BOUND = 200 };
    If the escape sequence forces unibyte, return eight-bit char.  */
 
 static int
-read_escape (Lisp_Object readcharfun, bool stringp)
+read_escape (Lisp_Object readcharfun)
 {
   int c = READCHAR;
   /* \u allows up to four hex digits, \U up to eight.  Default to the
@@ -2663,12 +2674,10 @@ read_escape (Lisp_Object readcharfun, bool stringp)
       return '\t';
     case 'v':
       return '\v';
+
     case '\n':
-      return -1;
-    case ' ':
-      if (stringp)
-	return -1;
-      return ' ';
+      /* ?\LF is an error; it's probably a user mistake.  */
+      error ("Invalid escape character syntax");
 
     case 'M':
       c = READCHAR;
@@ -2676,7 +2685,7 @@ read_escape (Lisp_Object readcharfun, bool stringp)
 	error ("Invalid escape character syntax");
       c = READCHAR;
       if (c == '\\')
-	c = read_escape (readcharfun, 0);
+	c = read_escape (readcharfun);
       return c | meta_modifier;
 
     case 'S':
@@ -2685,7 +2694,7 @@ read_escape (Lisp_Object readcharfun, bool stringp)
 	error ("Invalid escape character syntax");
       c = READCHAR;
       if (c == '\\')
-	c = read_escape (readcharfun, 0);
+	c = read_escape (readcharfun);
       return c | shift_modifier;
 
     case 'H':
@@ -2694,7 +2703,7 @@ read_escape (Lisp_Object readcharfun, bool stringp)
 	error ("Invalid escape character syntax");
       c = READCHAR;
       if (c == '\\')
-	c = read_escape (readcharfun, 0);
+	c = read_escape (readcharfun);
       return c | hyper_modifier;
 
     case 'A':
@@ -2703,19 +2712,19 @@ read_escape (Lisp_Object readcharfun, bool stringp)
 	error ("Invalid escape character syntax");
       c = READCHAR;
       if (c == '\\')
-	c = read_escape (readcharfun, 0);
+	c = read_escape (readcharfun);
       return c | alt_modifier;
 
     case 's':
       c = READCHAR;
-      if (stringp || c != '-')
+      if (c != '-')
 	{
 	  UNREAD (c);
 	  return ' ';
 	}
       c = READCHAR;
       if (c == '\\')
-	c = read_escape (readcharfun, 0);
+	c = read_escape (readcharfun);
       return c | super_modifier;
 
     case 'C':
@@ -2726,7 +2735,7 @@ read_escape (Lisp_Object readcharfun, bool stringp)
     case '^':
       c = READCHAR;
       if (c == '\\')
-	c = read_escape (readcharfun, 0);
+	c = read_escape (readcharfun);
       if ((c & ~CHAR_MODIFIER_MASK) == '?')
 	return 0177 | (c & CHAR_MODIFIER_MASK);
       else if (! ASCII_CHAR_P ((c & ~CHAR_MODIFIER_MASK)))
@@ -3011,7 +3020,7 @@ read_char_literal (Lisp_Object readcharfun)
     }
 
   if (ch == '\\')
-    ch = read_escape (readcharfun, 0);
+    ch = read_escape (readcharfun);
 
   int modifiers = ch & CHAR_MODIFIER_MASK;
   ch &= ~CHAR_MODIFIER_MASK;
@@ -3065,14 +3074,24 @@ read_string_literal (char stackbuf[VLA_ELEMS (stackbufsize)],
 
       if (ch == '\\')
 	{
-	  ch = read_escape (readcharfun, 1);
-
-	  /* CH is -1 if \ newline or \ space has just been seen.  */
-	  if (ch == -1)
+	  /* First apply string-specific escape rules:  */
+	  ch = READCHAR;
+	  switch (ch)
 	    {
+	    case 's':
+	      /* `\s' is always a space in strings.  */
+	      ch = ' ';
+	      break;
+	    case ' ':
+	    case '\n':
+	      /* `\SPC' and `\LF' generate no characters at all.  */
 	      if (p == read_buffer)
 		cancel = true;
 	      continue;
+	    default:
+	      UNREAD (ch);
+	      ch = read_escape (readcharfun);
+	      break;
 	    }
 
 	  int modifiers = ch & CHAR_MODIFIER_MASK;
@@ -3084,19 +3103,13 @@ read_string_literal (char stackbuf[VLA_ELEMS (stackbufsize)],
 	    force_multibyte = true;
 	  else		/* I.e. ASCII_CHAR_P (ch).  */
 	    {
-	      /* Allow `\C- ' and `\C-?'.  */
-	      if (modifiers == CHAR_CTL)
+	      /* Allow `\C-SPC' and `\^SPC'.  This is done here because
+		 the literals ?\C-SPC and ?\^SPC (rather inconsistently)
+		 yield (' ' | CHAR_CTL); see bug#55738.  */
+	      if (modifiers == CHAR_CTL && ch == ' ')
 		{
-		  if (ch == ' ')
-		    {
-		      ch = 0;
-		      modifiers = 0;
-		    }
-		  else if (ch == '?')
-		    {
-		      ch = 127;
-		      modifiers = 0;
-		    }
+		  ch = 0;
+		  modifiers = 0;
 		}
 	      if (modifiers & CHAR_SHIFT)
 		{
@@ -3173,7 +3186,7 @@ hash_table_from_plist (Lisp_Object plist)
   /* This is repetitive but fast and simple.  */
 #define ADDPARAM(name)					\
   do {							\
-    Lisp_Object val = Fplist_get (plist, Q ## name);	\
+    Lisp_Object val = plist_get (plist, Q ## name);	\
     if (!NILP (val))					\
       {							\
 	*par++ = QC ## name;				\
@@ -3188,7 +3201,7 @@ hash_table_from_plist (Lisp_Object plist)
   ADDPARAM (rehash_threshold);
   ADDPARAM (purecopy);
 
-  Lisp_Object data = Fplist_get (plist, Qdata);
+  Lisp_Object data = plist_get (plist, Qdata);
 
   /* Now use params to make a new hash table and fill it.  */
   Lisp_Object ht = Fmake_hash_table (par - params, params);
@@ -3480,7 +3493,7 @@ skip_lazy_string (Lisp_Object readcharfun)
 
       /* Copy that many bytes into saved_doc_string.  */
       ptrdiff_t i = 0;
-      int c;
+      int c = 0;
       for (int n = min (nskip, infile->lookahead); n > 0; n--)
 	saved_doc_string[i++] = c = infile->buf[--infile->lookahead];
       block_input ();
@@ -4665,7 +4678,7 @@ define_symbol (Lisp_Object sym, char const *str)
 
   /* Qunbound is uninterned, so that it's not confused with any symbol
      'unbound' created by a Lisp program.  */
-  if (! EQ (sym, Qunbound))
+  if (! BASE_EQ (sym, Qunbound))
     {
       Lisp_Object bucket = oblookup (initial_obarray, str, len, len);
       eassert (FIXNUMP (bucket));
@@ -4853,7 +4866,7 @@ oblookup (Lisp_Object obarray, register const char *ptr, ptrdiff_t size, ptrdiff
   hash = hash_string (ptr, size_byte) % obsize;
   bucket = AREF (obarray, hash);
   oblookup_last_bucket_number = hash;
-  if (EQ (bucket, make_fixnum (0)))
+  if (BASE_EQ (bucket, make_fixnum (0)))
     ;
   else if (!SYMBOLP (bucket))
     /* Like CADR error message.  */
@@ -4875,7 +4888,7 @@ oblookup (Lisp_Object obarray, register const char *ptr, ptrdiff_t size, ptrdiff
 
 /* Like 'oblookup', but considers 'Vread_symbol_shorthands',
    potentially recognizing that IN is shorthand for some other
-   longhand name, which is then then placed in OUT.  In that case,
+   longhand name, which is then placed in OUT.  In that case,
    memory is malloc'ed for OUT (which the caller must free) while
    SIZE_OUT and SIZE_BYTE_OUT respectively hold the character and byte
    sizes of the transformed symbol name.  If IN is not recognized

@@ -2309,8 +2309,8 @@ postprocess_image (struct frame *f, struct image *img)
 	  tem = XCDR (conversion);
 	  if (CONSP (tem))
 	    image_edge_detection (f, img,
-                                  Fplist_get (tem, QCmatrix),
-                                  Fplist_get (tem, QCcolor_adjustment));
+                                  plist_get (tem, QCmatrix),
+                                  plist_get (tem, QCcolor_adjustment));
 	}
     }
 }
@@ -2503,17 +2503,17 @@ compute_image_size (double width, double height,
    finally move the origin back to the top left of the image, which
    may now be a different corner.
 
-   Note that different GUI backends (X, Cairo, w32, NS) want the
-   transform matrix defined as transform from the original image to
-   the transformed image, while others want the matrix to describe the
-   transform of the space, which boils down to inverting the matrix.
+   Note that different GUI backends (X, Cairo, w32, NS, Haiku) want
+   the transform matrix defined as transform from the original image
+   to the transformed image, while others want the matrix to describe
+   the transform of the space, which boils down to inverting the
+   matrix.
 
    It's possible to pre-calculate the matrix multiplications and just
    generate one transform matrix that will do everything we need in a
    single step, but the maths for each element is much more complex
    and performing the steps separately makes for more readable code.  */
 
-#ifndef HAVE_HAIKU
 typedef double matrix3x3[3][3];
 
 static void
@@ -2528,7 +2528,6 @@ matrix3x3_mult (matrix3x3 a, matrix3x3 b, matrix3x3 result)
 	result[i][j] = sum;
       }
 }
-#endif /* not HAVE_HAIKU */
 
 static void
 compute_image_rotation (struct image *img, double *rotation)
@@ -2553,6 +2552,22 @@ compute_image_rotation (struct image *img, double *rotation)
 static void
 image_set_transform (struct frame *f, struct image *img)
 {
+  bool flip;
+
+#if defined HAVE_HAIKU
+  matrix3x3 identity = {
+    { 1, 0, 0 },
+    { 0, 1, 0 },
+    { 0, 0, 1 },
+  };
+
+  img->original_width = img->width;
+  img->original_height = img->height;
+  img->use_bilinear_filtering = false;
+
+  memcpy (&img->transform, identity, sizeof identity);
+#endif
+
 # if (defined HAVE_IMAGEMAGICK \
       && !defined DONT_CREATE_TRANSFORMED_IMAGEMAGICK_IMAGE)
   /* ImageMagick images already have the correct transform.  */
@@ -2587,8 +2602,10 @@ image_set_transform (struct frame *f, struct image *img)
   double rotation = 0.0;
   compute_image_rotation (img, &rotation);
 
-#ifndef HAVE_HAIKU
-# if defined USE_CAIRO || defined HAVE_XRENDER || defined HAVE_NS
+  /* Determine flipping.  */
+  flip = !NILP (image_spec_value (img->spec, QCflip, NULL));
+
+# if defined USE_CAIRO || defined HAVE_XRENDER || defined HAVE_NS || defined HAVE_HAIKU
   /* We want scale up operations to use a nearest neighbor filter to
      show real pixels instead of munging them, but scale down
      operations to use a blended filter, to avoid aliasing and the like.
@@ -2602,6 +2619,10 @@ image_set_transform (struct frame *f, struct image *img)
     smoothing = !NILP (s);
 # endif
 
+#ifdef HAVE_HAIKU
+  img->use_bilinear_filtering = smoothing;
+#endif
+
   /* Perform scale transformation.  */
 
   matrix3x3 matrix
@@ -2611,7 +2632,7 @@ image_set_transform (struct frame *f, struct image *img)
 		  : img->width / (double) width),
 	[1][1] = (!IEEE_FLOATING_POINT && height == 0 ? DBL_MAX
 		  : img->height / (double) height),
-# elif defined HAVE_NTGUI || defined HAVE_NS
+# elif defined HAVE_NTGUI || defined HAVE_NS || defined HAVE_HAIKU
 	[0][0] = (!IEEE_FLOATING_POINT && img->width == 0 ? DBL_MAX
 		  : width / (double) img->width),
 	[1][1] = (!IEEE_FLOATING_POINT && img->height == 0 ? DBL_MAX
@@ -2626,26 +2647,65 @@ image_set_transform (struct frame *f, struct image *img)
   /* Perform rotation transformation.  */
 
   int rotate_flag = -1;
-  if (rotation == 0)
+
+  /* Haiku needs this, since the transformation is done on the basis
+     of the view, and not the image.  */
+#ifdef HAVE_HAIKU
+  int extra_tx, extra_ty;
+
+  extra_tx = 0;
+  extra_ty = 0;
+#endif
+
+  if (rotation == 0 && !flip)
     rotate_flag = 0;
   else
     {
 # if (defined USE_CAIRO || defined HAVE_XRENDER \
-      || defined HAVE_NTGUI || defined HAVE_NS)
+      || defined HAVE_NTGUI || defined HAVE_NS \
+      || defined HAVE_HAIKU)
       int cos_r, sin_r;
-      if (rotation == 90)
+      if (rotation == 0)
+	{
+	  /* FLIP is always true here.  As this will rotate by 0
+	     degrees, it has no visible effect.  Applying only
+	     translation matrix to the image would be sufficient for
+	     horizontal flipping, but writing special handling for
+	     this case would increase code complexity somewhat.  */
+	  cos_r = 1;
+	  sin_r = 0;
+	  rotate_flag = 1;
+
+#ifdef HAVE_HAIKU
+	  extra_tx = width;
+	  extra_ty = 0;
+#endif
+	}
+      else if (rotation == 90)
 	{
 	  width = img->height;
 	  height = img->width;
 	  cos_r = 0;
 	  sin_r = 1;
 	  rotate_flag = 1;
+
+#ifdef HAVE_HAIKU
+	  if (!flip)
+	    extra_ty = height;
+	  extra_tx = 0;
+#endif
 	}
       else if (rotation == 180)
 	{
 	  cos_r = -1;
 	  sin_r = 0;
 	  rotate_flag = 1;
+
+#ifdef HAVE_HAIKU
+	  if (!flip)
+	    extra_tx = width;
+	  extra_ty = height;
+#endif
 	}
       else if (rotation == 270)
 	{
@@ -2654,6 +2714,13 @@ image_set_transform (struct frame *f, struct image *img)
 	  cos_r = 0;
 	  sin_r = -1;
 	  rotate_flag = 1;
+
+#ifdef HAVE_HAIKU
+	  extra_tx = width;
+
+	  if (flip)
+	    extra_ty = height;
+#endif
 	}
 
       if (0 < rotate_flag)
@@ -2674,9 +2741,14 @@ image_set_transform (struct frame *f, struct image *img)
 	  matrix3x3 v;
 	  matrix3x3_mult (rot, u, v);
 
-	  /* 3. Translate back.  */
+	  /* 3. Translate back.  Flip horizontally if requested.  */
 	  t[2][0] = width * -.5;
 	  t[2][1] = height * -.5;
+	  if (flip)
+	    {
+	      t[0][0] = -t[0][0];
+	      t[2][0] = -t[2][0];
+	    }
 	  matrix3x3_mult (t, v, matrix);
 #  else
 	  /* 1. Translate so (0, 0) is in the center of the image.  */
@@ -2694,9 +2766,10 @@ image_set_transform (struct frame *f, struct image *img)
 	  matrix3x3 v;
 	  matrix3x3_mult (u, rot, v);
 
-	  /* 3. Translate back.  */
+	  /* 3. Translate back.  Flip horizontally if requested.  */
 	  t[2][0] = width * .5;
 	  t[2][1] = height * .5;
+	  if (flip) t[0][0] = -t[0][0];
 	  matrix3x3_mult (v, t, matrix);
 #  endif
 	  img->width = width;
@@ -2757,35 +2830,17 @@ image_set_transform (struct frame *f, struct image *img)
   img->xform.eM22 = matrix[1][1];
   img->xform.eDx  = matrix[2][0];
   img->xform.eDy  = matrix[2][1];
-# endif
-#else
-  if (rotation != 0 &&
-      rotation != 90 &&
-      rotation != 180 &&
-      rotation != 270 &&
-      rotation != 360)
+# elif defined HAVE_HAIKU
+  /* Store the transform in the struct image for later.  */
+  memcpy (&img->transform, &matrix, sizeof matrix);
+
+  /* Also add the extra translations.   */
+  if (rotate_flag)
     {
-      image_error ("No native support for rotation by %g degrees",
-		   make_float (rotation));
-      return;
+      img->transform[0][2] = extra_tx;
+      img->transform[1][2] = extra_ty;
     }
-
-  rotation = fmod (rotation, 360.0);
-
-  if (rotation == 90 || rotation == 270)
-    {
-      int w = width;
-      width = height;
-      height = w;
-    }
-
-  img->have_be_transforms_p = rotation != 0 || (img->width != width) || (img->height != height);
-  img->be_rotate = rotation;
-  img->be_scale_x = 1.0 / (img->width / (double) width);
-  img->be_scale_y = 1.0 / (img->height / (double) height);
-  img->width = width;
-  img->height = height;
-#endif /* not HAVE_HAIKU */
+#endif
 }
 
 #endif /* HAVE_IMAGEMAGICK || HAVE_NATIVE_TRANSFORMS */
@@ -3723,6 +3778,8 @@ enum xbm_keyword_index
   XBM_ALGORITHM,
   XBM_HEURISTIC_MASK,
   XBM_MASK,
+  XBM_DATA_WIDTH,
+  XBM_DATA_HEIGHT,
   XBM_LAST
 };
 
@@ -3744,7 +3801,9 @@ static const struct image_keyword xbm_format[XBM_LAST] =
   {":relief",		IMAGE_INTEGER_VALUE,			0},
   {":conversion",	IMAGE_DONT_CHECK_VALUE_TYPE,		0},
   {":heuristic-mask",	IMAGE_DONT_CHECK_VALUE_TYPE,		0},
-  {":mask",		IMAGE_DONT_CHECK_VALUE_TYPE,		0}
+  {":mask",		IMAGE_DONT_CHECK_VALUE_TYPE,		0},
+  {":data-width",	IMAGE_POSITIVE_INTEGER_VALUE,		0},
+  {":data-height",	IMAGE_POSITIVE_INTEGER_VALUE,		0}
 };
 
 /* Tokens returned from xbm_scan.  */
@@ -3766,8 +3825,8 @@ enum xbm_token
    an entry `:file FILENAME' where FILENAME is a string.
 
    If the specification is for a bitmap loaded from memory it must
-   contain `:width WIDTH', `:height HEIGHT', and `:data DATA', where
-   WIDTH and HEIGHT are integers > 0.  DATA may be:
+   contain `:data-width WIDTH', `:data-height HEIGHT', and `:data DATA',
+   where WIDTH and HEIGHT are integers > 0.  DATA may be:
 
    1. a string large enough to hold the bitmap data, i.e. it must
    have a size >= (WIDTH + 7) / 8 * HEIGHT
@@ -3777,9 +3836,7 @@ enum xbm_token
    3. a vector of strings or bool-vectors, one for each line of the
    bitmap.
 
-   4. a string containing an in-memory XBM file.  WIDTH and HEIGHT
-   may not be specified in this case because they are defined in the
-   XBM file.
+   4. a string containing an in-memory XBM file.
 
    Both the file and data forms may contain the additional entries
    `:background COLOR' and `:foreground COLOR'.  If not present,
@@ -3799,13 +3856,13 @@ xbm_image_p (Lisp_Object object)
 
   if (kw[XBM_FILE].count)
     {
-      if (kw[XBM_WIDTH].count || kw[XBM_HEIGHT].count || kw[XBM_DATA].count)
+      if (kw[XBM_DATA].count)
 	return 0;
     }
   else if (kw[XBM_DATA].count && xbm_file_p (kw[XBM_DATA].value))
     {
       /* In-memory XBM file.  */
-      if (kw[XBM_WIDTH].count || kw[XBM_HEIGHT].count || kw[XBM_FILE].count)
+      if (kw[XBM_FILE].count)
 	return 0;
     }
   else
@@ -3814,14 +3871,14 @@ xbm_image_p (Lisp_Object object)
       int width, height, stride;
 
       /* Entries for `:width', `:height' and `:data' must be present.  */
-      if (!kw[XBM_WIDTH].count
-	  || !kw[XBM_HEIGHT].count
+      if (!kw[XBM_DATA_WIDTH].count
+	  || !kw[XBM_DATA_HEIGHT].count
 	  || !kw[XBM_DATA].count)
 	return 0;
 
       data = kw[XBM_DATA].value;
-      width = XFIXNAT (kw[XBM_WIDTH].value);
-      height = XFIXNAT (kw[XBM_HEIGHT].value);
+      width = XFIXNAT (kw[XBM_DATA_WIDTH].value);
+      height = XFIXNAT (kw[XBM_DATA_HEIGHT].value);
 
       if (!kw[XBM_STRIDE].count)
 	stride = width;
@@ -4445,8 +4502,8 @@ xbm_load (struct frame *f, struct image *img)
       /* Get specified width, and height.  */
       if (!in_memory_file_p)
 	{
-	  img->width = XFIXNAT (fmt[XBM_WIDTH].value);
-	  img->height = XFIXNAT (fmt[XBM_HEIGHT].value);
+	  img->width = XFIXNAT (fmt[XBM_DATA_WIDTH].value);
+	  img->height = XFIXNAT (fmt[XBM_DATA_HEIGHT].value);
 	  eassert (img->width > 0 && img->height > 0);
 	  if (!check_image_size (f, img->width, img->height))
 	    {
@@ -11938,6 +11995,7 @@ non-numeric, there is no explicit limit on the size of images.  */);
   DEFSYM (QCtransform_smoothing, ":transform-smoothing");
   DEFSYM (QCcolor_adjustment, ":color-adjustment");
   DEFSYM (QCmask, ":mask");
+  DEFSYM (QCflip, ":flip");
 
   /* Other symbols.  */
   DEFSYM (Qlaplace, "laplace");

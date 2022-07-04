@@ -388,12 +388,18 @@ See `run-hooks'."
     st))
 
 (put 'lambda 'scheme-doc-string-elt 2)
+(put 'lambda* 'scheme-doc-string-elt 2)
 ;; Docstring's pos in a `define' depends on whether it's a var or fun def.
 (put 'define 'scheme-doc-string-elt
      (lambda ()
        ;; The function is called with point right after "define".
        (forward-comment (point-max))
        (if (eq (char-after) ?\() 2 0)))
+(put 'define* 'scheme-doc-string-elt 2)
+(put 'case-lambda 'scheme-doc-string-elt 1)
+(put 'case-lambda* 'scheme-doc-string-elt 1)
+(put 'define-syntax-rule 'scheme-doc-string-elt 2)
+(put 'syntax-rules 'scheme-doc-string-elt 2)
 
 (defun scheme-syntax-propertize (beg end)
   (goto-char beg)
@@ -587,7 +593,7 @@ indentation."
 (put 'sequence 'scheme-indent-function 0) ; SICP, not r4rs
 (put 'let-syntax 'scheme-indent-function 1)
 (put 'letrec-syntax 'scheme-indent-function 1)
-(put 'syntax-rules 'scheme-indent-function 1)
+(put 'syntax-rules 'scheme-indent-function 'defun)
 (put 'syntax-case 'scheme-indent-function 2) ; not r5rs
 (put 'with-syntax 'scheme-indent-function 1)
 (put 'library 'scheme-indent-function 1) ; R6RS

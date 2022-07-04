@@ -299,10 +299,10 @@ The information is logged to `byte-compile-log-buffer'."
   '(redefine callargs free-vars unresolved
              obsolete noruntime interactive-only
              make-local mapcar constants suspicious lexical lexical-dynamic
-             docstrings not-unused)
+             docstrings docstrings-non-ascii-quotes not-unused)
   "The list of warning types used when `byte-compile-warnings' is t.")
 (defcustom byte-compile-warnings t
-  "List of warnings that the byte-compiler should issue (t for all).
+  "List of warnings that the byte-compiler should issue (t for almost all).
 
 Elements of the list may be:
 
@@ -327,14 +327,27 @@ Elements of the list may be:
               `byte-compile-docstring-max-column' or
               `fill-column' characters, whichever is bigger) or
               have other stylistic issues.
+  docstrings-non-ascii-quotes docstrings that have non-ASCII quotes.
+                              This depends on the `docstrings' warning type.
   suspicious  constructs that usually don't do what the coder wanted.
 
 If the list begins with `not', then the remaining elements specify warnings to
-suppress.  For example, (not mapcar) will suppress warnings about mapcar."
+suppress.  For example, (not mapcar) will suppress warnings about mapcar.
+
+The t value means \"all non experimental warning types\", and
+excludes the types in `byte-compile--emacs-build-warning-types'.
+A value of `all' really means all."
   :type `(choice (const :tag "All" t)
 		 (set :menu-tag "Some"
                       ,@(mapcar (lambda (x) `(const ,x))
                                 byte-compile-warning-types))))
+
+(defconst byte-compile--emacs-build-warning-types
+  '(docstrings-non-ascii-quotes)
+  "List of warning types that are only enabled during Emacs builds.
+This is typically either warning types that are being phased in
+(but shouldn't be enabled for packages yet), or that are only relevant
+for the Emacs build itself.")
 
 (defvar byte-compile--suppressed-warnings nil
   "Dynamically bound by `with-suppressed-warnings' to suppress warnings.")
@@ -354,10 +367,15 @@ suppress.  For example, (not mapcar) will suppress warnings about mapcar."
                  (memq symbol (cdr elem)))
         (setq suppress t)))
     (and (not suppress)
-         (or (eq byte-compile-warnings t)
-             (if (eq (car byte-compile-warnings) 'not)
-                 (not (memq warning byte-compile-warnings))
-               (memq warning byte-compile-warnings))))))
+         ;; During an Emacs build, we want all warnings.
+         (or (eq byte-compile-warnings 'all)
+             ;; If t, we want almost all the warnings, but not the
+             ;; ones that are Emacs build specific.
+             (and (not (memq warning byte-compile--emacs-build-warning-types))
+                  (or (eq byte-compile-warnings t)
+                      (if (eq (car byte-compile-warnings) 'not)
+                          (not (memq warning byte-compile-warnings))
+                        (memq warning byte-compile-warnings))))))))
 
 ;;;###autoload
 (defun byte-compile-disable-warning (warning)
@@ -663,10 +681,13 @@ Each element is (INDEX . VALUE)")
     (put 'byte-stack+-info 'tmp-compile-time-value nil)))
 
 
-;; These opcodes are special in that they pack their argument into the
-;; opcode word.
-;;
+;; The following opcodes (1-47) use the 3 lowest bits for an immediate
+;; argument.
+
 (byte-defop   0  1 byte-stack-ref "for stack reference")
+;; Code 0 is actually unused but reserved as invalid code for detecting
+;; corrupted bytecode.  Codes 1-7 are stack-ref.
+
 (byte-defop   8  1 byte-varref	"for variable reference")
 (byte-defop  16 -1 byte-varset	"for setting a variable")
 (byte-defop  24 -1 byte-varbind	"for binding a variable")
@@ -674,11 +695,9 @@ Each element is (INDEX . VALUE)")
 (byte-defop  40  0 byte-unbind	"for unbinding special bindings")
 ;; codes 8-47 are consumed by the preceding opcodes
 
-;; New (in Emacs-24.4) bytecodes for more efficient handling of non-local exits
-;; (especially useful in lexical-binding code).
 (byte-defop  48  0 byte-pophandler)
-(byte-defop  50 -1 byte-pushcatch)
 (byte-defop  49 -1 byte-pushconditioncase)
+(byte-defop  50 -1 byte-pushcatch)
 
 ;; unused: 51-55
 
@@ -701,9 +720,9 @@ Each element is (INDEX . VALUE)")
 (byte-defop  72 -1 byte-aref)
 (byte-defop  73 -2 byte-aset)
 (byte-defop  74  0 byte-symbol-value)
-(byte-defop  75  0 byte-symbol-function) ; this was commented out
+(byte-defop  75  0 byte-symbol-function)
 (byte-defop  76 -1 byte-set)
-(byte-defop  77 -1 byte-fset) ; this was commented out
+(byte-defop  77 -1 byte-fset)
 (byte-defop  78 -1 byte-get)
 (byte-defop  79 -2 byte-substring)
 (byte-defop  80 -1 byte-concat2)
@@ -721,8 +740,9 @@ Each element is (INDEX . VALUE)")
 (byte-defop  92 -1 byte-plus)
 (byte-defop  93 -1 byte-max)
 (byte-defop  94 -1 byte-min)
-(byte-defop  95 -1 byte-mult) ; v19 only
+(byte-defop  95 -1 byte-mult)
 (byte-defop  96  1 byte-point)
+(byte-defop  97  0 byte-save-current-buffer-OBSOLETE) ; unused since v20
 (byte-defop  98  0 byte-goto-char)
 (byte-defop  99  0 byte-insert)
 (byte-defop 100  1 byte-point-max)
@@ -744,7 +764,6 @@ Each element is (INDEX . VALUE)")
 (byte-defop 115  0 byte-set-mark-OBSOLETE)
 (byte-defop 116  1 byte-interactive-p-OBSOLETE)
 
-;; These ops are new to v19
 (byte-defop 117  0 byte-forward-char)
 (byte-defop 118  0 byte-forward-word)
 (byte-defop 119 -1 byte-skip-chars-forward)
@@ -801,7 +820,6 @@ the unwind-action")
 
 ;; unused: 146
 
-;; these ops are new to v19
 (byte-defop 147 -2 byte-set-marker)
 (byte-defop 148  0 byte-match-beginning)
 (byte-defop 149  0 byte-match-end)
@@ -848,10 +866,11 @@ the unwind-action")
  "to take a hash table and a value from the stack, and jump to
 the address the value maps to, if any.")
 
-;; unused: 182-191
+;; unused: 184-191
 
 (byte-defop 192  1 byte-constant	"for reference to a constant")
-;; codes 193-255 are consumed by byte-constant.
+;; Codes 193-255 are consumed by `byte-constant', which uses the 6
+;; lowest bits for an immediate argument.
 (defconst byte-constant-limit 64
   "Exclusive maximum index usable in the `byte-constant' opcode.")
 
@@ -1156,18 +1175,6 @@ message buffer `default-directory'."
 	    (t
 	     (insert (format "%s\n" string)))))))
 
-;; copied from gnus-util.el
-(defsubst byte-compile-delete-first (elt list)
-  (if (eq (car list) elt)
-      (cdr list)
-    (let ((total list))
-      (while (and (cdr list)
-		  (not (eq (cadr list) elt)))
-	(setq list (cdr list)))
-      (when (cdr list)
-	(setcdr list (cddr list)))
-      total)))
-
 (defvar byte-compile-last-warned-form nil)
 (defvar byte-compile-last-logged-file nil)
 (defvar byte-compile-root-dir nil
@@ -1228,8 +1235,7 @@ Order is by depth-first search."
                                      load-file-name dir)))
 		     (t "")))
          (offset (byte-compile--warning-source-offset))
-	 (pos (if (and byte-compile-current-file
-                       (or offset (not symbols-with-pos-enabled)))
+	 (pos (if (and byte-compile-current-file offset)
 		  (with-current-buffer byte-compile-current-buffer
                     (let (new-l new-c)
                       (save-excursion
@@ -1739,7 +1745,8 @@ It is too wide if it has any lines longer than the largest of
       (pcase (car form)
         ((or 'autoload 'custom-declare-variable 'defalias
              'defconst 'define-abbrev-table
-             'defvar 'defvaralias)
+             'defvar 'defvaralias
+             'custom-declare-face)
          (setq kind (nth 0 form))
          (setq name (nth 1 form))
          (setq docs (nth 3 form)))
@@ -1764,10 +1771,11 @@ It is too wide if it has any lines longer than the largest of
            kind name))
         ;; There's a "Unicode quote" in the string -- it should probably
         ;; be an ASCII one instead.
-        (when (string-match-p "\\( \"\\|[ \t]\\|^\\)[‘’]" docs)
-          (byte-compile-warn-x
-           name "%s%sdocstring has wrong usage of \"fancy\" single quotation marks"
-           kind name)))))
+        (when (byte-compile-warning-enabled-p 'docstrings-non-ascii-quotes)
+          (when (string-match-p "\\( \"\\|[ \t]\\|^\\)[‘’]" docs)
+            (byte-compile-warn-x
+             name "%s%sdocstring has wrong usage of \"fancy\" single quotation marks"
+             kind name))))))
   form)
 
 ;; If we have compiled any calls to functions which are not known to be
@@ -2070,6 +2078,9 @@ If compilation is needed, this functions returns the result of
 The output file's name is generated by passing FILENAME to the
 function `byte-compile-dest-file' (which see).
 The value is non-nil if there were no errors, nil if errors.
+If the file sets the file variable `no-byte-compile', it is not
+compiled, any existing output file is removed, and the return
+value is `no-byte-compile'.
 
 See also `emacs-lisp-byte-compile-and-load'."
   (declare (advertised-calling-convention (filename) "28.1"))
@@ -2527,13 +2538,12 @@ list that represents a doc string reference.
 (defun byte-compile-keep-pending (form &optional handler)
   (if (memq byte-optimize '(t source))
       (setq form (byte-optimize-one-form form t)))
+  ;; To avoid consing up monstrously large forms at load time, we split
+  ;; the output regularly.
+  (when (nthcdr 300 byte-compile-output)
+    (byte-compile-flush-pending))
   (if handler
       (let ((byte-compile--for-effect t))
-	;; To avoid consing up monstrously large forms at load time, we split
-	;; the output regularly.
-	(and (memq (car-safe form) '(fset defalias))
-	     (nthcdr 300 byte-compile-output)
-	     (byte-compile-flush-pending))
 	(funcall handler form)
 	(if byte-compile--for-effect
 	    (byte-compile-discard)))
@@ -2563,9 +2573,7 @@ list that represents a doc string reference.
   ;; macroexpand-all.
   ;; (if (memq byte-optimize '(t source))
   ;;     (setq form (byte-optimize-form form for-effect)))
-  (cond
-   (lexical-binding (cconv-closure-convert form))
-   (t form)))
+  (cconv-closure-convert form))
 
 ;; byte-hunk-handlers cannot call this!
 (defun byte-compile-toplevel-file-form (top-level-form)
@@ -2690,11 +2698,10 @@ list that represents a doc string reference.
   (byte-compile-keep-pending form))
 
 (put 'custom-declare-variable 'byte-hunk-handler
-     'byte-compile-file-form-custom-declare-variable)
-(defun byte-compile-file-form-custom-declare-variable (form)
-  (when (byte-compile-warning-enabled-p 'callargs)
-    (byte-compile-nogroup-warn form))
-  (byte-compile-file-form-defvar-function form))
+     'byte-compile-file-form-defvar-function)
+
+(put 'custom-declare-face 'byte-hunk-handler
+     'byte-compile-docstring-style-warn)
 
 (put 'require 'byte-hunk-handler 'byte-compile-file-form-require)
 (defun byte-compile-file-form-require (form)
@@ -2932,6 +2939,7 @@ FUN should be either a `lambda' value or a `closure' value."
       (push (pop body) preamble))
     (when (eq (car-safe (car body)) 'interactive)
       (push (pop body) preamble))
+    (setq preamble (nreverse preamble))
     ;; Turn the function's closed vars (if any) into local let bindings.
     (dolist (binding env)
       (cond
@@ -4230,25 +4238,13 @@ This function is never called when `lexical-binding' is nil."
 (byte-defop-compiler-1 quote)
 
 (defun byte-compile-setq (form)
-  (let* ((args (cdr form))
-         (len (length args)))
-    (if (= (logand len 1) 1)
-        (progn
-          (byte-compile-report-error
-           (format-message
-            "missing value for `%S' at end of setq" (car (last args))))
-          (byte-compile-form
-           `(signal 'wrong-number-of-arguments '(setq ,len))
-           byte-compile--for-effect))
-      (if args
-          (while args
-            (byte-compile-form (car (cdr args)))
-            (or byte-compile--for-effect (cdr (cdr args))
-                (byte-compile-out 'byte-dup 0))
-            (byte-compile-variable-set (car args))
-            (setq args (cdr (cdr args))))
-        ;; (setq), with no arguments.
-        (byte-compile-form nil byte-compile--for-effect)))
+  (cl-assert (= (length form) 3))       ; normalised in macroexp
+  (let ((var (nth 1 form))
+        (expr (nth 2 form)))
+    (byte-compile-form expr)
+    (unless byte-compile--for-effect
+      (byte-compile-out 'byte-dup 0))
+    (byte-compile-variable-set var)
     (setq byte-compile--for-effect nil)))
 
 (byte-defop-compiler-1 set-default)
@@ -4825,11 +4821,8 @@ binding slots have been popped."
     (byte-compile-out-tag endtag)))
 
 (defun byte-compile-unwind-protect (form)
-  (pcase (cddr form)
-    (`(:fun-body ,f)
-     (byte-compile-form f))
-    (handlers
-     (byte-compile-form `#'(lambda () ,@handlers))))
+  (cl-assert (eq (caddr form) :fun-body))
+  (byte-compile-form (nth 3 form))
   (byte-compile-out 'byte-unwind-protect 0)
   (byte-compile-form-do-effect (car (cdr form)))
   (byte-compile-out 'byte-unbind 1))

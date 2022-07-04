@@ -39,6 +39,7 @@
 (declare-function info-lookup->topic-value "info-look")
 (declare-function info-lookup-maybe-add-help "info-look")
 (declare-function recentf-cleanup "recentf")
+(declare-function shortdoc-add-function "shortdoc")
 (declare-function tramp-dissect-file-name "tramp")
 (declare-function tramp-file-name-equal-p "tramp")
 (declare-function tramp-tramp-file-p "tramp")
@@ -49,6 +50,7 @@
 (defvar info-lookup-alist)
 (defvar ivy-completing-read-handlers-alist)
 (defvar recentf-exclude)
+(defvar shortdoc--groups)
 (defvar tramp-current-connection)
 (defvar tramp-postfix-host-format)
 (defvar tramp-use-ssh-controlmaster-options)
@@ -106,7 +108,7 @@ been set up by `rfn-eshadow-setup-minibuffer'."
 		     end))
 	     (point-max))
 	    (let ((rfn-eshadow-overlay tramp-rfn-eshadow-overlay)
-		  (rfn-eshadow-update-overlay-hook nil)
+		  rfn-eshadow-update-overlay-hook
 		  file-name-handler-alist)
 	      (move-overlay rfn-eshadow-overlay (point-max) (point-max))
 	      (rfn-eshadow-update-overlay))))))))
@@ -256,6 +258,33 @@ NAME must be equal to `tramp-current-connection'."
 	  (setcdr (info-lookup->cache 'symbol)
 		  (delete (info-lookup->mode-cache 'symbol ',mode)
 			  (info-lookup->topic-cache 'symbol))))))))
+
+;;; Integration of shortdoc.el:
+
+(with-eval-after-load 'shortdoc
+  (dolist (elem '((file-remote-p
+		   :eval (file-remote-p "/ssh:user@host:/tmp/foo")
+		   :eval (file-remote-p "/ssh:user@host:/tmp/foo" 'method))
+		  (file-local-name
+		   :eval (file-local-name "/ssh:user@host:/tmp/foo"))
+		  (file-local-copy
+		   :no-eval (file-local-copy "/ssh:user@host:/tmp/foo")
+		   :eg-result "/tmp/tramp.8ihLbO"
+		   :eval (file-local-copy "/tmp/foo"))))
+    (unless (assoc (car elem)
+		   (member "Remote Files" (assq 'file shortdoc--groups)))
+      (shortdoc-add-function 'file "Remote Files" elem)))
+
+  (add-hook
+   'tramp-integration-unload-hook
+   (lambda ()
+     (let ((glist (assq 'file shortdoc--groups)))
+       (while (and (consp glist)
+                   (not (and (stringp (cadr glist))
+                             (string-equal (cadr glist) "Remote Files"))))
+         (setq glist (cdr glist)))
+       (when (consp glist)
+         (setcdr glist nil))))))
 
 ;;; Integration of compile.el:
 

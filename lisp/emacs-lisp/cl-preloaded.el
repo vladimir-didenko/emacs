@@ -146,13 +146,13 @@ supertypes from the most specific to least specific.")
   (while (recordp parent)
     (add-to-list (cl--struct-class-children-sym parent) tag)
     ;; Only register ourselves as a child of the leftmost parent since structs
-    ;; can only only have one parent.
+    ;; can only have one parent.
     (setq parent (car (cl--struct-class-parents parent)))))
 
 ;;;###autoload
 (defun cl-struct-define (name docstring parent type named slots children-sym
                               tag print)
-  (cl-check-type name cl--struct-name)
+  (cl-check-type name (satisfies cl--struct-name-p))
   (unless type
     ;; Legacy defstruct, using tagged vectors.  Enable backward compatibility.
     (cl-old-struct-compat-mode 1))

@@ -81,7 +81,7 @@ selection process starts again from the user's $HOME.")
 This means to show completions even when the current minibuffer contents
 is the same as was the initial input after minibuffer activation.
 This also means that if you traverse the list of completions with
-commands like `C-.' and just hit RET without typing any
+commands like \\`C-.' and just hit \\`RET' without typing any
 characters, the match under point will be chosen instead of the
 default."
   :type 'boolean
@@ -141,7 +141,7 @@ See `icomplete-delay-completions-threshold'."
 (defvar icomplete-in-buffer nil
   "If non-nil, also use Icomplete when completing in non-mini buffers.
 This affects commands like `complete-in-region', but not commands
-like `dabbrev-completion', which uses its own completion setup.")
+that use their own completions setup.")
 
 (defcustom icomplete-minibuffer-setup-hook nil
   "Icomplete-specific customization of minibuffer setup.
@@ -559,7 +559,8 @@ Usually run by inclusion in `minibuffer-setup-hook'."
        ;; predicates" which may vary depending on specific
        ;; `completing-read' invocations, described below:
        for fn in (cond ((and minibuffer-default
-                             (stringp minibuffer-default) ; bug#38992
+                             (stringp (or (car-safe minibuffer-default)
+                                          minibuffer-default)) ; bug#38992 bug#55800
                              (equal (icomplete--field-string) icomplete--initial-input))
                         ;; Here, we have a non-nil string default and
                         ;; no input whatsoever.  We want to make sure
@@ -577,7 +578,9 @@ Usually run by inclusion in `minibuffer-setup-hook'."
                           ;; Has "bar" at the top, so RET will select
                           ;; it, as desired.
                           ,(lambda (comp)
-                             (equal minibuffer-default comp))
+                             (equal (or (car-safe minibuffer-default)
+                                        minibuffer-default)
+                                    comp))
                           ;; Why do we need this second predicate?
                           ;; Because that'll make things like M-x man
                           ;; RET RET, when invoked with point on the
@@ -592,14 +595,16 @@ Usually run by inclusion in `minibuffer-setup-hook'."
                           ;; select it -- again, as desired.
                           ;;
                           ;; FIXME: it's arguable that this second
-                          ;; behaviour should be a property of the
+                          ;; behavior should be a property of the
                           ;; completion table and not the completion
                           ;; frontend such as we have done
                           ;; here. However, it seems generically
                           ;; useful for a very broad spectrum of
                           ;; cases.
                           ,(lambda (comp)
-                             (string-prefix-p minibuffer-default comp))))
+                             (string-prefix-p (or (car-safe minibuffer-default)
+                                                  minibuffer-default)
+                                              comp))))
                        ((and fido-mode
                              (not minibuffer-default)
                              (eq (icomplete--category) 'file))

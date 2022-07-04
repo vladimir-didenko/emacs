@@ -358,7 +358,7 @@ mod_of_kind (Lisp_Object modifier, Lisp_Object kind)
     return modifier;
   else
     {
-      Lisp_Object val = Fplist_get (modifier, kind);
+      Lisp_Object val = plist_get (modifier, kind);
       return SYMBOLP (val) ? val : Qnil;
     }
 }
@@ -8724,7 +8724,7 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
   Lisp_Object type_sym;
   struct input_event ie;
 
-  NSTRACE ("[EmacsView performDragOperation:]");
+  NSTRACE (@"[EmacsView performDragOperation:]");
 
   source = [sender draggingSource];
 
@@ -8752,7 +8752,7 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
 
   if (!type)
     return NO;
-#if NS_USE_NSPasteboardTypeFileURL != 0
+#if NS_USE_NSPasteboardTypeFileURL
   else if ([type isEqualToString: NSPasteboardTypeFileURL])
     {
       type_sym = Qfile;
@@ -8767,18 +8767,29 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
 #else  // !NS_USE_NSPasteboardTypeFileURL
   else if ([type isEqualToString: NSFilenamesPboardType])
     {
-      NSArray *files;
+      id files;
       NSEnumerator *fenum;
       NSString *file;
 
-      if (!(files = [pb propertyListForType: type]))
+      files = [pb propertyListForType: type];
+
+      if (!files)
         return NO;
 
       type_sym = Qfile;
 
-      fenum = [files objectEnumerator];
-      while ( (file = [fenum nextObject]) )
-        strings = Fcons ([file lispString], strings);
+      /* On GNUstep, files might be a string.  */
+
+      if ([files respondsToSelector: @selector (objectEnumerator:)])
+	{
+	  fenum = [files objectEnumerator];
+
+	  while ((file = [fenum nextObject]))
+	    strings = Fcons ([file lispString], strings);
+	}
+      else
+	/* Then `files' is an NSString.  */
+	strings = list1 ([files lispString]);
     }
 #endif   // !NS_USE_NSPasteboardTypeFileURL
   else if ([type isEqualToString: NSPasteboardTypeURL])
@@ -8795,11 +8806,12 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
     {
       NSString *data;
 
-      if (! (data = [pb stringForType: type]))
+      data = [pb stringForType: type];
+
+      if (!data)
         return NO;
 
       type_sym = Qnil;
-
       strings = list1 ([data lispString]);
     }
   else
@@ -8807,7 +8819,8 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
 
   EVENT_INIT (ie);
   ie.kind = DRAG_N_DROP_EVENT;
-  ie.arg = Fcons (type_sym, Fcons (operations, strings));
+  ie.arg = Fcons (type_sym, Fcons (operations,
+				   strings));
   XSETINT (ie.x, x);
   XSETINT (ie.y, y);
   XSETFRAME (ie.frame_or_window, emacsframe);
@@ -9616,34 +9629,45 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
   selected_op = operation;
 }
 
-#ifdef NS_IMPL_COCOA
 - (void) draggedImage: (NSImage *) dragged_image
 	      movedTo: (NSPoint) screen_point
 {
+  NSPoint mouse_loc;
+#ifdef NS_IMPL_COCOA
   NSInteger window_number;
   NSWindow *w;
-
-  if (dnd_mode == RETURN_FRAME_NEVER)
-    return;
-
-  window_number = [NSWindow windowNumberAtPoint: [NSEvent mouseLocation]
-		    belowWindowWithWindowNumber: 0];
-  w = [NSApp windowWithWindowNumber: window_number];
-
-  if (!w || w != self)
-    dnd_mode = RETURN_FRAME_NOW;
-
-  if (dnd_mode != RETURN_FRAME_NOW
-      || ![[w delegate] isKindOfClass: [EmacsView class]])
-    return;
-
-  dnd_return_frame = ((EmacsView *) [w delegate])->emacsframe;
-
-  /* FIXME: there must be a better way to leave the event loop.  */
-  [NSException raise: @""
-	      format: @"Must return DND frame"];
-}
 #endif
+
+  mouse_loc = [NSEvent mouseLocation];
+
+#ifdef NS_IMPL_COCOA
+  if (dnd_mode != RETURN_FRAME_NEVER)
+    {
+      window_number = [NSWindow windowNumberAtPoint: mouse_loc
+			belowWindowWithWindowNumber: 0];
+      w = [NSApp windowWithWindowNumber: window_number];
+
+      if (!w || w != self)
+	dnd_mode = RETURN_FRAME_NOW;
+
+      if (dnd_mode != RETURN_FRAME_NOW
+	  || ![[w delegate] isKindOfClass: [EmacsView class]]
+	  || ((EmacsView *) [w delegate])->emacsframe->tooltip)
+	goto out;
+
+      dnd_return_frame = ((EmacsView *) [w delegate])->emacsframe;
+
+      /* FIXME: there must be a better way to leave the event loop.  */
+      [NSException raise: @""
+		  format: @"Must return DND frame"];
+    }
+
+ out:
+#endif
+
+  if (dnd_move_tooltip_with_frame)
+    ns_move_tooltip_to_mouse_location (mouse_loc);
+}
 
 - (BOOL) mustNotDropOn: (NSView *) receiver
 {
@@ -9656,19 +9680,20 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
 		     withMode: (enum ns_return_frame_mode) mode
 		returnFrameTo: (struct frame **) frame_return
 		 prohibitSame: (BOOL) prohibit_same_frame
+		followTooltip: (BOOL) follow_tooltip
 {
   NSImage *image;
 #ifdef NS_IMPL_COCOA
   NSInteger window_number;
   NSWindow *w;
 #endif
-
   drag_op = op;
   selected_op = NSDragOperationNone;
   image = [[NSImage alloc] initWithSize: NSMakeSize (1.0, 1.0)];
   dnd_mode = mode;
   dnd_return_frame = NULL;
   dnd_allow_same_frame = !prohibit_same_frame;
+  dnd_move_tooltip_with_frame = follow_tooltip;
 
   /* Now draw transparency onto the image.  */
   [image lockFocus];
@@ -9685,7 +9710,8 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
 			belowWindowWithWindowNumber: 0];
       w = [NSApp windowWithWindowNumber: window_number];
 
-      if (w && [[w delegate] isKindOfClass: [EmacsView class]])
+      if (w && [[w delegate] isKindOfClass: [EmacsView class]]
+	  && !((EmacsView *) [w delegate])->emacsframe->tooltip)
 	{
 	  *frame_return = ((EmacsView *) [w delegate])->emacsframe;
 	  [image release];
@@ -9715,6 +9741,15 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
     }
 #endif
   unblock_input ();
+
+  /* The drop happened, so delete the tooltip.  */
+  if (follow_tooltip)
+    Fx_hide_tip ();
+
+  /* Assume all buttons have been released since the drag-and-drop
+     operation is now over.  */
+  if (!dnd_return_frame)
+    x_display_list->grabbed = 0;
 
   [image release];
 
@@ -9887,6 +9922,16 @@ nswindow_orderedIndex_sort (id w1, id w2, void *c)
       unblock_input ();
     }
   return ret;
+}
+
+- (void) mark
+{
+  if (window)
+    {
+      Lisp_Object win;
+      XSETWINDOW (win, window);
+      mark_object (win);
+    }
 }
 
 
@@ -10630,6 +10675,26 @@ ns_xlfd_to_fontname (const char *xlfd)
   return ret;
 }
 
+void
+mark_nsterm (void)
+{
+  NSTRACE ("mark_nsterm");
+  Lisp_Object tail, frame;
+  FOR_EACH_FRAME (tail, frame)
+    {
+      struct frame *f = XFRAME (frame);
+      if (FRAME_NS_P (f))
+	{
+	  NSArray *subviews = [[FRAME_NS_VIEW (f) superview] subviews];
+	  for (int i = [subviews count] - 1; i >= 0; --i)
+	    {
+	      id scroller = [subviews objectAtIndex: i];
+	      if ([scroller isKindOfClass: [EmacsScroller class]])
+                  [scroller mark];
+	    }
+	}
+    }
+}
 
 void
 syms_of_nsterm (void)

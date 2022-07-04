@@ -437,7 +437,7 @@ This will generate compile-time constants from BINDINGS."
         ;; Emacs Lisp autoload cookies.  Supports the slightly different
         ;; forms used by mh-e, calendar, etc.
         (,lisp-mode-autoload-regexp (3 font-lock-warning-face prepend)
-                                    (2 font-lock-function-name-face prepend)))
+                                    (2 font-lock-function-name-face prepend t)))
       "Subdued level highlighting for Emacs Lisp mode.")
 
     (defconst lisp-cl-font-lock-keywords-1
@@ -476,15 +476,26 @@ This will generate compile-time constants from BINDINGS."
                    "[ \t']*\\(" lisp-mode-symbol-regexp "\\)?")
            (1 font-lock-keyword-face)
            (2 font-lock-constant-face nil t))
-         ;; Words inside \\[] tend to be for `substitute-command-keys'.
-         (,(concat "\\\\\\\\\\[\\(" lisp-mode-symbol-regexp "\\)\\]")
+         ;; Words inside \\[], \\<>, \\{} or \\`' tend to be for
+         ;; `substitute-command-keys'.
+         (,(rx "\\\\" (or (seq "[" (group-n 1 (regexp lisp-mode-symbol-regexp)) "]")
+                          (seq "`" (group-n 1 (+ (regexp lisp-mode-symbol-regexp)
+                                                 ;; allow multiple words, e.g. "C-x a"
+                                                 (? " ")))
+                           "'")))
           (1 font-lock-constant-face prepend))
+         (,(rx "\\\\" (or (seq "<" (group-n 1 (regexp lisp-mode-symbol-regexp)) ">")
+                          (seq "{" (group-n 1 (regexp lisp-mode-symbol-regexp)) "}")))
+          (1 font-lock-variable-name-face prepend))
          ;; Ineffective backslashes (typically in need of doubling).
          ("\\(\\\\\\)\\([^\"\\]\\)"
           (1 (elisp--font-lock-backslash) prepend))
          ;; Words inside ‘’, '' and `' tend to be symbol names.
          (,(concat "[`‘']\\(" lisp-mode-symbol-regexp "\\)['’]")
           (1 font-lock-constant-face prepend))
+         ;; \\= tends to be an escape in doc strings.
+         (,(rx "\\\\=")
+          (0 font-lock-builtin-face prepend))
          ;; Constant values.
          (,(concat "\\_<:" lisp-mode-symbol-regexp "\\_>")
           (0 font-lock-builtin-face))
@@ -1423,6 +1434,9 @@ and initial semicolons."
       ;; a comment: Point is on a program line; we are interested
       ;; particularly in docstring lines.
       ;;
+      ;; FIXME: The below bindings are probably mostly irrelevant
+      ;; since we're now narrowing to a region before filling.
+      ;;
       ;; We bind `paragraph-start' and `paragraph-separate' temporarily.  They
       ;; are buffer-local, but we avoid changing them so that they can be set
       ;; to make `forward-paragraph' and friends do something the user wants.
@@ -1478,10 +1492,19 @@ and initial semicolons."
                           (progn
                             (forward-sexp 1)
                             t))
-                    (narrow-to-region (ppss-comment-or-string-start ppss)
-                                      (point))))
+                    (narrow-to-region (1+ (ppss-comment-or-string-start ppss))
+                                      (1- (point)))))
                 ;; Move back to where we were.
                 (goto-char start)
+                ;; We should fill the first line of a string
+                ;; separately (since it's usually a doc string).
+                (if (= (line-number-at-pos) 1)
+                    (narrow-to-region (line-beginning-position)
+                                      (line-beginning-position 2))
+                  (save-excursion
+                    (goto-char (point-min))
+                    (forward-line 1)
+                    (narrow-to-region (point) (point-max))))
 	        (fill-paragraph justify)))))))
   ;; Never return nil.
   t)

@@ -48,6 +48,7 @@
 (require 'wid-edit)
 (require 'cl-lib)
 (require 'eudc-vars)
+(eval-when-compile (require 'subr-x))
 
 ;;{{{      Internal cooking
 
@@ -720,7 +721,7 @@ server for future sessions."
 (defun eudc-get-email (name &optional error)
   "Get the email field of NAME from the directory server.
 If ERROR is non-nil, report an error if there is none."
-  (interactive "sName: \np")
+  (interactive "sSurname: \np")
   (or eudc-server
       (call-interactively 'eudc-set-server))
   (let ((result (eudc-query (list (cons 'name name)) '(email)))
@@ -738,7 +739,7 @@ If ERROR is non-nil, report an error if there is none."
 (defun eudc-get-phone (name &optional error)
   "Get the phone field of NAME from the directory server.
 If ERROR is non-nil, report an error if there is none."
-  (interactive "sName: \np")
+  (interactive "sSurname: \np")
   (or eudc-server
       (call-interactively 'eudc-set-server))
   (let ((result (eudc-query (list (cons 'name name)) '(phone)))
@@ -1025,7 +1026,10 @@ queries the server for the existing fields and displays a corresponding form."
 	pt)
     (switch-to-buffer buffer)
     (let ((inhibit-read-only t))
+    (remove-hook 'after-change-functions 'widget-after-change t)
+    (delete-all-overlays)
     (erase-buffer)
+    (add-hook 'after-change-functions 'widget-after-change nil t)
     (kill-all-local-variables)
     (make-local-variable 'eudc-form-widget-list)
     (widget-insert "Directory Query Form\n")

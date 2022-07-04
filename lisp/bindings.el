@@ -1013,7 +1013,7 @@ if `inhibit-field-text-motion' is non-nil."
   (let ((map (make-sparse-keymap)))
     (define-key map "u" 'undo)
     map)
-  "Keymap to repeat undo key sequences `C-x u u'.  Used in `repeat-mode'.")
+  "Keymap to repeat undo key sequences \\`C-x u u'.  Used in `repeat-mode'.")
 (put 'undo 'repeat-map 'undo-repeat-map)
 
 (define-key global-map '[(control ??)] 'undo-redo)
@@ -1339,7 +1339,15 @@ if `inhibit-field-text-motion' is non-nil."
 ;; can use S-tab instead to access that binding.
 (define-key function-key-map [S-tab] [backtab])
 
-(define-key global-map [mouse-movement] 'ignore)
+(defun ignore-preserving-kill-region (&rest _)
+  "Like `ignore', but don't overwrite `last-event' if it's `kill-region'."
+  (declare (completion ignore))
+  (interactive)
+  (when (eq last-command 'kill-region)
+    (setq this-command 'kill-region))
+  nil)
+
+(define-key global-map [mouse-movement] #'ignore-preserving-kill-region)
 
 (define-key global-map "\C-t" 'transpose-chars)
 (define-key esc-map "t" 'transpose-words)

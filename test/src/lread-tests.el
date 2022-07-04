@@ -317,4 +317,9 @@ literals (Bug#20852)."
   (should (equal (read-from-string "#_")
                  '(## . 2))))
 
+(ert-deftest lread-escaped-lf ()
+  ;; ?\LF should signal an error; \LF is ignored inside string literals.
+  (should-error (read-from-string "?\\\n x"))
+  (should (equal (read-from-string "\"a\\\nb\"") '("ab" . 6))))
+
 ;;; lread-tests.el ends here

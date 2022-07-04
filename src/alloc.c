@@ -475,7 +475,7 @@ enum mem_type
 static bool
 deadp (Lisp_Object x)
 {
-  return EQ (x, dead_object ());
+  return BASE_EQ (x, dead_object ());
 }
 
 #ifdef GC_MALLOC_CHECK
@@ -6202,6 +6202,10 @@ garbage_collect (void)
 
 #ifdef HAVE_X_WINDOWS
   mark_xterm ();
+#endif
+
+#ifdef HAVE_NS
+  mark_nsterm ();
 #endif
 
   /* Everything is now marked, except for the data in font caches,

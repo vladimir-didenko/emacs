@@ -112,19 +112,27 @@ E.g. it doesn't exist under MS-Windows."
 ;; We keep track of the last selection here, so we can check the
 ;; current selection against it, and avoid passing back with
 ;; gui-selection-value the same text we previously killed or
-;; yanked. We track both
-;; separately in case another X application only sets one of them
-;; we aren't fooled by the PRIMARY or CLIPBOARD selection staying the same.
+;; yanked. We track both separately in case another X application only
+;; sets one of them we aren't fooled by the PRIMARY or CLIPBOARD
+;; selection staying the same.
 
 (defvar gui--last-selected-text-clipboard nil
   "The value of the CLIPBOARD selection last seen.")
+
 (defvar gui--last-selected-text-primary nil
   "The value of the PRIMARY selection last seen.")
 
 (defvar gui--last-selection-timestamp-clipboard nil
   "The timestamp of the CLIPBOARD selection last seen.")
+
 (defvar gui--last-selection-timestamp-primary nil
   "The timestamp of the PRIMARY selection last seen.")
+
+(defvar gui-last-cut-in-clipboard nil
+  "Whether or not the last call to `interprogram-cut-function' owned CLIPBOARD.")
+
+(defvar gui-last-cut-in-primary nil
+  "Whether or not the last call to `interprogram-cut-function' owned PRIMARY.")
 
 (defun gui--set-last-clipboard-selection (text)
   "Save last clipboard selection.
@@ -182,7 +190,10 @@ MS-Windows does not have a \"primary\" selection."
     ;; should not be reset by cut (Bug#16382).
     (setq saved-region-selection text)
     (gui-set-selection 'CLIPBOARD text)
-    (gui--set-last-clipboard-selection text)))
+    (gui--set-last-clipboard-selection text))
+  ;; Record which selections we now have ownership over.
+  (setq gui-last-cut-in-clipboard select-enable-clipboard
+        gui-last-cut-in-primary select-enable-primary))
 (define-obsolete-function-alias 'x-select-text 'gui-select-text "25.1")
 
 (defcustom x-select-request-type nil
@@ -218,13 +229,13 @@ decided by `x-select-request-type'.  The return value is already
 decoded.  If `gui-get-selection' signals an error, return nil."
   ;; The doc string of `interprogram-paste-function' says to return
   ;; nil if no other program has provided text to paste.
-  (unless (and
-           ;; `gui-backend-selection-owner-p' might be unreliable on
-           ;; some other window systems.
-           (memq window-system '(x haiku))
-           (eq type 'CLIPBOARD)
-           ;; Should we unify this with gui--clipboard-selection-unchanged-p?
-           (gui-backend-selection-owner-p type))
+  (unless (and gui-last-cut-in-clipboard
+               ;; `gui-backend-selection-owner-p' might be unreliable on
+               ;; some other window systems.
+               (memq window-system '(x haiku))
+               (eq type 'CLIPBOARD)
+               ;; Should we unify this with gui--clipboard-selection-unchanged-p?
+               (gui-backend-selection-owner-p type))
     (let ((request-type (if (memq window-system '(x pgtk haiku))
                             (or x-select-request-type
                                 '(UTF8_STRING COMPOUND_TEXT STRING text/plain\;charset=utf-8))
@@ -254,7 +265,15 @@ decoded.  If `gui-get-selection' signals an error, return nil."
              ;; (bug#53894) for further discussion about this DWIM
              ;; action, and possible ways to make this check less
              ;; fragile, if so desired.
-             (unless (gui--clipboard-selection-unchanged-p text)
+
+             ;; Don't check the "newness" of CLIPBOARD if the last
+             ;; call to `gui-select-text' didn't cause us to become
+             ;; its owner.  This lets the user yank text killed by
+             ;; `clipboard-kill-region' with `clipboard-yank' without
+             ;; interference from text killed by other means when
+             ;; `select-enable-clipboard' is nil.
+             (unless (and gui-last-cut-in-clipboard
+                          (gui--clipboard-selection-unchanged-p text))
                (gui--set-last-clipboard-selection text)
                text))))
         (primary-text
@@ -264,7 +283,8 @@ decoded.  If `gui-get-selection' signals an error, return nil."
              ;; Check the PRIMARY selection for 'newness', is it different
              ;; from what we remembered them to be last time we did a
              ;; cut/paste operation.
-             (unless (gui--primary-selection-unchanged-p text)
+             (unless (and gui-last-cut-in-primary
+                          (gui--primary-selection-unchanged-p text))
                (gui--set-last-primary-selection text)
                text)))))
 
@@ -601,19 +621,29 @@ two markers or an overlay.  Otherwise, it is nil."
     (if len
 	(xselect--int-to-cons len))))
 
+(defvar x-dnd-targets-list)
+
 (defun xselect-convert-to-targets (selection _type value)
   ;; Return a vector of atoms, but remove duplicates first.
-  (apply #'vector
-         (delete-dups
-          `( TIMESTAMP MULTIPLE
-             . ,(delq '_EMACS_INTERNAL
-                      (mapcar (lambda (conv)
-                                (if (or (not (consp (cdr conv)))
-                                        (funcall (cadr conv) selection
-                                                 (car conv) value))
-                                    (car conv)
-                                  '_EMACS_INTERNAL))
-                              selection-converter-alist))))))
+  (if (eq selection 'XdndSelection)
+      ;; This isn't required by the XDND protocol, and sure enough no
+      ;; clients seem to dependent on it, but Emacs implements the
+      ;; receiver side of the Motif drop protocol by looking at the
+      ;; initiator selection's TARGETS target (which Motif provides)
+      ;; instead of the target table on the drag window, so it seems
+      ;; plausible for other clients to rely on that as well.
+      (apply #'vector (mapcar #'intern x-dnd-targets-list))
+    (apply #'vector
+           (delete-dups
+            `( TIMESTAMP MULTIPLE
+               . ,(delq '_EMACS_INTERNAL
+                        (mapcar (lambda (conv)
+                                  (if (or (not (consp (cdr conv)))
+                                          (funcall (cadr conv) selection
+                                                   (car conv) value))
+                                      (car conv)
+                                    '_EMACS_INTERNAL))
+                                selection-converter-alist)))))))
 
 (defun xselect-convert-to-delete (selection _type _value)
   ;; This should be handled by the caller of `x-begin-drag'.
@@ -628,10 +658,24 @@ two markers or an overlay.  Otherwise, it is nil."
   (if (not (eq selection 'XdndSelection))
       (when (setq value (xselect--selection-bounds value))
         (xselect--encode-string 'TEXT (buffer-file-name (nth 2 value))))
-    (when (and (stringp value)
-               (file-exists-p value))
-      (xselect--encode-string 'TEXT (expand-file-name value)
-                              nil t))))
+    (if (and (stringp value)
+             (file-exists-p value))
+        ;; Motif expects this to be STRING, but it treats the data as
+        ;; a sequence of bytes instead of a Latin-1 string.
+        (cons 'STRING (encode-coding-string (expand-file-name value)
+                                            (or file-name-coding-system
+                                                default-file-name-coding-system)))
+      (when (vectorp value)
+        (with-temp-buffer
+          (cl-loop for file across value
+                   do (insert (expand-file-name file) "\0"))
+          ;; Get rid of the last NULL byte.
+          (when (> (point) 1)
+            (delete-char -1))
+          ;; Motif wants STRING.
+          (cons 'STRING (encode-coding-string (buffer-string)
+                                              (or file-name-coding-system
+                                                  default-file-name-coding-system))))))))
 
 (defun xselect-convert-to-charpos (_selection _type value)
   (when (setq value (xselect--selection-bounds value))
@@ -697,15 +741,18 @@ This function returns the string \"emacs\"."
   (user-real-login-name))
 
 (defun xselect-convert-to-text-uri-list (_selection _type value)
-  (if (stringp value)
-      (concat (url-encode-url value) "\n")
-    (when (vectorp value)
-      (with-temp-buffer
-        (cl-loop for tem across value
-                 do (progn
-                      (insert (url-encode-url tem))
-                      (insert "\n")))
-        (buffer-string)))))
+  (let ((string
+         (if (stringp value)
+             (xselect--encode-string 'TEXT
+                                     (concat (url-encode-url value) "\n"))
+           (when (vectorp value)
+             (with-temp-buffer
+               (cl-loop for tem across value
+                        do (progn
+                             (insert (url-encode-url tem))
+                             (insert "\n")))
+               (xselect--encode-string 'TEXT (buffer-string)))))))
+    (cons 'text/uri-list (cdr string))))
 
 (defun xselect-convert-to-xm-file (selection _type value)
   (when (and (stringp value)
@@ -758,7 +805,14 @@ VALUE should be SELECTION's local value."
              (stringp value)
              (file-exists-p value)
              (not (file-remote-p value)))
-    (xselect-tt-net-file value)))
+    (let ((name (encode-coding-string value
+                                      (or file-name-coding-system
+                                          default-file-name-coding-system))))
+      (cons 'STRING
+            (encode-coding-string (xselect-tt-net-file name)
+                                  (or file-name-coding-system
+                                      default-file-name-coding-system)
+                                  t)))))
 
 (setq selection-converter-alist
       '((TEXT . xselect-convert-to-string)
@@ -790,8 +844,8 @@ VALUE should be SELECTION's local value."
 	(_EMACS_INTERNAL . xselect-convert-to-identity)
         (XmTRANSFER_SUCCESS . xselect-convert-xm-special)
         (XmTRANSFER_FAILURE . xselect-convert-xm-special)
-        (_DT_NETFILE . (xselect-convert-to-dt-netfile
-                        . xselect-dt-netfile-available-p))))
+        (_DT_NETFILE . (xselect-dt-netfile-available-p
+                        . xselect-convert-to-dt-netfile))))
 
 (provide 'select)
 

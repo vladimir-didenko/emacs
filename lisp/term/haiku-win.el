@@ -24,6 +24,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(eval-when-compile (require 'subr-x))
 (unless (featurep 'haiku)
   (error "%s: Loading haiku-win without having Haiku"
          invocation-name))
@@ -61,9 +62,14 @@ two elements TYPE and DATA, where TYPE is a string containing the
 MIME type of DATA, and DATA is a unibyte string, or nil if the
 data could not be converted.
 
+DATA may also be a list of items; that means to add every
+individual item in DATA to the serialized message, instead of
+DATA in its entirety.
+
 DATA can optionally have a text property `type', which specifies
 the type of DATA inside the system message (see the doc string of
-`haiku-drag-message' for more details).")
+`haiku-drag-message' for more details).  If DATA is a list, then
+that property is obtained from the first element of DATA.")
 
 (defvar haiku-normal-selection-encoders '(haiku-select-encode-xstring
                                           haiku-select-encode-utf-8-string
@@ -144,10 +150,16 @@ VALUE as a unibyte string, or nil if VALUE was not a string."
 
 (defun haiku-dnd-convert-file-name (value)
   "Convert VALUE to a file system reference if it is a file name."
-  (when (and (stringp value)
-             (not (file-remote-p value))
-             (file-exists-p value))
-    (list "refs" (propertize (expand-file-name value) 'type 'ref))))
+  (cond ((and (stringp value)
+              (not (file-remote-p value))
+              (file-exists-p value))
+         (list "refs" (propertize (expand-file-name value)
+                                  'type 'ref)))
+        ((vectorp value)
+         (list "refs"
+               (cl-loop for item across value
+                        collect (propertize (expand-file-name item)
+                                            'type 'ref))))))
 
 (defun haiku-dnd-convert-text-uri-list (value)
   "Convert VALUE to a list of URLs."
@@ -161,6 +173,31 @@ VALUE as a unibyte string, or nil if VALUE was not a string."
                                           (insert (url-encode-url tem))
                                           (insert "\n")))
                             (buffer-string))))))
+
+(eval-and-compile
+  (defun haiku-get-numeric-enum (name)
+    "Return the numeric value of the system enumerator NAME."
+    (or (get name 'haiku-numeric-enum)
+        (let ((value 0)
+              (offset 0)
+              (string (symbol-name name)))
+          (cl-loop for octet across string
+                   do (progn
+                        (when (or (< octet 0)
+                                  (> octet 255))
+                          (error "Out of range octet: %d" octet))
+                        (setq value
+                              (logior value
+                                      (lsh octet
+                                           (- (* (1- (length string)) 8)
+                                              offset))))
+                        (setq offset (+ offset 8))))
+          (prog1 value
+            (put name 'haiku-enumerator-id value))))))
+
+(defmacro haiku-numeric-enum (name)
+  "Expand to the numeric value NAME as a system identifier."
+  (haiku-get-numeric-enum name))
 
 (declare-function x-open-connection "haikufns.c")
 (declare-function x-handle-args "common-win")
@@ -225,7 +262,7 @@ under the type `text/plain;charset=iso-8859-1'."
                       (buffer-substring (nth 0 bounds)
                                         (nth 1 bounds)))))))
   (when (and (stringp value) (not (string-empty-p value)))
-    (list "text/plain;charset=iso-8859-1" 1296649541
+    (list "text/plain;charset=iso-8859-1" (haiku-numeric-enum MIME)
           (encode-coding-string value 'iso-latin-1))))
 
 (defun haiku-select-encode-utf-8-string (_selection value)
@@ -239,7 +276,7 @@ VALUE will be encoded as UTF-8 and stored under the type
                       (buffer-substring (nth 0 bounds)
                                         (nth 1 bounds)))))))
   (when (and (stringp value) (not (string-empty-p value)))
-    (list "text/plain" 1296649541
+    (list "text/plain" (haiku-numeric-enum MIME)
           (encode-coding-string value 'utf-8-unix))))
 
 (defun haiku-select-encode-file-name (_selection value)
@@ -292,6 +329,21 @@ or a pair of markers) and turns it into a file system reference."
                                  (file-name-nondirectory default-filename)))
     (error "x-file-dialog on a tty frame")))
 
+(defun haiku-parse-drag-actions (message)
+  "Given the drag-and-drop message MESSAGE, retrieve the desired action."
+  (let ((actions (cddr (assoc "be:actions" message)))
+        (sorted nil))
+    (dolist (action (list (haiku-numeric-enum DDCP)
+                          (haiku-numeric-enum DDMV)
+                          (haiku-numeric-enum DDLN)))
+      (when (member action actions)
+        (push sorted action)))
+    (cond
+     ((eql (car sorted) (haiku-numeric-enum DDCP)) 'copy)
+     ((eql (car sorted) (haiku-numeric-enum DDMV)) 'move)
+     ((eql (car sorted) (haiku-numeric-enum DDLN)) 'link)
+     (t 'private))))
+
 (defun haiku-drag-and-drop (event)
   "Handle specified drag-n-drop EVENT."
   (interactive "e")
@@ -299,32 +351,35 @@ or a pair of markers) and turns it into a file system reference."
 	 (window (posn-window (event-start event))))
     (if (eq string 'lambda) ; This means the mouse moved.
         (dnd-handle-movement (event-start event))
-      (cond
-       ((assoc "refs" string)
-        (with-selected-window window
-          (raise-frame)
-          (dolist (filename (cddr (assoc "refs" string)))
-            (dnd-handle-one-url window 'private
-                                (concat "file:" filename)))))
-       ((assoc "text/uri-list" string)
-        (dolist (text (cddr (assoc "text/uri-list" string)))
-          (let ((uri-list (split-string text "[\0\r\n]" t)))
-            (dolist (bf uri-list)
-              (dnd-handle-one-url window 'private bf)))))
-       ((assoc "text/plain" string)
-        (with-selected-window window
-          (raise-frame)
-          (dolist (text (cddr (assoc "text/plain" string)))
-            (goto-char (posn-point (event-start event)))
-            (dnd-insert-text window 'private
-                             (if (multibyte-string-p text)
-                                 text
-                               (decode-coding-string text 'undecided))))))
-       ((not (eq (cdr (assq 'type string))
-                 3003)) ; Type of the placeholder message Emacs uses
-                        ; to cancel a drop on C-g.
-        (message "Don't know how to drop any of: %s"
-                 (mapcar #'car string)))))))
+      (let ((action (haiku-parse-drag-actions string)))
+        (cond
+         ;; Don't allow dropping on something other than the text area.
+         ;; It does nothing and doesn't work with text anyway.
+         ((posn-area (event-start event)))
+         ((assoc "refs" string)
+          (with-selected-window window
+            (dolist (filename (cddr (assoc "refs" string)))
+              (dnd-handle-one-url window action
+                                  (concat "file:" filename)))))
+         ((assoc "text/uri-list" string)
+          (dolist (text (cddr (assoc "text/uri-list" string)))
+            (let ((uri-list (split-string text "[\0\r\n]" t)))
+              (dolist (bf uri-list)
+                (dnd-handle-one-url window action bf)))))
+         ((assoc "text/plain" string)
+          (with-selected-window window
+            (dolist (text (cddr (assoc "text/plain" string)))
+              (unless mouse-yank-at-point
+                (goto-char (posn-point (event-start event))))
+              (dnd-insert-text window action
+                               (if (multibyte-string-p text)
+                                   text
+                                 (decode-coding-string text 'undecided))))))
+         ((not (eq (cdr (assq 'type string))
+                   3003)) ; Type of the placeholder message Emacs uses
+                          ; to cancel a drop on C-g.
+          (message "Don't know how to drop any of: %s"
+                   (mapcar #'car string))))))))
 
 (define-key special-event-map [drag-n-drop] 'haiku-drag-and-drop)
 
@@ -351,7 +406,8 @@ take effect on menu items until the menu bar is updated again."
 
 (setq haiku-drag-track-function #'haiku-dnd-drag-handler)
 
-(defun x-begin-drag (targets &optional action frame _return-frame allow-current-frame)
+(defun x-begin-drag (targets &optional action frame _return-frame
+                             allow-current-frame follow-tooltip)
   "SKIP: real doc in xfns.c."
   (unless haiku-dnd-selection-value
     (error "No local value for XdndSelection"))
@@ -361,33 +417,40 @@ take effect on menu items until the menu bar is updated again."
     (dolist (target targets)
       (let* ((target-atom (intern target))
              (selection-converter (cdr (assoc target-atom
-                                              haiku-dnd-selection-converters))))
+                                              haiku-dnd-selection-converters)))
+             (value (if (stringp haiku-dnd-selection-value)
+                        (or (get-text-property 0 target-atom
+                                               haiku-dnd-selection-value)
+                            haiku-dnd-selection-value)
+                      haiku-dnd-selection-value)))
         (when selection-converter
-          (let ((selection-result
-                 (funcall selection-converter
-                          (if (stringp haiku-dnd-selection-value)
-                              (or (get-text-property 0 target-atom
-                                                     haiku-dnd-selection-value)
-                                  haiku-dnd-selection-value)
-                            haiku-dnd-selection-value))))
+          (let ((selection-result (funcall selection-converter value)))
             (when selection-result
-              (let ((field (cdr (assoc (car selection-result) message))))
+              (let* ((field (cdr (assoc (car selection-result) message)))
+                     (maybe-string (if (stringp (cadr selection-result))
+                                       (cadr selection-result)
+                                     (caadr selection-result))))
                 (unless (cadr field)
                   ;; Add B_MIME_TYPE to the message if the type was not
                   ;; previously specified, or the type if it was.
-                  (push (or (get-text-property 0 'type
-                                               (cadr selection-result))
-                            1296649541)
+                  (push (or (get-text-property 0 'type maybe-string)
+                            (haiku-numeric-enum MIME))
                         (alist-get (car selection-result) message
                                    nil nil #'equal))))
-              (push (cadr selection-result)
-                    (cdr (alist-get (car selection-result) message
-                                    nil nil #'equal))))))))
+              (if (not (consp (cadr selection-result)))
+                  (push (cadr selection-result)
+                        (cdr (alist-get (car selection-result) message
+                                        nil nil #'equal)))
+                (dolist (tem (cadr selection-result))
+                  (push tem
+                        (cdr (alist-get (car selection-result) message
+                                        nil nil #'equal))))))))))
     (prog1 (or (and (symbolp action)
                     action)
                'XdndActionCopy)
       (haiku-drag-message (or frame (selected-frame))
-                          message allow-current-frame))))
+                          message allow-current-frame
+                          follow-tooltip))))
 
 (add-variable-watcher 'use-system-tooltips #'haiku-use-system-tooltips-watcher)
 

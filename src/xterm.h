@@ -75,6 +75,9 @@ typedef GtkWidget *xt_or_gtk_widget;
 #endif
 #endif /* USE_GTK */
 
+/* Number of "failable requests" to store.  */
+#define N_FAILABLE_REQUESTS 128
+
 #ifdef USE_CAIRO
 #include <cairo-xlib.h>
 #ifdef CAIRO_HAS_PDF_SURFACE
@@ -258,6 +261,16 @@ struct xi_device_t
 Status x_parse_color (struct frame *f, const char *color_name,
 		      XColor *color);
 
+struct x_failable_request
+{
+  /* The first request making up this sequence.  */
+  unsigned long start;
+
+  /* If this is zero, then the request has not yet been made.
+     Otherwise, this is the request that ends this sequence.  */
+  unsigned long end;
+};
+
 
 /* For each X display, we have a structure that records
    information about it.  */
@@ -428,8 +441,8 @@ struct x_display_info
   /* More atoms for font properties.  The last three are private
      properties, see the comments in src/fontset.h.  */
   Atom Xatom_PIXEL_SIZE, Xatom_AVERAGE_WIDTH,
-  Xatom_MULE_BASELINE_OFFSET, Xatom_MULE_RELATIVE_COMPOSE,
-  Xatom_MULE_DEFAULT_ASCENT;
+    Xatom_MULE_BASELINE_OFFSET, Xatom_MULE_RELATIVE_COMPOSE,
+    Xatom_MULE_DEFAULT_ASCENT;
 
   /* More atoms for Ghostscript support.  */
   Atom Xatom_DONE, Xatom_PAGE;
@@ -443,11 +456,21 @@ struct x_display_info
   /* Atom used to determine whether or not the screen is composited.  */
   Atom Xatom_NET_WM_CM_Sn;
 
+  /* Atoms used by the Motif drag and drop protocols.  */
   Atom Xatom_MOTIF_WM_HINTS, Xatom_MOTIF_DRAG_WINDOW,
     Xatom_MOTIF_DRAG_TARGETS, Xatom_MOTIF_DRAG_AND_DROP_MESSAGE,
     Xatom_MOTIF_DRAG_INITIATOR_INFO, Xatom_MOTIF_DRAG_RECEIVER_INFO;
 
+  /* Atoms used by Emacs internally.  */
+  Atom Xatom_EMACS_DRAG_ATOM;
+
+  /* Special selections used by the Motif drop protocol to indicate
+     success or failure.  */
   Atom Xatom_XmTRANSFER_SUCCESS, Xatom_XmTRANSFER_FAILURE;
+
+  /* Atoms used by both versions of the OffiX DND protocol (the "old
+     KDE" protocol in x-dnd.el). */
+  Atom Xatom_DndProtocol, Xatom_DND_PROTOCOL;
 
   /* The frame (if any) which has the X window that has keyboard focus.
      Zero if none.  This is examined by Ffocus_frame in xfns.c.  Note
@@ -485,9 +508,8 @@ struct x_display_info
   struct scroll_bar *last_mouse_scroll_bar;
 
   /* Time of last user interaction as returned in X events on this
-     display, and time where WM support for `_NET_WM_USER_TIME_WINDOW'
-     was last checked.  */
-  Time last_user_time, last_user_check_time;
+     display.  */
+  Time last_user_time;
 
   /* Position where the mouse was last time we reported a motion.
      This is a position on last_mouse_motion_frame.  */
@@ -505,6 +527,9 @@ struct x_display_info
      query.  So, we just keep track of the time of the last movement we
      received, and return that in hopes that it's somewhat accurate.  */
   Time last_mouse_movement_time;
+
+  /* Whether or not the last mouse motion was synthetic.  */
+  bool last_mouse_movement_time_send_event;
 
   /* The gray pixmap.  */
   Pixmap gray;
@@ -554,6 +579,23 @@ struct x_display_info
   Atom *x_dnd_atoms;
   ptrdiff_t x_dnd_atoms_size;
   ptrdiff_t x_dnd_atoms_length;
+
+  /* The unique drag and drop atom used on Motif.  None if it was not
+     already computed.  */
+  Atom motif_drag_atom;
+
+  /* Its name.  */
+  char motif_drag_atom_name[sizeof "_EMACS_ATOM_%lu" - 3
+			    + INT_STRLEN_BOUND (unsigned long)];
+
+  /* When it was owned.  */
+  Time motif_drag_atom_time;
+
+  /* The frame that currently owns `motif_drag_atom'.  */
+  struct frame *motif_drag_atom_owner;
+
+  /* The drag window for this display.  */
+  Window motif_drag_window;
 
   /* Extended window manager hints, Atoms supported by the window manager and
      atoms for setting the window type.  */
@@ -713,6 +755,13 @@ struct x_display_info
      RRScreenChangeNotify.  */
   int screen_mm_width;
   int screen_mm_height;
+
+  /* Circular buffer of request serial ranges to ignore inside an
+     error handler in increasing order.  */
+  struct x_failable_request failable_requests[N_FAILABLE_REQUESTS];
+
+  /* Pointer to the next request in `failable_requests'.  */
+  struct x_failable_request *next_failable_request;
 };
 
 #ifdef HAVE_X_I18N
@@ -736,6 +785,9 @@ extern bool x_display_ok (const char *);
 extern void select_visual (struct x_display_info *);
 
 extern Window tip_window;
+extern Lisp_Object tip_dx;
+extern Lisp_Object tip_dy;
+extern Lisp_Object tip_frame;
 
 /* Each X frame object points to its own struct x_output object
    in the output_data.x field.  The x_output structure contains
@@ -1393,16 +1445,23 @@ extern bool x_text_icon (struct frame *, const char *);
 extern void x_catch_errors (Display *);
 extern void x_catch_errors_with_handler (Display *, x_special_error_handler,
 					 void *);
+extern void x_catch_errors_for_lisp (struct x_display_info *);
+extern void x_uncatch_errors_for_lisp (struct x_display_info *);
+extern void x_check_errors_for_lisp (struct x_display_info *,
+				     const char *)
+  ATTRIBUTE_FORMAT_PRINTF (2, 0);
 extern void x_check_errors (Display *, const char *)
   ATTRIBUTE_FORMAT_PRINTF (2, 0);
 extern bool x_had_errors_p (Display *);
+extern void x_unwind_errors_to (int);
 extern void x_uncatch_errors (void);
 extern void x_uncatch_errors_after_check (void);
 extern void x_clear_errors (Display *);
-extern void x_set_window_size (struct frame *f, bool, int, int);
-extern void x_make_frame_visible (struct frame *f);
-extern void x_make_frame_invisible (struct frame *f);
-extern void x_iconify_frame (struct frame *f);
+extern void x_set_window_size (struct frame *, bool, int, int);
+extern void x_set_last_user_time_from_lisp (struct x_display_info *, Time);
+extern void x_make_frame_visible (struct frame *);
+extern void x_make_frame_invisible (struct frame *);
+extern void x_iconify_frame (struct frame *);
 extern void x_free_frame_resources (struct frame *);
 extern void x_wm_set_size_hint (struct frame *, long, bool);
 
@@ -1455,9 +1514,18 @@ extern void x_xr_reset_ext_clip (struct frame *f);
 extern void x_scroll_bar_configure (GdkEvent *);
 #endif
 
+#define DEFER_SELECTIONS						\
+  x_defer_selection_requests ();					\
+  record_unwind_protect_void (x_release_selection_requests_and_flush)
+
+extern void x_defer_selection_requests (void);
+extern void x_release_selection_requests_and_flush (void);
+extern void x_handle_pending_selection_requests (void);
+extern bool x_detect_pending_selection_requests (void);
 extern Lisp_Object x_dnd_begin_drag_and_drop (struct frame *, Time, Atom,
 					      Lisp_Object, Atom *, const char **,
-					      size_t, bool, Atom *, int);
+					      size_t, bool, Atom *, int,
+					      Lisp_Object, bool);
 extern void x_dnd_do_unsupported_drop (struct x_display_info *, Lisp_Object,
 				       Lisp_Object, Lisp_Object, Window, int,
 				       int, Time);
@@ -1497,6 +1565,7 @@ extern void x_set_shaded (struct frame *, Lisp_Object, Lisp_Object);
 extern void x_set_skip_taskbar (struct frame *, Lisp_Object, Lisp_Object);
 extern void x_set_z_group (struct frame *, Lisp_Object, Lisp_Object);
 extern bool x_wm_supports (struct frame *, Atom);
+extern bool x_wm_supports_1 (struct x_display_info *, Atom);
 extern void x_wait_for_event (struct frame *, int);
 extern void x_clear_under_internal_border (struct frame *f);
 
@@ -1521,11 +1590,14 @@ extern void x_handle_property_notify (const XPropertyEvent *);
 extern void x_handle_selection_notify (const XSelectionEvent *);
 extern void x_handle_selection_event (struct selection_input_event *);
 extern void x_clear_frame_selections (struct frame *);
+extern Lisp_Object x_atom_to_symbol (struct x_display_info *, Atom);
+extern Atom symbol_to_x_atom (struct x_display_info *, Lisp_Object);
 
 extern bool x_handle_dnd_message (struct frame *,
 				  const XClientMessageEvent *,
 				  struct x_display_info *,
-				  struct input_event *);
+				  struct input_event *,
+				  bool, int, int);
 extern int x_check_property_data (Lisp_Object);
 extern void x_fill_property_data (Display *,
                                   Lisp_Object,
@@ -1543,7 +1615,8 @@ extern void x_clipboard_manager_save_all (void);
 extern Lisp_Object x_timestamp_for_selection (struct x_display_info *,
 					      Lisp_Object);
 extern void x_set_pending_dnd_time (Time);
-extern void x_own_selection (Lisp_Object, Lisp_Object, Lisp_Object);
+extern void x_own_selection (Lisp_Object, Lisp_Object, Lisp_Object,
+			     Lisp_Object, Time);
 extern Atom x_intern_cached_atom (struct x_display_info *, const char *,
 				  bool);
 extern char *x_get_atom_name (struct x_display_info *, Atom, bool *)
@@ -1611,7 +1684,7 @@ extern bool x_dnd_in_progress;
 extern bool x_dnd_waiting_for_finish;
 extern struct frame *x_dnd_frame;
 extern struct frame *x_dnd_finish_frame;
-extern unsigned x_dnd_unsupported_event_level;
+extern int x_error_message_count;
 
 #ifdef HAVE_XINPUT2
 extern struct xi_device_t *xi_device_from_id (struct x_display_info *, int);

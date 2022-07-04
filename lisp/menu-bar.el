@@ -749,7 +749,11 @@ by \"Save Options\" in Custom buffers.")
        ;; interactively, because the purpose is to mark the variable as a
        ;; candidate for `Save Options', and we do not want to save options that
        ;; the user has already set explicitly in the init file.
-       (when interactively (customize-mark-as-set ',variable)))
+       (when interactively
+         (customize-mark-as-set ',variable))
+       ;; Toggle menu items must make sure that the menu is updated so
+       ;; that toggle marks are drawn in the right state.
+       (force-mode-line-update t))
      '(menu-item ,item-name ,command :help ,help
                  :button (:toggle . (and (default-boundp ',variable)
                                          (default-value ',variable)))
@@ -792,6 +796,7 @@ The selected font will be the default on both the existing and future frames."
     (dolist (elt '(scroll-bar-mode
 		   debug-on-quit debug-on-error
 		   ;; Somehow this works, when tool-bar and menu-bar don't.
+                   desktop-save-mode
 		   tooltip-mode window-divider-mode
 		   save-place-mode uniquify-buffer-name-style fringe-mode
 		   indicate-empty-lines indicate-buffer-boundaries

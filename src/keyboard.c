@@ -389,14 +389,6 @@ next_kbd_event (union buffered_input_event *ptr)
   return ptr == kbd_buffer + KBD_BUFFER_SIZE - 1 ? kbd_buffer : ptr + 1;
 }
 
-#ifdef HAVE_X11
-static union buffered_input_event *
-prev_kbd_event (union buffered_input_event *ptr)
-{
-  return ptr == kbd_buffer ? kbd_buffer + KBD_BUFFER_SIZE - 1 : ptr - 1;
-}
-#endif
-
 /* Like EVENT_START, but assume EVENT is an event.
    This pacifies gcc -Wnull-dereference, which might otherwise
    complain about earlier checks that EVENT is indeed an event.  */
@@ -1353,7 +1345,7 @@ command_loop_1 (void)
 
       if (minibuf_level
 	  && !NILP (echo_area_buffer[0])
-	  && EQ (minibuf_window, echo_area_window)
+	  && BASE_EQ (minibuf_window, echo_area_window)
 	  && NUMBERP (Vminibuffer_message_timeout))
 	{
 	  /* Bind inhibit-quit to t so that C-g gets read in
@@ -1509,7 +1501,14 @@ command_loop_1 (void)
             point_before_last_command_or_undo = PT;
             buffer_before_last_command_or_undo = current_buffer;
 
+	    /* Restart our counting of redisplay ticks before
+	       executing the command, so that we don't blame the new
+	       command for the sins of the previous one.  */
+	    update_redisplay_ticks (0, NULL);
+	    display_working_on_window_p = false;
+
             call1 (Qcommand_execute, Vthis_command);
+	    display_working_on_window_p = false;
 
 #ifdef HAVE_WINDOW_SYSTEM
 	  /* Do not check display_hourglass_p here, because
@@ -1575,9 +1574,15 @@ command_loop_1 (void)
 	    call0 (Qdeactivate_mark);
 	  else
 	    {
+	      Lisp_Object symval;
 	      /* Even if not deactivating the mark, set PRIMARY if
 		 `select-active-regions' is non-nil.  */
-	      if (!NILP (Fwindow_system (Qnil))
+	      if ((!NILP (Fwindow_system (Qnil))
+		   || ((symval =
+			find_symbol_value (Qtty_select_active_regions),
+			(!EQ (symval, Qunbound) && !NILP (symval)))
+		       && !NILP (Fterminal_parameter (Qnil,
+						      Qxterm__set_selection))))
 		  /* Even if mark_active is non-nil, the actual buffer
 		     marker may not have been set yet (Bug#7044).  */
 		  && XMARKER (BVAR (current_buffer, mark))->buffer
@@ -2584,7 +2589,7 @@ read_char (int commandflag, Lisp_Object map,
 	       && (input_was_pending || !redisplay_dont_pause)))
 	{
 	  input_was_pending = input_pending;
-	  if (help_echo_showing_p && !EQ (selected_window, minibuf_window))
+	  if (help_echo_showing_p && !BASE_EQ (selected_window, minibuf_window))
 	    redisplay_preserve_echo_area (5);
 	  else
 	    redisplay ();
@@ -2932,7 +2937,7 @@ read_char (int commandflag, Lisp_Object map,
           goto exit;
         }
 
-      if (EQ (c, make_fixnum (-2)))
+      if (BASE_EQ (c, make_fixnum (-2)))
 	return c;
 
       if (CONSP (c) && EQ (XCAR (c), Qt))
@@ -3257,7 +3262,7 @@ read_char (int commandflag, Lisp_Object map,
       unbind_to (count, Qnil);
 
       redisplay ();
-      if (EQ (c, make_fixnum (040)))
+      if (BASE_EQ (c, make_fixnum (040)))
 	{
 	  cancel_echoing ();
 	  do
@@ -3315,6 +3320,11 @@ help_char_p (Lisp_Object c)
 static void
 record_char (Lisp_Object c)
 {
+  /* subr.el/read-passwd binds inhibit_record_char to avoid recording
+     passwords.  */
+  if (!record_all_keys && inhibit_record_char)
+    return;
+
   int recorded = 0;
 
   if (CONSP (c) && (EQ (XCAR (c), Qhelp_echo) || EQ (XCAR (c), Qmouse_movement)))
@@ -3528,6 +3538,11 @@ readable_events (int flags)
 	return 1;
     }
 
+#ifdef HAVE_X_WINDOWS
+  if (x_detect_pending_selection_requests ())
+    return 1;
+#endif
+
   if (!(flags & READABLE_EVENTS_IGNORE_SQUEEZABLES) && some_mouse_moved ())
     return 1;
   if (single_kboard)
@@ -3699,25 +3714,6 @@ kbd_buffer_store_buffered_event (union buffered_input_event *event,
     Vquit_flag = Vthrow_on_input;
 }
 
-
-#ifdef HAVE_X11
-
-/* Put a selection input event back in the head of the event queue.  */
-
-void
-kbd_buffer_unget_event (struct selection_input_event *event)
-{
-  /* Don't let the very last slot in the buffer become full,  */
-  union buffered_input_event *kp = prev_kbd_event (kbd_fetch_ptr);
-  if (kp != kbd_store_ptr)
-    {
-      kp->sie = *event;
-      kbd_fetch_ptr = kp;
-    }
-}
-
-#endif
-
 /* Limit help event positions to this range, to avoid overflow problems.  */
 #define INPUT_EVENT_POS_MAX \
   ((ptrdiff_t) min (PTRDIFF_MAX, min (TYPE_MAXIMUM (Time) / 2, \
@@ -3742,7 +3738,7 @@ Time_to_position (Time encoded_pos)
 {
   if (encoded_pos <= INPUT_EVENT_POS_MAX)
     return encoded_pos;
-  Time encoded_pos_min = INPUT_EVENT_POS_MIN;
+  Time encoded_pos_min = position_to_Time (INPUT_EVENT_POS_MIN);
   eassert (encoded_pos_min <= encoded_pos);
   ptrdiff_t notpos = -1 - encoded_pos;
   return -1 - notpos;
@@ -3874,6 +3870,11 @@ kbd_buffer_get_event (KBOARD **kbp,
                       struct timespec *end_time)
 {
   Lisp_Object obj, str;
+#ifdef HAVE_X_WINDOWS
+  bool had_pending_selection_requests;
+
+  had_pending_selection_requests = false;
+#endif
 
 #ifdef subprocesses
   if (kbd_on_hold_p () && kbd_buffer_nr_stored () < KBD_BUFFER_SIZE / 4)
@@ -3926,10 +3927,18 @@ kbd_buffer_get_event (KBOARD **kbp,
 #if defined (USABLE_SIGIO) || defined (USABLE_SIGPOLL)
       gobble_input ();
 #endif
+
       if (kbd_fetch_ptr != kbd_store_ptr)
 	break;
       if (some_mouse_moved ())
 	break;
+#ifdef HAVE_X_WINDOWS
+      if (x_detect_pending_selection_requests ())
+	{
+	  had_pending_selection_requests = true;
+	  break;
+	}
+#endif
       if (end_time)
 	{
 	  struct timespec now = current_timespec ();
@@ -3966,6 +3975,16 @@ kbd_buffer_get_event (KBOARD **kbp,
 	gobble_input ();
     }
 
+#ifdef HAVE_X_WINDOWS
+  /* Handle pending selection requests.  This can happen if Emacs
+     enters a recursive edit inside a nested event loop (probably
+     because the debugger opened) or someone called
+     `read-char'.  */
+
+  if (had_pending_selection_requests)
+    x_handle_pending_selection_requests ();
+#endif
+
   if (CONSP (Vunread_command_events))
     {
       Lisp_Object first;
@@ -3996,14 +4015,19 @@ kbd_buffer_get_event (KBOARD **kbp,
       case SELECTION_REQUEST_EVENT:
       case SELECTION_CLEAR_EVENT:
 	{
-#ifdef HAVE_X11
+#if defined HAVE_X11 || HAVE_PGTK
 	  /* Remove it from the buffer before processing it,
 	     since otherwise swallow_events will see it
 	     and process it again.  */
 	  struct selection_input_event copy = event->sie;
 	  kbd_fetch_ptr = next_kbd_event (event);
 	  input_pending = readable_events (0);
+
+#ifdef HAVE_X11
 	  x_handle_selection_event (&copy);
+#else
+	  pgtk_handle_selection_event (&copy);
+#endif
 #else
 	  /* We're getting selection request events, but we don't have
              a window system.  */
@@ -4011,52 +4035,6 @@ kbd_buffer_get_event (KBOARD **kbp,
 #endif
 	}
         break;
-
-#ifdef HAVE_X_WINDOWS
-      case UNSUPPORTED_DROP_EVENT:
-	{
-	  struct frame *f;
-
-	  kbd_fetch_ptr = next_kbd_event (event);
-	  input_pending = readable_events (0);
-
-	  /* This means this event was already handled in
-	     `x_dnd_begin_drag_and_drop'.  */
-	  if (event->ie.modifiers < x_dnd_unsupported_event_level)
-	    break;
-
-	  f = XFRAME (event->ie.frame_or_window);
-
-	  if (!FRAME_LIVE_P (f))
-	    break;
-
-	  if (!NILP (Vx_dnd_unsupported_drop_function))
-	    {
-	      if (!NILP (call7 (Vx_dnd_unsupported_drop_function,
-				XCAR (XCDR (event->ie.arg)), event->ie.x,
-				event->ie.y, XCAR (XCDR (XCDR (event->ie.arg))),
-				make_uint (event->ie.code),
-				event->ie.frame_or_window,
-				make_int (event->ie.timestamp))))
-		break;
-	    }
-
-	  /* `x-dnd-unsupported-drop-function' could have deleted the
-	     event frame.  */
-	  if (!FRAME_LIVE_P (f))
-	    break;
-
-	  x_dnd_do_unsupported_drop (FRAME_DISPLAY_INFO (f),
-				     event->ie.frame_or_window,
-				     XCAR (event->ie.arg),
-				     XCAR (XCDR (event->ie.arg)),
-				     (Window) event->ie.code,
-				     XFIXNUM (event->ie.x),
-				     XFIXNUM (event->ie.y),
-				     event->ie.timestamp);
-	  break;
-	}
-#endif
 
       case MONITORS_CHANGED_EVENT:
 	{
@@ -4345,6 +4323,10 @@ kbd_buffer_get_event (KBOARD **kbp,
 			      ? movement_frame->last_mouse_device
 			      : virtual_core_pointer_name);
     }
+#ifdef HAVE_X_WINDOWS
+  else if (had_pending_selection_requests)
+    obj = Qnil;
+#endif
   else
     /* We were promised by the above while loop that there was
        something for us to read!  */
@@ -4370,7 +4352,7 @@ process_special_events (void)
       if (event->kind == SELECTION_REQUEST_EVENT
 	  || event->kind == SELECTION_CLEAR_EVENT)
 	{
-#ifdef HAVE_X11
+#if defined HAVE_X11 || defined HAVE_PGTK
 
 	  /* Remove the event from the fifo buffer before processing;
 	     otherwise swallow_events called recursively could see it
@@ -4395,7 +4377,12 @@ process_special_events (void)
 		   moved_events * sizeof *kbd_fetch_ptr);
 	  kbd_fetch_ptr = next_kbd_event (kbd_fetch_ptr);
 	  input_pending = readable_events (0);
+
+#ifdef HAVE_X11
 	  x_handle_selection_event (&copy);
+#else
+	  pgtk_handle_selection_event (&copy);
+#endif
 #else
 	  /* We're getting selection request events, but we don't have
              a window system.  */
@@ -5568,7 +5555,7 @@ make_lispy_position (struct frame *f, Lisp_Object x, Lisp_Object y,
       if (IMAGEP (object))
 	{
 	  Lisp_Object image_map, hotspot;
-	  if ((image_map = Fplist_get (XCDR (object), QCmap),
+	  if ((image_map = plist_get (XCDR (object), QCmap),
 	       !NILP (image_map))
 	      && (hotspot = find_hot_spot (image_map, dx, dy),
 		  CONSP (hotspot))
@@ -7241,7 +7228,10 @@ lucid_event_type_list_p (Lisp_Object object)
    If READABLE_EVENTS_FILTER_EVENTS is set in FLAGS, ignore internal
    events (FOCUS_IN_EVENT).
    If READABLE_EVENTS_IGNORE_SQUEEZABLES is set in FLAGS, ignore mouse
-   movements and toolkit scroll bar thumb drags.  */
+   movements and toolkit scroll bar thumb drags.
+
+   On X, this also returns if the selection event chain is full, since
+   that's also "keyboard input".  */
 
 static bool
 get_input_pending (int flags)
@@ -9490,7 +9480,7 @@ read_char_minibuf_menu_prompt (int commandflag,
       if (!FIXNUMP (obj) || XFIXNUM (obj) == -2
 	  || (! EQ (obj, menu_prompt_more_char)
 	      && (!FIXNUMP (menu_prompt_more_char)
-		  || ! EQ (obj, make_fixnum (Ctl (XFIXNUM (menu_prompt_more_char)))))))
+		  || ! BASE_EQ (obj, make_fixnum (Ctl (XFIXNUM (menu_prompt_more_char)))))))
 	{
 	  if (!NILP (KVAR (current_kboard, defining_kbd_macro)))
 	    store_kbd_macro_char (obj);
@@ -12155,6 +12145,8 @@ syms_of_keyboard (void)
   DEFSYM (Qpolling_period, "polling-period");
 
   DEFSYM (Qgui_set_selection, "gui-set-selection");
+  DEFSYM (Qxterm__set_selection, "xterm--set-selection");
+  DEFSYM (Qtty_select_active_regions, "tty-select-active-regions");
 
   /* The primary selection.  */
   DEFSYM (QPRIMARY, "PRIMARY");
@@ -12632,6 +12624,15 @@ See also `pre-command-hook'.  */);
 	       doc: /* Non-nil means menu bar, specified Lucid style, needs to be recomputed.  */);
   Vlucid_menu_bar_dirty_flag = Qnil;
 
+#ifdef USE_LUCID
+  DEFVAR_BOOL ("lucid--menu-grab-keyboard",
+               lucid__menu_grab_keyboard,
+               doc: /* If non-nil, grab keyboard during menu operations.
+This is only relevant when using the Lucid X toolkit.  It can be
+convenient to disable this for debugging purposes.  */);
+  lucid__menu_grab_keyboard = true;
+#endif
+
   DEFVAR_LISP ("menu-bar-final-items", Vmenu_bar_final_items,
 	       doc: /* List of menu bar items to move to the end of the menu bar.
 The elements of the list are event types that may have menu bar
@@ -12983,6 +12984,21 @@ resolution of a monitor changes.  The hook should accept a single
 argument, which is the terminal on which the monitor configuration
 changed.  */);
   Vdisplay_monitors_changed_functions = Qnil;
+
+  DEFVAR_BOOL ("inhibit--record-char",
+	       inhibit_record_char,
+	       doc: /* If non-nil, don't record input events.
+This inhibits recording input events for the purposes of keyboard
+macros, dribble file, and `recent-keys'.
+Internal use only.  */);
+  inhibit_record_char = false;
+
+  DEFVAR_BOOL ("record-all-keys", record_all_keys,
+	       doc: /* Non-nil means record all keys you type.
+When nil, the default, characters typed as part of passwords are
+not recorded.  The non-nil value countermands `inhibit--record-char',
+which see.  */);
+  record_all_keys = false;
 
   pdumper_do_now_and_after_load (syms_of_keyboard_for_pdumper);
 }

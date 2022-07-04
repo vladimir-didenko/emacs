@@ -233,6 +233,39 @@ Limbu language and its script are supported in this
 language environment."))
  '("Indian"))
 
+(set-language-info-alist
+ "Grantha" '((charset unicode)
+             (coding-system utf-8)
+             (coding-priority utf-8)
+             (input-method . "grantha")
+             (sample-text . "Grantha (𑌗𑍍𑌰𑌨𑍍𑌥)	𑌨𑌮𑌸𑍍𑌤𑍇 / 𑌨𑌮𑌸𑍍𑌕𑌾𑌰𑌃")
+             (documentation . "\
+Languages such as Sanskrit and Manipravalam, when they use the
+Grantha script, are supported in this language environment."))
+ '("Indian"))
+
+(set-language-info-alist
+ "Lepcha" '((charset unicode)
+            (coding-system utf-8)
+            (coding-priority utf-8)
+            (input-method . "lepcha")
+            (sample-text . "Lepcha (ᰛᰩᰵᰛᰧᰵᰶ)	ᰂᰦᰕᰥᰬ")
+            (documentation . "\
+Lepcha language and its script are supported in this
+language environment."))
+ '("Indian"))
+
+(set-language-info-alist
+ "Meetei Mayek" '((charset unicode)
+                  (coding-system utf-8)
+                  (coding-priority utf-8)
+                  (input-method . "meetei-mayek")
+                  (sample-text . "Meetei Mayek (ꯃꯤꯇꯩ ꯃꯌꯦꯛ)	ꯈꯨꯔꯨꯝꯖꯔꯤ")
+                  (documentation . "\
+Meetei language and its script Meetei Mayek are supported in this
+language environment."))
+ '("Indian"))
+
 ;; Replace mnemonic characters in REGEXP according to TABLE.  TABLE is
 ;; an alist of (MNEMONIC-STRING . REPLACEMENT-STRING).
 
@@ -694,6 +727,64 @@ language environment."))
                                ;; Consonant based syllables
                                (concat consonant sa-i "?" subjoined-letter "?" small-letter
                                        "?" vowel "?" other-signs "?")
+                               1 'font-shape-gstring))))
+
+;; Grantha composition rules
+(let ((consonant            "[\x11315-\x11339]")
+      (nukta                "\x1133C")
+      (independent-vowel    "[\x11305-\x11314\x11360\x11361]")
+      (vowel                "[\x1133E-\x1134C\x11357\x11362\x11363]")
+      (nasal                "[\x11300-\x11302]")
+      (bindu                "\x1133B")
+      (visarga              "\x11303")
+      (virama               "\x1134D")
+      (avagraha             "\x1133D")
+      (modifier-above       "[\x11366-\x11374]"))
+  (set-char-table-range composition-function-table
+                        '(#x1133B . #x1134D)
+                        (list (vector
+                               ;; Consonant based syllables
+                               (concat consonant nukta "?" "\\(?:" virama consonant nukta
+                                       "?\\)*\\(?:" virama "\\|" vowel "*" nukta "?" nasal
+                                       "?" bindu "?" visarga "?" modifier-above "?"
+                                       avagraha "?\\)")
+                               1 'font-shape-gstring)
+                              (vector
+                               ;; Vowels based syllables
+                               (concat independent-vowel nukta "?" virama "?" vowel "?"
+                                       nasal "?" bindu "?" visarga "?" modifier-above
+                                       "?" avagraha "?")
+                               1 'font-shape-gstring))))
+
+;; Lepcha composition rules
+(let ((consonant            "[\x1C00-\x1C23\x1C4D-\x1C4F]")
+      (vowel                "[\x1C26-\x1C2C]")
+      (subjoined-letter     "[\x1C24\x1C25]")
+      (consonant-sign       "[\x1C2D-\x1C35]")
+      (other-signs          "[\x1C36\x1C37]"))
+  (set-char-table-range composition-function-table
+                        '(#x1C24 . #x1C37)
+                        (list (vector
+                               ;; Consonant based syllables
+                               (concat consonant other-signs "?" vowel "?"
+                                       consonant-sign "?" subjoined-letter "?"
+                                       other-signs "?")
+                               1 'font-shape-gstring))))
+
+;; Meetei Mayek composition rules
+(let ((akshara              "[\xABC0-\xABE2\xAAE0-\xAAEA]")
+      (vowel                "[\xABE3-\xABE9\xAAEB-\xAAEC]")
+      (nasal                "\xABEA")
+      (visarga              "\xAAF5")
+      (virama               "[\xABED\xAAF6]")
+      (heavy-tone           "\x11640"))
+  (set-char-table-range composition-function-table
+                        '(#xABE3 . #xABED)
+                        (list (vector
+                               ;; Consonant based syllables
+                               (concat akshara "\\(?:" virama akshara "\\)*\\(?:"
+                                       virama "\\|" vowel "*" nasal "?" visarga "?"
+                                       heavy-tone "?\\)")
                                1 'font-shape-gstring))))
 
 (provide 'indian)

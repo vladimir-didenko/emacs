@@ -193,6 +193,7 @@
         (balinese #x1B13 #x1B35 #x1B5E)
         (sundanese #x1B8A #x1BAB #x1CC4)
         (batak #x1BC2 #x1BE7 #x1BFF)
+        (lepcha #x1C00 #x1C24 #x1C40)
         (tai-le #x1950)
         (tai-lue #x1980)
         (tai-tham #x1A20 #x1A55 #x1A61 #x1A80)
@@ -210,6 +211,7 @@
 	(javanese #xA98F #xA9B4 #xA9CA)
 	(cham #xAA00)
 	(tai-viet #xAA80)
+        (meetei-mayek #xABC0 #xABE3 #xAAE0 #xAAF6)
 	(hangul #xAC00)
 	(linear-b #x10000)
 	(aegean-number #x10100)
@@ -250,7 +252,7 @@
         (sharada #x11191 #x111B3 #x111CD)
 	(khojki #x11200)
 	(khudawadi #x112B0)
-	(grantha #x11305)
+	(grantha #x11315 #x1133E #x11374)
 	(newa #x11400)
 	(tirhuta #x11481 #x1148F #x114D0)
 	(siddham #x1158E #x115AF #x115D4)
@@ -767,6 +769,7 @@
                     balinese
                     sundanese
                     batak
+                    lepcha
 		    symbol
 		    braille
 		    yi
@@ -774,6 +777,7 @@
                     rejang
                     javanese
 		    tai-viet
+                    meetei-mayek
 		    aegean-number
 		    ancient-greek-number
 		    ancient-symbol
@@ -801,6 +805,7 @@
                     brahmi
                     kaithi
                     sharada
+                    grantha
                     tirhuta
                     siddham
                     modi
@@ -972,6 +977,13 @@
   ;; This sets up the Emoji codepoints to use prettier fonts.
   (set-fontset-font "fontset-default" 'emoji
                     '("Noto Color Emoji" . "iso10646-1") nil 'prepend)
+
+  ;; This supports the display of Tamil Supplement characters.  As
+  ;; these characters are pretty simple and do not need reordering,
+  ;; ligatures, vowel signs, virama etc., neither tml2 nor other OTF
+  ;; features are needed here.
+  (set-fontset-font "fontset-default" '(#x11FC0 . #x11FFF)
+                    '("Noto Sans Tamil Supplement" . "iso10646-1") nil 'append)
 
   ;; Append CJK fonts for characters other than han, kana, cjk-misc.
   ;; Append fonts for scripts whose name is also a charset name.

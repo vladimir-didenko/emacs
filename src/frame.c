@@ -2176,6 +2176,17 @@ delete_frame (Lisp_Object frame, Lisp_Object force)
     x_clear_frame_selections (f);
 #endif
 
+#ifdef HAVE_PGTK
+  if (FRAME_PGTK_P (f))
+    {
+      /* Do special selection events now, in case the window gets
+	 destroyed by this deletion.  Does this run Lisp code?  */
+      swallow_events (false);
+
+      pgtk_clear_frame_selections (f);
+    }
+#endif
+
   /* Free glyphs.
      This function must be called before the window tree of the
      frame is deleted because windows contain dynamically allocated
@@ -4291,7 +4302,7 @@ gui_set_frame_parameters (struct frame *f, Lisp_Object alist)
     }
 
   /* Don't die if just one of these was set.  */
-  if (EQ (left, Qunbound))
+  if (BASE_EQ (left, Qunbound))
     {
       left_no_change = 1;
       if (f->left_pos < 0)
@@ -4299,7 +4310,7 @@ gui_set_frame_parameters (struct frame *f, Lisp_Object alist)
       else
 	XSETINT (left, f->left_pos);
     }
-  if (EQ (top, Qunbound))
+  if (BASE_EQ (top, Qunbound))
     {
       top_no_change = 1;
       if (f->top_pos < 0)
@@ -5119,7 +5130,9 @@ gui_set_no_special_glyphs (struct frame *f, Lisp_Object new_value, Lisp_Object o
 bool
 gui_mouse_grabbed (Display_Info *dpyinfo)
 {
-  return (dpyinfo->grabbed
+  return ((dpyinfo->grabbed
+	   || (dpyinfo->terminal->any_grab_hook
+	       && dpyinfo->terminal->any_grab_hook (dpyinfo)))
 	  && dpyinfo->last_mouse_frame
 	  && FRAME_LIVE_P (dpyinfo->last_mouse_frame));
 }
@@ -5457,7 +5470,7 @@ gui_frame_get_and_record_arg (struct frame *f, Lisp_Object alist,
 
   value = gui_display_get_arg (FRAME_DISPLAY_INFO (f), alist, param,
                                attribute, class, type);
-  if (! NILP (value) && ! EQ (value, Qunbound))
+  if (! NILP (value) && ! BASE_EQ (value, Qunbound))
     store_frame_param (f, param, value);
 
   return value;
@@ -5478,7 +5491,7 @@ gui_default_parameter (struct frame *f, Lisp_Object alist, Lisp_Object prop,
   Lisp_Object tem;
 
   tem = gui_frame_get_arg (f, alist, prop, xprop, xclass, type);
-  if (EQ (tem, Qunbound))
+  if (BASE_EQ (tem, Qunbound))
     tem = deflt;
   AUTO_FRAME_ARG (arg, prop, tem);
   gui_set_frame_parameters (f, arg);
@@ -5740,9 +5753,9 @@ gui_figure_window_size (struct frame *f, Lisp_Object parms, bool tabbar_p,
 
   height = gui_display_get_arg (dpyinfo, parms, Qheight, 0, 0, RES_TYPE_NUMBER);
   width = gui_display_get_arg (dpyinfo, parms, Qwidth, 0, 0, RES_TYPE_NUMBER);
-  if (!EQ (width, Qunbound) || !EQ (height, Qunbound))
+  if (!BASE_EQ (width, Qunbound) || !BASE_EQ (height, Qunbound))
     {
-      if (!EQ (width, Qunbound))
+      if (!BASE_EQ (width, Qunbound))
 	{
 	  if (CONSP (width) && EQ (XCAR (width), Qtext_pixels))
 	    {
@@ -5778,7 +5791,7 @@ gui_figure_window_size (struct frame *f, Lisp_Object parms, bool tabbar_p,
 	    }
 	}
 
-      if (!EQ (height, Qunbound))
+      if (!BASE_EQ (height, Qunbound))
 	{
 	  if (CONSP (height) && EQ (XCAR (height), Qtext_pixels))
 	    {
@@ -5816,7 +5829,7 @@ gui_figure_window_size (struct frame *f, Lisp_Object parms, bool tabbar_p,
 
       user_size = gui_display_get_arg (dpyinfo, parms, Quser_size, 0, 0,
                                        RES_TYPE_NUMBER);
-      if (!NILP (user_size) && !EQ (user_size, Qunbound))
+      if (!NILP (user_size) && !BASE_EQ (user_size, Qunbound))
 	window_prompting |= USSize;
       else
 	window_prompting |= PSize;
@@ -5829,7 +5842,7 @@ gui_figure_window_size (struct frame *f, Lisp_Object parms, bool tabbar_p,
   left = gui_display_get_arg (dpyinfo, parms, Qleft, 0, 0, RES_TYPE_NUMBER);
   user_position = gui_display_get_arg (dpyinfo, parms, Quser_position, 0, 0,
                                        RES_TYPE_NUMBER);
-  if (! EQ (top, Qunbound) || ! EQ (left, Qunbound))
+  if (! BASE_EQ (top, Qunbound) || ! BASE_EQ (left, Qunbound))
     {
       if (EQ (top, Qminus))
 	{
@@ -5852,7 +5865,7 @@ gui_figure_window_size (struct frame *f, Lisp_Object parms, bool tabbar_p,
       else if (FLOATP (top))
 	f->top_pos = frame_float (f, top, FRAME_FLOAT_TOP, &parent_done,
 				  &outer_done, 0);
-      else if (EQ (top, Qunbound))
+      else if (BASE_EQ (top, Qunbound))
 	f->top_pos = 0;
       else
 	{
@@ -5882,7 +5895,7 @@ gui_figure_window_size (struct frame *f, Lisp_Object parms, bool tabbar_p,
       else if (FLOATP (left))
 	f->left_pos = frame_float (f, left, FRAME_FLOAT_LEFT, &parent_done,
 				   &outer_done, 0);
-      else if (EQ (left, Qunbound))
+      else if (BASE_EQ (left, Qunbound))
 	f->left_pos = 0;
       else
 	{
@@ -5891,7 +5904,7 @@ gui_figure_window_size (struct frame *f, Lisp_Object parms, bool tabbar_p,
 	    window_prompting |= XNegative;
 	}
 
-      if (!NILP (user_position) && ! EQ (user_position, Qunbound))
+      if (!NILP (user_position) && ! BASE_EQ (user_position, Qunbound))
 	window_prompting |= USPosition;
       else
 	window_prompting |= PPosition;

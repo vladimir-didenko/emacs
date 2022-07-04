@@ -92,22 +92,23 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 /* Some messages that Emacs sends to itself.  */
 enum
   {
-    SCROLL_BAR_UPDATE	  = 3000,
-    WAIT_FOR_RELEASE	  = 3001,
-    RELEASE_NOW		  = 3002,
-    CANCEL_DROP		  = 3003,
-    SHOW_MENU_BAR	  = 3004,
-    BE_MENU_BAR_OPEN	  = 3005,
-    QUIT_APPLICATION	  = 3006,
-    REPLAY_MENU_BAR	  = 3007,
-    FONT_FAMILY_SELECTED  = 3008,
-    FONT_STYLE_SELECTED	  = 3009,
-    FILE_PANEL_SELECTION  = 3010,
-    QUIT_PREVIEW_DIALOG	  = 3011,
-    SET_FONT_INDICES	  = 3012,
-    SET_PREVIEW_DIALOG	  = 3013,
-    UPDATE_PREVIEW_DIALOG = 3014,
-    SEND_MOVE_FRAME_EVENT = 3015,
+    SCROLL_BAR_UPDATE	     = 3000,
+    WAIT_FOR_RELEASE	     = 3001,
+    RELEASE_NOW		     = 3002,
+    CANCEL_DROP		     = 3003,
+    SHOW_MENU_BAR	     = 3004,
+    BE_MENU_BAR_OPEN	     = 3005,
+    QUIT_APPLICATION	     = 3006,
+    REPLAY_MENU_BAR	     = 3007,
+    FONT_FAMILY_SELECTED     = 3008,
+    FONT_STYLE_SELECTED	     = 3009,
+    FILE_PANEL_SELECTION     = 3010,
+    QUIT_PREVIEW_DIALOG	     = 3011,
+    SET_FONT_INDICES	     = 3012,
+    SET_PREVIEW_DIALOG	     = 3013,
+    UPDATE_PREVIEW_DIALOG    = 3014,
+    SEND_MOVE_FRAME_EVENT    = 3015,
+    SET_DISABLE_ANTIALIASING = 3016,
   };
 
 /* X11 keysyms that we use.  */
@@ -145,6 +146,9 @@ struct font_selection_dialog_message
 
   /* Whether or not a size was explicitly specified.  */
   bool_bf size_specified : 1;
+
+  /* Whether or not antialiasing should be disabled.  */
+  bool_bf disable_antialias : 1;
 
   /* The index of the selected font family.  */
   int family_idx;
@@ -582,10 +586,11 @@ class Emacs : public BApplication
 {
 public:
   BMessage settings;
-  bool settings_valid_p = false;
+  bool settings_valid_p;
   EmacsScreenChangeMonitor *monitor;
 
-  Emacs (void) : BApplication ("application/x-vnd.GNU-emacs")
+  Emacs (void) : BApplication ("application/x-vnd.GNU-emacs"),
+		 settings_valid_p (false)
   {
     BPath settings_path;
 
@@ -1103,8 +1108,8 @@ public:
   {
     struct haiku_resize_event rq;
     rq.window = this;
-    rq.px_heightf = newHeight + 1.0f;
-    rq.px_widthf = newWidth + 1.0f;
+    rq.width = newWidth + 1.0f;
+    rq.height = newHeight + 1.0f;
 
     haiku_write (FRAME_RESIZED, &rq);
     BWindow::FrameResized (newWidth, newHeight);
@@ -1492,25 +1497,36 @@ public:
 class EmacsView : public BView
 {
 public:
-  uint32_t previous_buttons = 0;
-  int looper_locked_count = 0;
+  uint32_t previous_buttons;
+  int looper_locked_count;
   BRegion sb_region;
   BRegion invalid_region;
 
-  BView *offscreen_draw_view = NULL;
-  BBitmap *offscreen_draw_bitmap_1 = NULL;
-  BBitmap *copy_bitmap = NULL;
+  BView *offscreen_draw_view;
+  BBitmap *offscreen_draw_bitmap_1;
+  BBitmap *copy_bitmap;
 
 #ifdef USE_BE_CAIRO
-  cairo_surface_t *cr_surface = NULL;
-  cairo_t *cr_context = NULL;
+  cairo_surface_t *cr_surface;
+  cairo_t *cr_context;
   BLocker cr_surface_lock;
 #endif
 
   BPoint tt_absl_pos;
-  BMessage *wait_for_release_message = NULL;
+  BMessage *wait_for_release_message;
 
-  EmacsView () : BView (BRect (0, 0, 0, 0), "Emacs", B_FOLLOW_NONE, B_WILL_DRAW)
+  EmacsView () : BView (BRect (0, 0, 0, 0), "Emacs",
+			B_FOLLOW_NONE, B_WILL_DRAW),
+		 previous_buttons (0),
+		 looper_locked_count (0),
+		 offscreen_draw_view (NULL),
+		 offscreen_draw_bitmap_1 (NULL),
+		 copy_bitmap (NULL),
+#ifdef USE_BE_CAIRO
+		 cr_surface (NULL),
+		 cr_context (NULL),
+#endif
+		 wait_for_release_message (NULL)
   {
 
   }
@@ -1658,9 +1674,7 @@ public:
 #endif
 
 	if (looper_locked_count)
-	  {
-	    offscreen_draw_bitmap_1->Lock ();
-	  }
+	  offscreen_draw_bitmap_1->Lock ();
 
 	UnlockLooper ();
       }
@@ -1816,10 +1830,10 @@ public:
   }
 
   void
-  MouseDown (BPoint point)
+  BasicMouseDown (BPoint point, BView *scroll_bar)
   {
     struct haiku_button_event rq;
-    uint32 buttons;
+    uint32 mods, buttons;
 
     this->GetMouse (&point, &buttons, false);
 
@@ -1830,6 +1844,7 @@ public:
     grab_view_locker.Unlock ();
 
     rq.window = this->Window ();
+    rq.scroll_bar = scroll_bar;
 
     if (!(previous_buttons & B_PRIMARY_MOUSE_BUTTON)
 	&& (buttons & B_PRIMARY_MOUSE_BUTTON))
@@ -1848,7 +1863,7 @@ public:
     rq.x = point.x;
     rq.y = point.y;
 
-    uint32_t mods = modifiers ();
+    mods = modifiers ();
 
     rq.modifiers = 0;
     if (mods & B_SHIFT_KEY)
@@ -1863,18 +1878,25 @@ public:
     if (mods & B_OPTION_KEY)
       rq.modifiers |= HAIKU_MODIFIER_SUPER;
 
-    SetMouseEventMask (B_POINTER_EVENTS, (B_LOCK_WINDOW_FOCUS
-					  | B_NO_POINTER_HISTORY));
+    if (!scroll_bar)
+      SetMouseEventMask (B_POINTER_EVENTS, (B_LOCK_WINDOW_FOCUS
+					    | B_NO_POINTER_HISTORY));
 
     rq.time = system_time ();
     haiku_write (BUTTON_DOWN, &rq);
   }
 
   void
-  MouseUp (BPoint point)
+  MouseDown (BPoint point)
+  {
+    BasicMouseDown (point, NULL);
+  }
+
+  void
+  BasicMouseUp (BPoint point, BView *scroll_bar)
   {
     struct haiku_button_event rq;
-    uint32 buttons;
+    uint32 buttons, mods;
 
     this->GetMouse (&point, &buttons, false);
 
@@ -1895,6 +1917,7 @@ public:
       }
 
     rq.window = this->Window ();
+    rq.scroll_bar = scroll_bar;
 
     if ((previous_buttons & B_PRIMARY_MOUSE_BUTTON)
 	&& !(buttons & B_PRIMARY_MOUSE_BUTTON))
@@ -1913,7 +1936,7 @@ public:
     rq.x = point.x;
     rq.y = point.y;
 
-    uint32_t mods = modifiers ();
+    mods = modifiers ();
 
     rq.modifiers = 0;
     if (mods & B_SHIFT_KEY)
@@ -1928,37 +1951,48 @@ public:
     if (mods & B_OPTION_KEY)
       rq.modifiers |= HAIKU_MODIFIER_SUPER;
 
-    if (!buttons)
-      SetMouseEventMask (0, 0);
-
     rq.time = system_time ();
     haiku_write (BUTTON_UP, &rq);
+  }
+
+  void
+  MouseUp (BPoint point)
+  {
+    BasicMouseUp (point, NULL);
   }
 };
 
 class EmacsScrollBar : public BScrollBar
 {
 public:
-  int dragging = 0;
+  int dragging;
   bool horizontal;
   enum haiku_scroll_bar_part current_part;
   float old_value;
   scroll_bar_info info;
 
   /* True if button events should be passed to the parent.  */
-  bool handle_button = false;
-  bool in_overscroll = false;
-  bool can_overscroll = false;
-  bool maybe_overscroll = false;
+  bool handle_button;
+  bool in_overscroll;
+  bool can_overscroll;
+  bool maybe_overscroll;
   BPoint last_overscroll;
   int last_reported_overscroll_value;
   int max_value, real_max_value;
   int overscroll_start_value;
   bigtime_t repeater_start;
+  EmacsView *parent;
 
-  EmacsScrollBar (int x, int y, int x1, int y1, bool horizontal_p) :
-    BScrollBar (BRect (x, y, x1, y1), NULL, NULL, 0, 0, horizontal_p ?
-		B_HORIZONTAL : B_VERTICAL)
+  EmacsScrollBar (int x, int y, int x1, int y1, bool horizontal_p,
+		  EmacsView *parent)
+    : BScrollBar (BRect (x, y, x1, y1), NULL, NULL, 0, 0, horizontal_p ?
+		  B_HORIZONTAL : B_VERTICAL),
+      dragging (0),
+      handle_button (false),
+      in_overscroll (false),
+      can_overscroll (false),
+      maybe_overscroll (false),
+      parent (parent)
   {
     BView *vw = (BView *) this;
     vw->SetResizingMode (B_FOLLOW_NONE);
@@ -2159,7 +2193,6 @@ public:
     BLooper *looper;
     BMessage *message;
     int32 buttons, mods;
-    BView *parent;
 
     looper = Looper ();
     message = NULL;
@@ -2180,8 +2213,9 @@ public:
       {
 	/* Allow C-mouse-3 to split the window on a scroll bar.   */
 	handle_button = true;
-	parent = Parent ();
-	parent->MouseDown (ConvertToParent (pt));
+	SetMouseEventMask (B_POINTER_EVENTS, (B_SUSPEND_VIEW_FOCUS
+					      | B_LOCK_WINDOW_FOCUS));
+	parent->BasicMouseDown (ConvertToParent (pt), this);
 
 	return;
       }
@@ -2244,7 +2278,6 @@ public:
   MouseUp (BPoint pt)
   {
     struct haiku_scroll_bar_drag_event rq;
-    BView *parent;
 
     in_overscroll = false;
     maybe_overscroll = false;
@@ -2252,8 +2285,7 @@ public:
     if (handle_button)
       {
 	handle_button = false;
-	parent = Parent ();
-	parent->MouseUp (ConvertToParent (pt));
+	parent->BasicMouseUp (ConvertToParent (pt), this);
 
 	return;
       }
@@ -2546,6 +2578,9 @@ class EmacsFontPreviewDialog : public BWindow
 	current_font = new BFont;
 	current_font->SetFamilyAndStyle (name, sname);
 
+	if (message->GetBool ("emacs:disable_antialiasing", false))
+	  current_font->SetFlags (B_DISABLE_ANTIALIASING);
+
 	if (size_name && strlen (size_name))
 	  {
 	    size = atoi (size_name);
@@ -2587,26 +2622,32 @@ public:
   }
 };
 
-class DualLayoutView : public BView
+class TripleLayoutView : public BView
 {
   BScrollView *view_1;
-  BView *view_2;
+  BView *view_2, *view_3;
 
   void
   FrameResized (float new_width, float new_height)
   {
     BRect frame;
-    float width, height;
+    float width, height, height_1, width_1;
+    float basic_height;
 
     frame = Frame ();
 
     view_2->GetPreferredSize (&width, &height);
+    view_3->GetPreferredSize (&width_1, &height_1);
+
+    basic_height = height + height_1;
 
     view_1->MoveTo (0, 0);
     view_1->ResizeTo (BE_RECT_WIDTH (frame),
-		      BE_RECT_HEIGHT (frame) - height);
-    view_2->MoveTo (2, BE_RECT_HEIGHT (frame) - height);
+		      BE_RECT_HEIGHT (frame) - basic_height);
+    view_2->MoveTo (2, BE_RECT_HEIGHT (frame) - basic_height);
     view_2->ResizeTo (BE_RECT_WIDTH (frame) - 4, height);
+    view_3->MoveTo (2, BE_RECT_HEIGHT (frame) - height_1);
+    view_3->ResizeTo (BE_RECT_WIDTH (frame) - 4, height_1);
 
     BView::FrameResized (new_width, new_height);
   }
@@ -2616,19 +2657,24 @@ class DualLayoutView : public BView
   MinSize (void)
   {
     float width, height;
+    float width_1, height_1;
     BSize size_1;
 
     size_1 = view_1->MinSize ();
     view_2->GetPreferredSize (&width, &height);
+    view_3->GetPreferredSize (&width_1, &height_1);
 
-    return BSize (std::max (size_1.width, width),
-		  std::max (size_1.height, height));
+    return BSize (std::max (size_1.width,
+			    std::max (width_1, width)),
+		  std::max (size_1.height, height + height_1));
   }
 
 public:
-  DualLayoutView (BScrollView *first, BView *second) : BView (NULL, B_FRAME_EVENTS),
-						       view_1 (first),
-						       view_2 (second)
+  TripleLayoutView (BScrollView *first, BView *second,
+		    BView *third) : BView (NULL, B_FRAME_EVENTS),
+				    view_1 (first),
+				    view_2 (second),
+				    view_3 (third)
   {
     FrameResized (801, 801);
   }
@@ -2637,13 +2683,14 @@ public:
 class EmacsFontSelectionDialog : public BWindow
 {
   BView basic_view;
+  BCheckBox antialias_checkbox;
   BCheckBox preview_checkbox;
   BSplitView split_view;
   BListView font_family_pane;
   BListView font_style_pane;
   BScrollView font_family_scroller;
   BScrollView font_style_scroller;
-  DualLayoutView style_view;
+  TripleLayoutView style_view;
   BObjectList<BStringItem> all_families;
   BObjectList<BStringItem> all_styles;
   BButton cancel_button, ok_button;
@@ -2678,6 +2725,9 @@ class EmacsFontSelectionDialog : public BWindow
     message.what = SET_FONT_INDICES;
     message.AddInt32 ("emacs:family", family);
     message.AddInt32 ("emacs:style", style);
+
+    if (antialias_checkbox.Value () == B_CONTROL_ON)
+      message.AddBool ("emacs:disable_antialiasing", true);
 
     message.AddString ("emacs:size",
 		       size_entry.Text ());
@@ -2806,6 +2856,11 @@ class EmacsFontSelectionDialog : public BWindow
 	rq.size = atoi (text);
 	rq.size_specified = rq.size > 0 || strlen (text);
 
+	if (antialias_checkbox.Value () == B_CONTROL_ON)
+	  rq.disable_antialias = true;
+	else
+	  rq.disable_antialias = false;
+
 	write_port (comm_port, 0, &rq, sizeof rq);
       }
     else if (msg->what == B_CANCEL)
@@ -2827,6 +2882,11 @@ class EmacsFontSelectionDialog : public BWindow
 	HidePreview ();
       }
     else if (msg->what == UPDATE_PREVIEW_DIALOG)
+      {
+	if (preview)
+	  UpdatePreview ();
+      }
+    else if (msg->what == SET_DISABLE_ANTIALIASING)
       {
 	if (preview)
 	  UpdatePreview ();
@@ -2853,6 +2913,7 @@ public:
 
     font_family_pane.RemoveSelf ();
     font_style_pane.RemoveSelf ();
+    antialias_checkbox.RemoveSelf ();
     preview_checkbox.RemoveSelf ();
     style_view.RemoveSelf ();
     font_family_scroller.RemoveSelf ();
@@ -2869,12 +2930,15 @@ public:
   EmacsFontSelectionDialog (bool monospace_only,
 			    int initial_family_idx,
 			    int initial_style_idx,
-			    int initial_size)
+			    int initial_size,
+			    bool initial_antialias)
     : BWindow (BRect (0, 0, 500, 500),
 	       "Select font from list",
 	       B_TITLED_WINDOW_LOOK,
 	       B_MODAL_APP_WINDOW_FEEL, 0),
       basic_view (NULL, 0),
+      antialias_checkbox ("Disable antialiasing", "Disable antialiasing",
+			  new BMessage (SET_DISABLE_ANTIALIASING)),
       preview_checkbox ("Show preview", "Show preview",
 			new BMessage (SET_PREVIEW_DIALOG)),
       font_family_pane (BRect (0, 0, 0, 0), NULL,
@@ -2889,7 +2953,8 @@ public:
       font_style_scroller (NULL, &font_style_pane,
 			   B_FOLLOW_ALL_SIDES,
 			   B_SUPPORTS_LAYOUT, false, true),
-      style_view (&font_style_scroller, &preview_checkbox),
+      style_view (&font_style_scroller, &antialias_checkbox,
+		  &preview_checkbox),
       all_families (20, true),
       all_styles (20, true),
       cancel_button ("Cancel", "Cancel",
@@ -2918,6 +2983,7 @@ public:
     split_view.AddChild (&font_family_scroller, 0.7);
     split_view.AddChild (&style_view, 0.3);
     style_view.AddChild (&font_style_scroller);
+    style_view.AddChild (&antialias_checkbox);
     style_view.AddChild (&preview_checkbox);
 
     basic_view.SetViewUIColor (B_PANEL_BACKGROUND_COLOR);
@@ -2979,6 +3045,9 @@ public:
 	sprintf (format_buffer, "%d", initial_size);
 	size_entry.SetText (format_buffer);
       }
+
+    if (!initial_antialias)
+      antialias_checkbox.SetValue (B_CONTROL_ON);
   }
 
   void
@@ -3446,8 +3515,8 @@ be_get_screen_dimensions (int *width, int *height)
 
   frame = screen.Frame ();
 
-  *width = 1 + frame.right - frame.left;
-  *height = 1 + frame.bottom - frame.top;
+  *width = BE_RECT_WIDTH (frame);
+  *height = BE_RECT_HEIGHT (frame);
 }
 
 /* Resize VIEW to WIDTH, HEIGHT.  */
@@ -3494,20 +3563,22 @@ BWindow_Flush (void *window)
 
 /* Make a scrollbar, attach it to VIEW's window, and return it.  */
 void *
-BScrollBar_make_for_view (void *view, int horizontal_p,
-			  int x, int y, int x1, int y1,
-			  void *scroll_bar_ptr)
+be_make_scroll_bar_for_view (void *view, int horizontal_p,
+			     int x, int y, int x1, int y1)
 {
-  EmacsScrollBar *sb = new EmacsScrollBar (x, y, x1, y1, horizontal_p);
+  EmacsScrollBar *scroll_bar;
   BView *vw = (BView *) view;
-  BView *sv = (BView *) sb;
 
   if (!vw->LockLooper ())
     gui_abort ("Failed to lock scrollbar owner");
-  vw->AddChild ((BView *) sb);
-  sv->WindowActivated (vw->Window ()->IsActive ());
+
+  scroll_bar = new EmacsScrollBar (x, y, x1, y1, horizontal_p,
+				   (EmacsView *) vw);
+
+  vw->AddChild (scroll_bar);
   vw->UnlockLooper ();
-  return sb;
+
+  return scroll_bar;
 }
 
 void
@@ -5066,7 +5137,8 @@ be_select_font (void (*process_pending_signals_function) (void),
 		haiku_font_family_or_style *style,
 		int *size, bool allow_monospace_only,
 		int initial_family, int initial_style,
-		int initial_size)
+		int initial_size, bool initial_antialias,
+		bool *disable_antialias)
 {
   EmacsFontSelectionDialog *dialog;
   struct font_selection_dialog_message msg;
@@ -5076,7 +5148,7 @@ be_select_font (void (*process_pending_signals_function) (void),
 
   dialog = new EmacsFontSelectionDialog (allow_monospace_only,
 					 initial_family, initial_style,
-					 initial_size);
+					 initial_size, initial_antialias);
   dialog->CenterOnScreen ();
 
   if (dialog->InitCheck () < B_OK)
@@ -5105,6 +5177,7 @@ be_select_font (void (*process_pending_signals_function) (void),
   memcpy (family, family_buffer, sizeof *family);
   memcpy (style, style_buffer, sizeof *style);
   *size = msg.size_specified ? msg.size : -1;
+  *disable_antialias = msg.disable_antialias;
 
   return true;
 }

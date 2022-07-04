@@ -833,7 +833,7 @@ The renaming scheme is performed in accordance with
                (when url
                  (setq url (propertize url 'face 'variable-pitch))
                  (let* ((parsed (url-generic-parse-url url))
-                        (host-length (shr-string-pixel-width
+                        (host-length (string-pixel-width
                                       (propertize
                                        (format "%s://%s" (url-type parsed)
                                                (url-host parsed))
@@ -842,17 +842,17 @@ The renaming scheme is performed in accordance with
                    (cond
                     ;; The host bit is wider than the window, so nix
                     ;; the title.
-                    ((> (+ host-length (shr-string-pixel-width "xxxxx")) width)
+                    ((> (+ host-length (string-pixel-width "xxxxx")) width)
                      (setq title ""))
                     ;; Trim the title.
-                    ((> (+ (shr-string-pixel-width (concat title "xx"))
+                    ((> (+ (string-pixel-width (concat title "xx"))
                            host-length)
                         width)
                      (setq title
                            (concat
                             (eww--limit-string-pixelwise
                              title (- width host-length
-                                      (shr-string-pixel-width
+                                      (string-pixel-width
                                        (propertize "...: " 'face
                                                    'variable-pitch))))
                             (propertize "..." 'face 'variable-pitch)))))))
@@ -932,9 +932,9 @@ The renaming scheme is performed in accordance with
 
 (defun eww-links-at-point ()
   "Return list of URIs, if any, linked at point."
-  (remq nil
-	(list (get-text-property (point) 'shr-url)
-	      (get-text-property (point) 'image-url))))
+  (seq-filter #'stringp
+	      (list (get-text-property (point) 'shr-url)
+	            (get-text-property (point) 'image-url))))
 
 (defun eww-view-source ()
   "View the HTML source code of the current page."
