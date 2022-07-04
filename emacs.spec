@@ -3,9 +3,17 @@
 %def_disable athena
 %def_disable nox
 
+%define gcc_branch 12
+%ifarch ppc
+# On ppc32, we build a 64-bit compiler with default 32-bit mode.
+%define _target_platform ppc64-alt-linux
+%endif
+%define gcc_target_libdir %_libdir/gcc/%_target_platform/%gcc_branch
+
+
 Name: emacs
 Version: 29.0.50
-Release: alt6.gited02be04
+Release: alt7.git1ac383bcb
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -275,7 +283,7 @@ autoreconf -i -I m4
 # TODO: Find why it is required. Also without this export emacs binary will not start.
 # Another issue is that alternatives link /usr/bin/emacs will not start even if we
 # explicitly export path below.
-export LIBRARY_PATH=%_libdir/gcc/x86_64-alt-linux/12
+export LIBRARY_PATH=%gcc_target_libdir
 
 pushd build-gtk3
 %configure %_configure_mostly --without-gpm --with-pgtk --with-cairo --with-toolkit-scroll-bars
@@ -505,6 +513,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Mon Jul 4 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt7.git1ac383bcb
+- 29.0.50-git1ac383bcb
+
 * Thu Jun 2 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt6.gited02be04
 - 29.0.50-gited02be04
 
