@@ -13,7 +13,7 @@
 
 Name: emacs
 Version: 29.0.50
-Release: alt7.git1ac383bcb
+Release: alt8.git4a4fcf62
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -513,6 +513,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Thu Jul 21 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt8.git4a4fcf62
+- 29.0.50-git4a4fcf62
+
 * Mon Jul 4 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt7.git1ac383bcb
 - 29.0.50-git1ac383bcb
 
