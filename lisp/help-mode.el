@@ -31,25 +31,23 @@
 
 (require 'cl-lib)
 
-(defvar help-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map (make-composed-keymap button-buffer-map
-                                                 special-mode-map))
-    (define-key map "n" 'help-goto-next-page)
-    (define-key map "p" 'help-goto-previous-page)
-    (define-key map "l" 'help-go-back)
-    (define-key map "r" 'help-go-forward)
-    (define-key map "\C-c\C-b" 'help-go-back)
-    (define-key map "\C-c\C-f" 'help-go-forward)
-    (define-key map [XF86Back] 'help-go-back)
-    (define-key map [XF86Forward] 'help-go-forward)
-    (define-key map "\C-c\C-c" 'help-follow-symbol)
-    (define-key map "s" 'help-view-source)
-    (define-key map "I" 'help-goto-lispref-info)
-    (define-key map "i" 'help-goto-info)
-    (define-key map "c" 'help-customize)
-    map)
-  "Keymap for Help mode.")
+(defvar-keymap help-mode-map
+  :doc "Keymap for Help mode."
+  :parent (make-composed-keymap button-buffer-map
+                                special-mode-map)
+  "n"             #'help-goto-next-page
+  "p"             #'help-goto-previous-page
+  "l"             #'help-go-back
+  "r"             #'help-go-forward
+  "C-c C-b"       #'help-go-back
+  "C-c C-f"       #'help-go-forward
+  "<XF86Back>"    #'help-go-back
+  "<XF86Forward>" #'help-go-forward
+  "C-c C-c"       #'help-follow-symbol
+  "s"             #'help-view-source
+  "I"             #'help-goto-lispref-info
+  "i"             #'help-goto-info
+  "c"             #'help-customize)
 
 (easy-menu-define help-mode-menu help-mode-map
   "Menu for Help mode."
@@ -675,21 +673,24 @@ that."
           (while (and (not (bobp)) (bolp))
             (delete-char -1))
           (insert "\n")
-          (when (or help-xref-stack help-xref-forward-stack)
-            (insert "\n"))
-          ;; Make a back-reference in this buffer if appropriate.
-          (when help-xref-stack
-            (help-insert-xref-button help-back-label 'help-back
-                                     (current-buffer)))
-          ;; Make a forward-reference in this buffer if appropriate.
-          (when help-xref-forward-stack
-            (when help-xref-stack
-              (insert "\t"))
-            (help-insert-xref-button help-forward-label 'help-forward
-                                     (current-buffer)))
-          (when (or help-xref-stack help-xref-forward-stack)
-            (insert "\n")))
+          (help-xref--navigation-buttons))
         (set-buffer-modified-p old-modified)))))
+
+(defun help-xref--navigation-buttons ()
+  (let ((inhibit-read-only t))
+    ;; Make a back-reference in this buffer if appropriate.
+    (when help-xref-stack
+      (ensure-empty-lines 1)
+      (help-insert-xref-button help-back-label 'help-back
+                               (current-buffer)))
+    ;; Make a forward-reference in this buffer if appropriate.
+    (when help-xref-forward-stack
+      (when help-xref-stack
+        (insert "\t"))
+      (help-insert-xref-button help-forward-label 'help-forward
+                               (current-buffer)))
+    (unless (bolp)
+      (insert "\n"))))
 
 ;;;###autoload
 (defun help-xref-button (match-number type &rest args)

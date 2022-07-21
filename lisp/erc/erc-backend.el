@@ -1644,7 +1644,7 @@ Then display the welcome message."
   "Return list of unescaped components from an \"ISUPPORT\" VALUE."
   ;; https://tools.ietf.org/html/draft-brocklesby-irc-isupport-03#section-2
   ;;
-  ;; > The server SHOULD send "X", not "X="; this is the normalised form.
+  ;; > The server SHOULD send "X", not "X="; this is the normalized form.
   ;;
   ;; Note: for now, assume the server will only send non-empty values,
   ;; possibly with printable ASCII escapes.  Though in practice, the
@@ -1673,12 +1673,15 @@ Then display the welcome message."
          (split-string value ",")
        (list value)))))
 
-;; FIXME move to erc-compat (once we decide how to load it)
-(defalias 'erc--with-memoization
-  (cond
-   ((fboundp 'with-memoization) #'with-memoization) ; 29.1
-   ((fboundp 'cl--generic-with-memoization) #'cl--generic-with-memoization)
-   (t (lambda (_ v) v))))
+(defmacro erc--with-memoization (table &rest forms)
+  "Adapter to be migrated to erc-compat."
+  (declare (indent defun))
+  `(cond
+    ((fboundp 'with-memoization)
+     (with-memoization ,table ,@forms)) ; 29.1
+    ((fboundp 'cl--generic-with-memoization)
+     (cl--generic-with-memoization ,table ,@forms))
+    (t ,@forms)))
 
 (defun erc--get-isupport-entry (key &optional single)
   "Return an item for \"ISUPPORT\" token KEY, a symbol.

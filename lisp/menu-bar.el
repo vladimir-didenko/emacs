@@ -47,7 +47,7 @@
 
 ;; This definition is just to show what this looks like.
 ;; It gets modified in place when menu-bar-update-buffers is called.
-(defvar global-buffers-menu-map (make-sparse-keymap "Buffers"))
+(defvar-keymap global-buffers-menu-map :name "Buffers")
 
 (defvar menu-bar-print-menu
   (let ((menu (make-sparse-keymap "Print")))
@@ -584,9 +584,6 @@
 
     menu))
 
-(define-obsolete-function-alias
-  'menu-bar-kill-ring-save 'kill-ring-save "24.1")
-
 ;; These are alternative definitions for the cut, paste and copy
 ;; menu items.  Use them if your system expects these to use the clipboard.
 
@@ -683,7 +680,7 @@ Do the same for the keys of the same name."
       '(menu-item "Custom Themes" customize-themes
                   :help "Choose a pre-defined customization theme"))
     menu))
-;(defvar menu-bar-preferences-menu (make-sparse-keymap "Preferences"))
+;(defvar-keymap menu-bar-preferences-menu :name "Preferences")
 
 (defmacro menu-bar-make-mm-toggle (fname doc help &optional props)
   "Make a menu-item for a global minor mode toggle.
@@ -2194,12 +2191,12 @@ otherwise it could decide to silently do nothing."
 
 (defcustom yank-menu-length 20
   "Text of items in `yank-menu' longer than this will be truncated."
-  :type 'integer
+  :type 'natnum
   :group 'menu)
 
 (defcustom yank-menu-max-items 60
   "Maximum number of entries to display in the `yank-menu'."
-  :type 'integer
+  :type 'natnum
   :group 'menu
   :version "29.1")
 

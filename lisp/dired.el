@@ -40,9 +40,6 @@
 (require 'dired-loaddefs nil t)
 (require 'dnd)
 
-(declare-function dired-buffer-more-recently-used-p
-		  "dired-x" (buffer1 buffer2))
-
 
 ;;; Customizable variables
 
@@ -106,10 +103,10 @@ If `dired-maybe-use-globstar' is non-nil, then `dired-insert-directory'
 checks this alist to enable globstar in the shell subprocess.")
 
 (defcustom dired-chown-program
-  (purecopy (cond ((executable-find "chown") "chown")
-                  ((file-executable-p "/usr/sbin/chown") "/usr/sbin/chown")
-                  ((file-executable-p "/etc/chown") "/etc/chown")
-                  (t "chown")))
+  (cond ((executable-find "chown") "chown")
+        ((file-executable-p "/usr/sbin/chown") "/usr/sbin/chown")
+        ((file-executable-p "/etc/chown") "/etc/chown")
+        (t "chown"))
   "Name of chown command (usually `chown')."
   :group 'dired
   :type 'file)
@@ -164,7 +161,7 @@ always set this variable to t."
   :type 'boolean
   :group 'dired-mark)
 
-(defcustom dired-trivial-filenames (purecopy "\\`\\.\\.?\\'\\|\\`\\.?#")
+(defcustom dired-trivial-filenames "\\`\\.\\.?\\'\\|\\`\\.?#"
   "Regexp of files to skip when finding first file of a directory.
 A value of nil means move to the subdir line.
 A value of t means move to first file."
@@ -209,6 +206,11 @@ If a character, new links are unconditionally marked with that character."
   :type '(choice (const :tag "Keep" t)
 		 (character :tag "Mark"))
   :group 'dired-mark)
+
+(defvar dired-keep-marker-relsymlink ?S
+  "Controls marking of newly made relative symbolic links.
+If t, they are marked if and as the files linked to were marked.
+If a character, new links are unconditionally marked with that character.")
 
 (defcustom dired-free-space 'first
   "Whether and how to display the amount of free disk space in Dired buffers.
@@ -2090,6 +2092,7 @@ Do so according to the former subdir alist OLD-SUBDIR-ALIST."
   "S"       #'dired-do-symlink
   "T"       #'dired-do-touch
   "X"       #'dired-do-shell-command
+  "Y"       #'dired-do-relsymlink
   "Z"       #'dired-do-compress
   "c"       #'dired-do-compress-to
   "!"       #'dired-do-shell-command
@@ -2119,6 +2122,7 @@ Do so according to the former subdir alist OLD-SUBDIR-ALIST."
   "% H"     #'dired-do-hardlink-regexp
   "% R"     #'dired-do-rename-regexp
   "% S"     #'dired-do-symlink-regexp
+  "% Y"     #'dired-do-relsymlink-regexp
   "% &"     #'dired-flag-garbage-files
   ;; Commands for marking and unmarking.
   "* *"     #'dired-mark-executables
@@ -2170,6 +2174,7 @@ Do so according to the former subdir alist OLD-SUBDIR-ALIST."
   "S-SPC"   #'dired-previous-line
   "<remap> <next-line>"        #'dired-next-line
   "<remap> <previous-line>"    #'dired-previous-line
+  "M-G"    #'dired-goto-subdir
   ;; hiding
   "$"       #'dired-hide-subdir
   "M-$"     #'dired-hide-all
@@ -2296,6 +2301,9 @@ Do so according to the former subdir alist OLD-SUBDIR-ALIST."
     ["Symlink..." dired-do-symlink-regexp
      :visible (fboundp 'make-symbolic-link)
      :help "Make symbolic links for files matching regexp"]
+    ["Relative Symlink..." dired-do-relsymlink-regexp
+     :visible (fboundp 'make-symbolic-link)
+     :help "Make relative symbolic links for files matching regexp"]
     ["Hardlink..." dired-do-hardlink-regexp
      :help "Make hard links for files matching regexp"]
     ["Upcase" dired-upcase
@@ -2365,6 +2373,9 @@ Do so according to the former subdir alist OLD-SUBDIR-ALIST."
     ["Symlink to..." dired-do-symlink
      :visible (fboundp 'make-symbolic-link)
      :help "Make symbolic links for current or marked files"]
+    ["Relative Symlink to..." dired-do-relsymlink
+     :visible (fboundp 'make-symbolic-link)
+     :help "Make relative symbolic links for current or marked files"]
     ["Hardlink to..." dired-do-hardlink
      :help "Make hard links for current or marked files"]
     ["Print..." dired-do-print
@@ -3061,7 +3072,11 @@ If EOL, it should be an position to use instead of
 
 (defun dired-copy-filename-as-kill (&optional arg)
   "Copy names of marked (or next ARG) files into the kill ring.
-The names are separated by a space.
+If there are several names, they will be separated by a space,
+and file names that have spaces or quote characters in them will
+be quoted (with double quotes).  (When there's a single file, no
+quoting is done.)
+
 With a zero prefix arg, use the absolute file name of each marked file.
 With \\[universal-argument], use the file name relative to the Dired buffer's
 `default-directory'.  (This still may contain slashes if in a subdirectory.)
@@ -3071,19 +3086,26 @@ prefix arg and marked files are ignored in this case.
 
 You can then feed the file name(s) to other commands with \\[yank]."
   (interactive "P")
-  (let ((string
-         (or (dired-get-subdir)
-             (mapconcat #'identity
-                        (if arg
-                            (cond ((zerop (prefix-numeric-value arg))
-                                   (dired-get-marked-files))
-                                  ((consp arg)
-                                   (dired-get-marked-files t))
-                                  (t
-                                   (dired-get-marked-files
-				    'no-dir (prefix-numeric-value arg))))
-                          (dired-get-marked-files 'no-dir))
-                        " "))))
+  (let* ((files
+          (or (ensure-list (dired-get-subdir))
+              (if arg
+                  (cond ((zerop (prefix-numeric-value arg))
+                         (dired-get-marked-files))
+                        ((consp arg)
+                         (dired-get-marked-files t))
+                        (t
+                         (dired-get-marked-files
+			  'no-dir (prefix-numeric-value arg))))
+                (dired-get-marked-files 'no-dir))))
+         (string
+          (if (length= files 1)
+              (car files)
+            (mapconcat (lambda (file)
+                         (if (string-match-p "[ \"']" file)
+                             (format "%S" file)
+                           file))
+                       files
+                       " "))))
     (unless (string= string "")
       (if (eq last-command 'kill-region)
           (kill-append string nil)
@@ -3491,6 +3513,14 @@ is the directory where the file on this line resides."
     (if (or (null (cdr dired-subdir-alist)) (not (dired-next-subdir 1 t t)))
 	(point-max)
       (point))))
+
+;; This should be a builtin
+(defun dired-buffer-more-recently-used-p (buffer1 buffer2)
+  "Return t if BUFFER1 is more recently used than BUFFER2.
+Considers buffers closer to the car of `buffer-list' to be more recent."
+  (and (not (equal buffer1 buffer2))
+       (memq buffer1 (buffer-list))
+       (not (memq buffer1 (memq buffer2 (buffer-list))))))
 
 
 ;;; Deleting files
@@ -4807,6 +4837,7 @@ Interactively with prefix argument, read FILE-NAME."
 
 (defvar-keymap dired-jump-map
   :doc "Keymap to repeat `dired-jump'.  Used in `repeat-mode'."
+  "j"   #'dired-jump
   "C-j" #'dired-jump)
 (put 'dired-jump 'repeat-map 'dired-jump-map)
 

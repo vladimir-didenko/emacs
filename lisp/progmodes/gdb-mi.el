@@ -684,7 +684,7 @@ Note that this variable only takes effect when variable
 Until there are such number of source windows on screen, GDB
 tries to open a new window when visiting a new source file; after
 that GDB starts to reuse existing source windows."
-  :type 'number
+  :type 'natnum
   :group 'gdb
   :version "28.1")
 
@@ -2817,7 +2817,7 @@ END-CHAR is the ending delimiter; will stop at end-of-buffer otherwise."
               pieces)
         (forward-char))
        (t
-        (warn "Unrecognised escape char: %c" (following-char))))
+        (warn "Unrecognized escape char: %c" (following-char))))
       (setq start (point)))
     (push (buffer-substring start (1- (point))) pieces)
     (let ((s (apply #'concat (nreverse pieces))))

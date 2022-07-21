@@ -995,10 +995,11 @@ current buffer."
 
 (defun search-forward-help-for-help ()
   "Search forward in the help-for-help window.
-This command is meant to be used after issuing the `C-h C-h' command."
+This command is meant to be used after issuing the \\[help-for-help] command."
   (interactive)
   (unless (get-buffer help-for-help-buffer-name)
-    (error "No %s buffer; use `C-h C-h' first" help-for-help-buffer-name))
+    (error (substitute-command-keys "No %s buffer; use \\[help-for-help] first")
+           help-for-help-buffer-name))
   ;; Move cursor to the "help window".
   (pop-to-buffer help-for-help-buffer-name)
   ;; Do incremental search forward.
@@ -1192,14 +1193,6 @@ Otherwise, return a new string."
                 (let* ((fun (intern (buffer-substring (point) (1- end-point))))
                        (key (with-current-buffer orig-buf
                               (where-is-internal fun keymap t))))
-                  ;; If this a command remap, we need to follow it.
-                  (when (and (vectorp key)
-                             (> (length key) 1)
-                             (eq (aref key 0) 'remap)
-                             (symbolp (aref key 1)))
-                    (setq fun (aref key 1))
-                    (setq key (with-current-buffer orig-buf
-                                (where-is-internal fun keymap t))))
                   (if (not key)
                       ;; Function is not on any key.
                       (let ((op (point)))

@@ -1344,4 +1344,74 @@
     (should (equal (plist-member plist (copy-sequence "a") #'equal)
                    '("a" "c")))))
 
+(ert-deftest fns--string-to-unibyte-multibyte ()
+  (dolist (str (list "" "a" "abc" "a\x00\x7fz" "a\xaa\xbbz" "\x80\xdd\xff"
+                     (apply #'unibyte-string (number-sequence 0 255))))
+    (ert-info ((prin1-to-string str) :prefix "str: ")
+      (should-not (multibyte-string-p str))
+      (let* ((u (string-to-unibyte str))   ; should be identity
+             (m (string-to-multibyte u))   ; lossless conversion
+             (mm (string-to-multibyte m))  ; should be identity
+             (uu (string-to-unibyte m))    ; also lossless
+             (ml (mapcar (lambda (c) (if (<= c #x7f) c (+ c #x3fff00))) u)))
+        (should-not (multibyte-string-p u))
+        (should (multibyte-string-p m))
+        (should (multibyte-string-p mm))
+        (should-not (multibyte-string-p uu))
+        (should (equal str u))
+        (should (equal m mm))
+        (should (equal str uu))
+        (should (equal (append m nil) ml)))))
+  (should-error (string-to-unibyte "å"))
+  (should-error (string-to-unibyte "ABC∀BC")))
+
+(defun fns-tests--take-ref (n list)
+  "Reference implementation of `take'."
+  (named-let loop ((m n) (tail list) (ac nil))
+    (if (and (> m 0) tail)
+        (loop (1- m) (cdr tail) (cons (car tail) ac))
+      (nreverse ac))))
+
+(ert-deftest fns--take-ntake ()
+  "Test `take' and `ntake'."
+  ;; Check errors and edge cases.
+  (should-error (take 'x '(a)))
+  (should-error (ntake 'x '(a)))
+  (should-error (take 1 'a))
+  (should-error (ntake 1 'a))
+  (should-error (take 2 '(a . b)))
+  (should-error (ntake 2 '(a . b)))
+  ;; Tolerate non-lists for a count of zero.
+  (should (equal (take 0 'a) nil))
+  (should (equal (ntake 0 'a) nil))
+  ;; But not non-numbers for empty lists.
+  (should-error (take 'x nil))
+  (should-error (ntake 'x nil))
+
+  (dolist (list '(nil (a) (a b) (a b c) (a b c d) (a . b) (a b . c)))
+    (ert-info ((prin1-to-string list) :prefix "list: ")
+      (let ((max (if (proper-list-p list)
+                     (+ 2 (length list))
+                   (safe-length list))))
+        (dolist (n (number-sequence -1 max))
+          (ert-info ((prin1-to-string n) :prefix "n: ")
+            (let* ((l (copy-tree list))
+                   (ref (fns-tests--take-ref n l)))
+              (should (equal (take n l) ref))
+              (should (equal l list))
+              (should (equal (ntake n l) ref))))))))
+
+  ;; Circular list.
+  (let ((list (list 'a 'b 'c)))
+    (setcdr (nthcdr 2 list) (cdr list)) ; list now (a b c b c b c ...)
+    (should (equal (take 0 list) nil))
+    (should (equal (take 1 list) '(a)))
+    (should (equal (take 2 list) '(a b)))
+    (should (equal (take 3 list) '(a b c)))
+    (should (equal (take 4 list) '(a b c b)))
+    (should (equal (take 5 list) '(a b c b c)))
+    (should (equal (take 10 list) '(a b c b c b c b c b)))
+
+    (should (equal (ntake 10 list) '(a b)))))
+
 ;;; fns-tests.el ends here

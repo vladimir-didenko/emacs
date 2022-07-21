@@ -1411,7 +1411,7 @@ text and it replaces `self-insert-command' with the other command, e.g.
       (file-name-as-directory (expand-file-name "drafts" message-directory))
     "~/")
   "Directory where Message auto-saves buffers if Gnus isn't running.
-If nil, Message won't auto-save."
+If nil, Message won't auto-save, whether or not Gnus is running."
   :group 'message-buffers
   :link '(custom-manual "(message)Various Message Variables")
   :type '(choice directory (const :tag "Don't auto-save" nil)))
@@ -4180,8 +4180,7 @@ See `message-citation-line-format'."
                  (setq fname (car names)
                        lname (string-join (cdr names) " ")))
                 ((> count 3)
-                 (setq fname (string-join (butlast names (- count 2))
-                                          " ")
+                 (setq fname (string-join (take 2 names) " ")
                        lname (string-join (nthcdr 2 names) " "))))
           (when (string-match "\\(.*\\),\\'" fname)
             (let ((newlname (match-string 1 fname)))

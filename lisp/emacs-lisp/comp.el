@@ -45,7 +45,9 @@
 
 (defcustom native-comp-speed 2
   "Optimization level for native compilation, a number between -1 and 3.
- -1 functions are kept in bytecode form and no native compilation is performed.
+ -1 functions are kept in bytecode form and no native compilation is performed
+    (but *.eln files are still produced, and include the compiled code in
+    bytecode form).
   0 native compilation is performed with no optimizations.
   1 light optimizations.
   2 max optimization level fully adherent to the language semantic.
@@ -63,7 +65,7 @@ This is intended for debugging the compiler itself.
   2 emit debug symbols and dump pseudo C code.
   3 emit debug symbols and dump: pseudo C code, GCC intermediate
   passes and libgccjit log file."
-  :type 'integer
+  :type 'natnum
   :safe #'natnump
   :version "28.1")
 
@@ -74,7 +76,7 @@ This is intended for debugging the compiler itself.
   1 final LIMPLE is logged.
   2 LAP, final LIMPLE, and some pass info are logged.
   3 max verbosity."
-  :type 'integer
+  :type 'natnum
   :risky t
   :version "28.1")
 
@@ -111,7 +113,7 @@ during bootstrap."
   "Default number of subprocesses used for async native compilation.
 Value of zero means to use half the number of the CPU's execution units,
 or one if there's just one execution unit."
-  :type 'integer
+  :type 'natnum
   :risky t
   :version "28.1")
 
@@ -3693,7 +3695,7 @@ Prepare every function for final compilation and drive the C back-end."
 				 (file-name-base output) "-")
 			 nil ".el")))
 	(with-temp-file temp-file
-          (insert ";; -*-coding: nil; -*-\n")
+          (insert ";; -*-coding: utf-8-emacs-unix; -*-\n")
           (mapc (lambda (e)
                   (insert (prin1-to-string e)))
                 expr))

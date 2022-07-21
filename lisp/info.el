@@ -133,8 +133,6 @@ orientation.  See `Info-nth-menu-item'.")
   :version "22.1"
   :type 'boolean)
 
-;; It's unfortunate that nil means no fontification, as opposed to no limit,
-;; since that differs from font-lock-maximum-size.
 (defcustom Info-fontify-maximum-menu-size 400000
   "Maximum size of menu to fontify if `font-lock-mode' is non-nil.
 Set to nil to disable node fontification; set to t for no limit."
@@ -260,7 +258,7 @@ This only has an effect if `Info-hide-note-references' is non-nil."
   "Depth of breadcrumbs to display.
 0 means do not display breadcrumbs."
   :version "23.1"
-  :type 'integer)
+  :type 'natnum)
 
 (defcustom Info-search-whitespace-regexp "\\s-+"
   "If non-nil, regular expression to match a sequence of whitespace chars.
@@ -2208,7 +2206,7 @@ and is not in the header line or a tag table."
     (let ((backward (< found beg-found)))
       (not
        (or
-	(and (not search-invisible)
+	(and (not (eq search-invisible t))
 	     (if backward
 		 (or (text-property-not-all found beg-found 'invisible nil)
 		     (text-property-not-all found beg-found 'display nil))
@@ -4384,7 +4382,7 @@ a string of ASCII characters.")
 
 ;; Autoload cookie needed by desktop.el
 ;;;###autoload
-(define-derived-mode Info-mode nil "Info" ;FIXME: Derive from special-mode?
+(define-derived-mode Info-mode special-mode "Info"
   "Info mode provides commands for browsing through the Info documentation tree.
 Documentation in Info is divided into \"nodes\", each of which discusses
 one topic and contains references to other nodes which discuss related

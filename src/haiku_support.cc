@@ -21,6 +21,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include <app/Application.h>
 #include <app/Cursor.h>
+#include <app/Clipboard.h>
 #include <app/Messenger.h>
 #include <app/Roster.h>
 
@@ -141,7 +142,7 @@ enum
 
 struct font_selection_dialog_message
 {
-  /* Whether or not font selection was cancelled.  */
+  /* Whether or not font selection was canceled.  */
   bool_bf cancel : 1;
 
   /* Whether or not a size was explicitly specified.  */
@@ -187,10 +188,6 @@ static BMessage volatile *popup_track_message;
 /* Variable in which alert dialog threads return the selected button
    number.  */
 static int32 volatile alert_popup_value;
-
-/* The current window ID.  This is increased every time a frame is
-   created.  */
-static int current_window_id;
 
 /* The view that has the passive grab.  */
 static void *grab_view;
@@ -648,8 +645,12 @@ public:
   void
   MessageReceived (BMessage *msg)
   {
+    struct haiku_clipboard_changed_event rq;
+
     if (msg->what == QUIT_APPLICATION)
       Quit ();
+    else if (msg->what == B_CLIPBOARD_CHANGED)
+      haiku_write (CLIPBOARD_CHANGED_EVENT, &rq);
     else
       BApplication::MessageReceived (msg);
   }
@@ -693,7 +694,6 @@ public:
 		   was_shown_p (false),
 		   menu_bar_active_p (false),
 		   override_redirect_p (false),
-		   window_id (current_window_id),
 		   menus_begun (NULL),
 		   z_group (Z_GROUP_NONE),
 		   tooltip_p (false),
@@ -936,12 +936,11 @@ public:
     if (msg->WasDropped ())
       {
 	BPoint whereto;
-	int32 windowid;
+	int64 threadid;
 	struct haiku_drag_and_drop_event rq;
 
-	if (msg->FindInt32 ("emacs:window_id", &windowid) == B_OK
-	    && !msg->IsSourceRemote ()
-	    && windowid == this->window_id)
+	if (msg->FindInt64 ("emacs:thread_id", &threadid) == B_OK
+	    && threadid == find_thread (NULL))
 	  return;
 
 	whereto = msg->DropPoint ();
@@ -1512,7 +1511,6 @@ public:
   BLocker cr_surface_lock;
 #endif
 
-  BPoint tt_absl_pos;
   BMessage *wait_for_release_message;
 
   EmacsView () : BView (BRect (0, 0, 0, 0), "Emacs",
@@ -1790,30 +1788,28 @@ public:
   MouseMoved (BPoint point, uint32 transit, const BMessage *drag_msg)
   {
     struct haiku_mouse_motion_event rq;
-    int32 windowid;
+    int64 threadid;
     EmacsWindow *window;
-    BToolTip *tooltip;
 
     window = (EmacsWindow *) Window ();
-    tooltip = ToolTip ();
 
-    rq.just_exited_p = transit == B_EXITED_VIEW;
+    if (transit == B_EXITED_VIEW)
+      rq.just_exited_p = true;
+    else
+      rq.just_exited_p = false;
+
     rq.x = point.x;
     rq.y = point.y;
     rq.window = window;
     rq.time = system_time ();
 
     if (drag_msg && (drag_msg->IsSourceRemote ()
-		     || drag_msg->FindInt32 ("emacs:window_id",
-					     &windowid) != B_OK
-		     || windowid != window->window_id))
+		     || drag_msg->FindInt64 ("emacs:thread_id",
+					     &threadid) != B_OK
+		     || threadid != find_thread (NULL)))
       rq.dnd_message = true;
     else
       rq.dnd_message = false;
-
-    if (tooltip)
-      tooltip->SetMouseRelativeLocation (BPoint (-(point.x - tt_absl_pos.x),
-						 -(point.y - tt_absl_pos.y)));
 
     if (!grab_view_locker.Lock ())
       gui_abort ("Couldn't lock grab view locker");
@@ -3266,6 +3262,41 @@ public:
   }
 };
 
+/* A view that is added as a child of a tooltip's text view, and
+   prevents motion events from reaching it (thereby moving the
+   tooltip).  */
+class EmacsMotionSuppressionView : public BView
+{
+  void
+  AttachedToWindow (void)
+  {
+    BView *text_view, *tooltip_view;
+
+    /* We know that this view is a child of the text view, whose
+       parent is the tooltip view, and that the tooltip view has
+       already set its mouse event mask.  */
+
+    text_view = Parent ();
+
+    if (!text_view)
+      return;
+
+    tooltip_view = text_view->Parent ();
+
+    if (!tooltip_view)
+      return;
+
+    tooltip_view->SetEventMask (B_KEYBOARD_EVENTS, 0);
+  }
+
+public:
+  EmacsMotionSuppressionView (void) : BView (BRect (-1, -1, 1, 1),
+					     NULL, 0, 0)
+  {
+    return;
+  }
+};
+
 static int32
 start_running_application (void *data)
 {
@@ -4304,30 +4335,48 @@ BView_set_tooltip (void *view, const char *tooltip)
 
 /* Set VIEW's tooltip to a sticky tooltip at X by Y.  */
 void
-BView_set_and_show_sticky_tooltip (void *view, const char *tooltip,
-				   int x, int y)
+be_show_sticky_tooltip (void *view, const char *tooltip_text,
+			int x, int y)
 {
-  BToolTip *tip;
-  BView *vw = (BView *) view;
+  BToolTip *tooltip;
+  BView *vw, *tooltip_view;
+  BPoint point;
+
+  vw = (BView *) view;
+
   if (!vw->LockLooper ())
     gui_abort ("Failed to lock view while showing sticky tooltip");
-  vw->SetToolTip (tooltip);
-  tip = vw->ToolTip ();
-  BPoint pt;
-  EmacsView *ev = dynamic_cast<EmacsView *> (vw);
-  if (ev)
-    ev->tt_absl_pos = BPoint (x, y);
 
-  vw->GetMouse (&pt, NULL, 1);
-  pt.x -= x;
-  pt.y -= y;
+  vw->SetToolTip ((const char *) NULL);
 
-  pt.x = -pt.x;
-  pt.y = -pt.y;
+  /* If the tooltip text is empty, then a tooltip object won't be
+     created by SetToolTip.  */
+  if (tooltip_text[0] == '\0')
+    tooltip_text = " ";
 
-  tip->SetMouseRelativeLocation (pt);
-  tip->SetSticky (1);
-  vw->ShowToolTip (tip);
+  vw->SetToolTip (tooltip_text);
+
+  tooltip = vw->ToolTip ();
+
+  vw->GetMouse (&point, NULL, 1);
+  point.x -= x;
+  point.y -= y;
+
+  point.x = -point.x;
+  point.y = -point.y;
+
+  /* We don't have to make the tooltip sticky since not receiving
+     mouse movement is enough to prevent it from being hidden.  */
+  tooltip->SetMouseRelativeLocation (point);
+
+  /* Prevent the tooltip from moving in response to mouse
+     movement.  */
+  tooltip_view = tooltip->View ();
+
+  if (tooltip_view)
+    tooltip_view->AddChild (new EmacsMotionSuppressionView);
+
+  vw->ShowToolTip (tooltip);
   vw->UnlockLooper ();
 }
 
@@ -4991,13 +5040,17 @@ be_drag_message (void *view, void *message, bool allow_same_view,
   BMessage cancel_message (CANCEL_DROP);
   struct object_wait_info infos[2];
   ssize_t stat;
+  thread_id window_thread;
 
   block_input_function ();
 
-  if (!allow_same_view &&
-      (msg->ReplaceInt32 ("emacs:window_id", window->window_id)
-       == B_NAME_NOT_FOUND))
-    msg->AddInt32 ("emacs:window_id", window->window_id);
+  if (!allow_same_view)
+    window_thread = window->Looper ()->Thread ();
+
+  if (!allow_same_view
+      && (msg->ReplaceInt64 ("emacs:thread_id", window_thread)
+	  == B_NAME_NOT_FOUND))
+    msg->AddInt64 ("emacs:thread_id", window_thread);
 
   if (!vw->LockLooper ())
     gui_abort ("Failed to lock view looper for drag");

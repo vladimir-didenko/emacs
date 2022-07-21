@@ -166,6 +166,11 @@ of 'user-emacs-directory'.
 
 * Incompatible changes in Emacs 29.1
 
+---
+** 'w' ('dired-copy-filename-as-kill') has changed behaviour.
+If there are several files marked, file names containing space and
+quote characters will be quoted "like this".
+
 +++
 ** Warning about "eager macro-expansion failure" is changed into an error.
 
@@ -321,11 +326,24 @@ the major mode according to 'initial-major-mode', like at Emacs
 startup.  Previously, these functions ignored
 'initial-scratch-message' and left "*scratch*" in 'fundamental-mode'.
 
+---
+** The rlogin.el library and 'rsh' command are now obsolete.
+Use something like 'M-x shell RET ssh <host> RET' instead.
+
 
 * Changes in Emacs 29.1
 
 ---
-** 'longlines-mode' is no longer obsolete.
+** Emacs is now capable of editing files with arbitrarily long lines.
+The display of long lines has been optimized, and Emacs no longer
+chokes when a buffer on display contains long lines.  If you still
+experience slowdowns while editing files with long lines, this is
+either due to font locking, which you can turn off with M-x
+font-lock-mode or C-u C-x x f, or to the current major mode or one of
+the enabled minor modes, in which case you should open the the file
+with M-x find-file-literally instead of C-x C-f.  The variable
+'long-line-threshold' controls whether and when these display
+optimizations are used.
 
 +++
 ** New command to change the font size globally.
@@ -347,10 +365,10 @@ Get the parent directory of a file.
 This variable is used by some operations (mostly syntax-propertization
 and font-locking) to treat lines longer than this variable as if they
 were made up of various smaller lines.  This can help reduce the
-pathological slowdowns seen in buffers made of a single long line, but
-can also cause misbehavior in the presence of such long lines (tho
-most of that misbehavior should usually be limited to mis-highlighting).
-You can recover the previous behavior with:
+slowdowns seen in buffers made of a single long line, but can also
+cause misbehavior in the presence of such long lines (tho most of that
+misbehavior should usually be limited to mis-highlighting).  You can
+recover the previous behavior with:
 
     (setq syntax-wholeline-max most-positive-fixnum)
 
@@ -463,11 +481,6 @@ previous behavior).  The default is nil, which inhibits recording of
 passwords.
 
 +++
-** New user option 'longlines-breakpoint-chars'.
-This is a string containing chars that could be used as breakpoint in
-longlines mode.
-
-+++
 ** New function 'command-query'.
 This function makes its argument command prompt the user for
 confirmation before executing.
@@ -539,6 +552,11 @@ and pop-up menus.
 ** New X resource: "inputStyle".
 This controls the style of the pre-edit and status areas of X input
 methods.
+
++++
+** New X resources: "highlightForeground" and "highlightBackground"
+Only in the Lucid build, this controls colors used for highlighted
+menu item widgets.
 
 +++
 ** On X11, Emacs now tries to synchronize window resize with the window manager.
@@ -872,7 +890,7 @@ are met.  The conditions are given by the argument, which can be
 +++
 *** New user option 'rcirc-cycle-completion-flag'.
 Rcirc will use the default 'completion-at-point' mechanism.  The
-conventional IRC behaviour of completing by cycling through the
+conventional IRC behavior of completing by cycling through the
 available options can be restored by enabling this option.
 
 ** Imenu
@@ -1043,6 +1061,13 @@ supported.
 Type 'C-u C-h t' to select it in case your language setup does not do
 so automatically.
 
+---
+*** New default phonetic input method for the Tamil language environment.
+The default input method for the Tamil language environment is now
+"tamil-phonetic" which is a customizable phonetic input method.  To
+change the input method's translation rules, customize the user option
+'tamil-translation-rules'.
+
 
 * Changes in Specialized Modes and Packages in Emacs 29.1
 
@@ -1058,6 +1083,19 @@ related user option 'dired-clean-confirm-killing-deleted-buffers'
 (which see) has also been moved to 'dired'.
 
 +++
+*** 'dired-do-relsymlink' moved from dired-x to dired.
+The corresponding key "Y" is now bound by default in Dired.
+
++++
+*** 'dired-do-relsymlink-regexp' moved from dired-x to dired.
+The corresponding key "% Y" is now bound by default in Dired.
+
+---
+*** 'M-G' is now bound to 'dired-goto-subdir'.
+Before, that binding was only available if the 'dired-x' package was
+loaded.
+
++++
 *** 'dired-info' and 'dired-man' moved from dired-x to dired.
 The 'dired-info' and 'dired-man' commands have been moved from the
 'dired-x' package to 'dired'.  They have also been renamed to
@@ -1071,9 +1109,9 @@ in Dired mode by default.  The user options 'dired-bind-man' and
 To get the old behavior back and unbind these keys in Dired mode, add
 the following to your Init file:
 
-(with-eval-after-load 'dired
-  (keymap-set dired-mode-map "N" nil)
-  (keymap-set dired-mode-map "I" nil))
+    (with-eval-after-load 'dired
+      (keymap-set dired-mode-map "N" nil)
+      (keymap-set dired-mode-map "I" nil))
 
 ---
 *** New command 'dired-do-eww'.
@@ -1197,7 +1235,7 @@ longer available after exiting the recursive edit.
 This user option controls whether the 'e' (in a "*Backtrace*"
 buffer or while edebugging) and 'C-x C-e' (while edebugging) commands
 lead to a (further) backtrace.  By default, this variable is nil,
-which is a change in behaviour from previous Emacs versions.
+which is a change in behavior from previous Emacs versions.
 
 +++
 *** 'e' in edebug can now take a prefix arg to pretty-print the results.
@@ -1428,7 +1466,7 @@ header before sending a message.
 ** Texinfo Mode
 
 ---
-*** 'texinfo-mode' now has a specialised 'narrow-to-defun' definition.
+*** 'texinfo-mode' now has a specialized 'narrow-to-defun' definition.
 It narrows to the current node.
 
 ** EUDC
@@ -1472,6 +1510,12 @@ phrase part will be automatically quoted if necessary.
 EUDC can now contribute email addresses to 'completion-at-point' by
 adding the new function 'eudc-capf-complete' to
 'completion-at-point-functions' in 'message-mode'.
+
++++
+*** Additional attributes of query and results in eudcb-macos-contacts.el.
+The EUDC back-end for the macOS Contacts app now provides a wider set
+of attributes to use for queries, and delivers more attributes in
+query results.
 
 ** EWW/SHR
 
@@ -1691,6 +1735,12 @@ this message for SVG and XPM.
 +++
 *** New commands: 'image-flip-horizontally' and 'image-flip-vertically'.
 These commands horizontally and vertically flip the image under point.
+
+** Images
+
++++
+*** Users can now add special image conversion functions.
+This is done via 'image-converter-add-handler'.
 
 ** Image-Dired
 
@@ -1912,6 +1962,12 @@ related 'auth-sources' entry were wrong.
 ** Browse URL
 
 ---
+*** New user option 'browse-url-default-scheme'.
+This user option decides which URL scheme that 'browse-url' and
+related functions will use by default.  For example, you could
+customize this to "https" to always prefer HTTPS URLs.
+
+---
 *** Support for the Netscape web browser has been removed.
 This support has been obsolete since Emacs 25.1.  The final version of
 the Netscape web browser was released in February, 2008.
@@ -1920,6 +1976,11 @@ the Netscape web browser was released in February, 2008.
 *** Support for the Galeon web browser has been removed.
 This support has been obsolete since Emacs 25.1.  The final version of
 the Galeon web browser was released in September, 2008.
+
+---
+*** Support for the "Mozilla" web browser is now obsolete.
+Note that this historical web browser is different from Mozilla
+Firefox; it is its predecessor.
 
 ** Ruby Mode
 
@@ -1996,10 +2057,27 @@ Set it to nil to exclude line numbering from kills and copies.
 
 ** Miscellaneous
 
+---
+*** New user option 'webjump-use-internal-browser'.
+When non-nil, WebJump will use an internal browser to open web pages,
+instead of the default external browser.
+
 +++
 *** New user option 'font-lock-ignore'.
 This option provides a mechanism to selectively disable font-lock
 keyword-driven fontifications.
+
+---
+*** New user option 'auto-save-visited-predicate'.
+This user option is a predicate function which is called by
+'auto-save-visited-mode' to decide whether or not to save a buffer.
+You can use it to automatically save only specific buffers, for
+example buffers using a particular mode or in some directory.
+
+---
+*** New user option 'remote-file-name-inhibit-auto-save-visited'.
+If this user option is non-nil, 'auto-save-visited-mode' will not
+auto-save remote buffers.  The default is nil.
 
 +++
 *** New package vtable.el for formatting tabular data.
@@ -2029,6 +2107,15 @@ back the old behavior.
 *** New command 'recentf-open'.
 This command prompts for a recently opened file in the minibuffer, and
 visits it.
+
+---
+*** 'ffap-machine-at-point' no longer pings hosts by default.
+It will now simply look at a hostname to determine if it is valid,
+instead of also trying to ping it.  Customize the user option
+'ffap-machine-p-known' to 'ping' to get the old behavior back.
+
+---
+*** The 'run-dig' command is now obsolete; use 'dig' instead.
 
 ---
 ** The autoarg.el library is now marked obsolete.
@@ -2227,6 +2314,56 @@ Use 'exif-parse-file' and 'exif-field' instead.
 This change is now applied in 'dired-insert-directory'.
 
 ---
+** Some functions and variables obsolete since Emacs 24 have been removed:
+'Info-edit-map', 'allout-abbreviate-flattened-numbering',
+'allout-mode-deactivate-hook', 'ansi-color-unfontify-region',
+'auth-source-forget-user-or-password', 'auth-source-hide-passwords',
+'auth-source-user-or-password', 'bibtex-complete',
+'bibtex-entry-field-alist', 'buffer-substring-filters',
+'byte-compile-disable-print-circle', 'cfengine-mode-abbrevs',
+'chart-map', 'comint-dynamic-complete',
+'comint-dynamic-complete-as-filename',
+'comint-dynamic-simple-complete', 'command-history-map',
+'completion-annotate-function', 'condition-case-no-debug',
+'count-lines-region', 'data-debug-map', 'deferred-action-list',
+'deferred-action-function', 'dired-x-submit-report',
+'eieio-defgeneric', 'eieio-defmethod', 'emacs-lock-from-exiting',
+'erc-complete-word', 'eshell-cmpl-suffix-list', 'eshell-for',
+'font-lock-maximum-size', 'gnus-carpal',
+'gnus-debug-exclude-variables', 'gnus-debug-files',
+'gnus-local-domain', 'gnus-outgoing-message-group',
+'gnus-secondary-servers', 'gnus-registry-user-format-function-M',
+'image-extension-data', 'image-library-alist',
+'inhibit-first-line-modes-regexps',
+'inhibit-first-line-modes-suffixes', 'intdos',
+'mail-complete-function', 'mail-completion-at-point-function',
+'mail-mailer-swallows-blank-line', 'mail-sent-via', 'make-register',
+'makefile-complete', 'menu-bar-kill-ring-save',
+'meta-complete-symbol', 'meta-mode-map',
+'minibuffer-completing-symbol',
+'minibuffer-local-filename-must-match-map', 'mode25', 'mode4350',
+'msb-after-load-hooks', 'nnimap-split-rule', 'ns-alternatives-map',
+'ns-store-cut-buffer-internal', 'package-menu-view-commentary',
+'pascal-last-completions', 'pascal-show-completions',
+'pascal-toggle-completions', 'prolog-char-quote-workaround',
+'read-filename-at-point', 'reftex-index-map',
+'reftex-index-phrases-map', 'reftex-select-bib-map',
+'reftex-select-label-map', 'reftex-toc-map', 'register-name-alist',
+'register-value', 'report-emacs-bug-pretest-address',
+'rmail-default-dont-reply-to-names', 'rmail-dont-reply-to',
+'rmail-dont-reply-to-names', 'rst-block-face', 'rst-comment-face',
+'rst-definition-face', 'rst-directive-face', 'rst-emphasis1-face',
+'rst-emphasis2-face', 'rst-external-face', 'rst-literal-face',
+'rst-reference-face', 'semantic-grammar-map',
+'semantic-grammar-syntax-table', 'set-register-value',
+'speedbar-key-map', 'speedbar-syntax-table',
+'starttls-any-program-available', 'strokes-report-bug',
+'toggle-emacs-lock', 'tooltip-use-echo-area', 'turn-on-cwarn-mode',
+'turn-on-iimage-mode', 'vc-toggle-read-only', 'view-return-to-alist',
+'view-return-to-alist-update', 'w32-default-color-map' (function),
+'which-func-mode' (function), 'x-cut-buffer-or-selection-value'.
+
+---
 ** Some functions and variables obsolete since Emacs 23 have been removed:
 'find-emacs-lisp-shadows', 'newsticker-cache-filename',
 'unify-8859-on-decoding-mode', 'unify-8859-on-encoding-mode',
@@ -2266,6 +2403,14 @@ patcomp.el, pc-mode.el, pc-select.el, s-region.el, and sregex.el.
 * Lisp Changes in Emacs 29.1
 
 +++
+** New arguments MESSAGE and TIMEOUT of 'set-transient-map'.
+MESSAGE specifies a message to display after activating the transient
+map, including a special formatting spec to list available keys.
+TIMEOUT is the idle time after which to deactivate the transient map.
+The default timeout value can be defined by the new variable
+'set-transient-map-timeout'.
+
++++
 ** New function 'seq-split'.
 This returns a list of sub-sequences of the specified sequence.
 
@@ -2277,7 +2422,7 @@ These function now take an optional comparison predicate argument.
 ** 'read-multiple-choice' can now use long-form answers.
 
 +++
-** 'read-regexp' now allows the user to indicate whether to use case folding.
+** 'M-c' in 'read-regexp' now toggles case folding.
 
 +++
 ** 'completing-read' now allows a function as its REQUIRE-MATCH argument.
@@ -2338,6 +2483,20 @@ be kept aligned with the buffer contents when the user switches
 'display-line-numbers-mode' on or off.
 
 +++
+** New minor mode 'lost-selection-mode'.
+This minor mode makes Emacs deactivate the mark in all buffers when
+the primary selection is obtained by another program.
+
+---
+** On X, Emacs will try to preserve selection ownership when a frame is deleted.
+This means that if you make Emacs the owner of a selection, such as by
+selecting some text into the clipboard or primary selection, and then
+delete the current frame, you will still be able to insert the
+contents of that selection into other programs as long as another
+frame is open on the same display.  This behavior can be disabled by
+setting the variable 'x-auto-preserve-selections' to nil.
+
++++
 ** New predicate 'char-uppercase-p'.
 This returns non-nil if its argument its an uppercase character.
 
@@ -2368,12 +2527,12 @@ value.  The byte compiler will now issue a warning if it encounters
 these forms.
 
 +++
-*** 'restore-buffer-modified-p' can now alter buffer auto-save state.
+** 'restore-buffer-modified-p' can now alter buffer auto-save state.
 With a FLAG value of 'autosaved', it will mark the buffer as having
 been auto-saved since the time of last modification.
 
 ---
-*** New minor mode 'isearch-fold-quotes-mode'.
+** New minor mode 'isearch-fold-quotes-mode'.
 This sets up 'search-default-mode' so that quote characters are
 char-folded into each other.  It is used, by default, in "*Help*" and
 "*info*" buffers.
@@ -2557,6 +2716,10 @@ them towards or away from each other.
 ** New hook 'x-pre-popup-menu-hook'.
 This hook is run before 'x-popup-menu' is about to display a
 deck-of-cards menu on screen.
+
+** New hook 'post-select-region-hook'.
+This hook is run immediately after 'select-active-regions' causes the
+region to be set as the primary selection.
 
 ** New function 'buffer-match-p'.
 Check if a buffer satisfies some condition.  Some examples for
@@ -3043,6 +3206,11 @@ to preserve the old behavior, apply
 
     (let ((default-directory temporary-file-directory))
       (process-attributes pid))
+
++++
+** New functions 'take' and 'ntake'.
+'(take N LIST)' returns the first N elements of LIST; 'ntake' does
+the same but works by modifying LIST destructively.
 
 
 

@@ -595,6 +595,10 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :eval (nth 1 '(one two three)))
   (nthcdr
    :eval (nthcdr 1 '(one two three)))
+  (take
+   :eval (take 3 '(one two three four)))
+  (ntake
+   :eval (ntake 3 (list 'one 'two 'three 'four)))
   (elt
    :eval (elt '(one two three) 1))
   (car-safe
@@ -1179,9 +1183,6 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
   (ash
    :eval (ash 1 4)
    :eval (ash 16 -1))
-  (lsh
-   :eval (lsh 1 4)
-   :eval (lsh 16 -1))
   (logand
    :no-eval "(logand #b10 #b111)"
    :result-string "#b10")
@@ -1367,15 +1368,15 @@ If SAME-WINDOW, don't pop to a new window."
          'action (lambda (_)
                    (describe-function function))
          'follow-link t
-         'help-echo (purecopy "mouse-1, RET: describe function"))
+         'help-echo "mouse-1, RET: describe function")
       (insert-text-button
        (symbol-name function)
        'face 'button
        'action (lambda (_)
                  (info-lookup-symbol function 'emacs-lisp-mode))
        'follow-link t
-       'help-echo (purecopy "mouse-1, RET: show \
-function's documentation in the Info manual")))
+       'help-echo "mouse-1, RET: show \
+function's documentation in the Info manual"))
     (setq arglist-start (point))
     (insert ")\n")
     ;; Doc string.

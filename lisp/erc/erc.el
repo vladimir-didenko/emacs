@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 1997-2022 Free Software Foundation, Inc.
 
-;; Author: Alexander L. Belikoff (alexander@belikoff.net)
+;; Author: Alexander L. Belikoff <alexander@belikoff.net>
 ;; Maintainer: Amin Bandali <bandali@gnu.org>, F. Jason Park <jp@neverwas.me>
 ;; Contributors: Sergey Berezin (sergey.berezin@cs.cmu.edu),
 ;;               Mario Lang (mlang@delysid.org),
@@ -4565,8 +4565,6 @@ This places `point' just after the prompt, or at the beginning of the line."
 
 (defun erc-complete-word-at-point ()
   (run-hook-with-args-until-success 'erc-complete-functions))
-
-(define-obsolete-function-alias 'erc-complete-word #'completion-at-point "24.1")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;

@@ -791,15 +791,40 @@ the C sources, too."
              (function-get function 'disabled))
     (insert "  This function is disabled.\n")))
 
+(defun help-fns--first-release-regexp (symbol)
+  (let* ((name (symbol-name symbol))
+         (quoted (regexp-quote name)))
+    ;; We used to use just (concat "\\_<" (regexp-quote name) "\\_>"),
+    ;; which had the advantage of adapting to the various notational
+    ;; conventions we've used over the years in etc/NEWS*, but it was also
+    ;; leading to many false positives.  So we use a more restrictive regexp
+    ;; now (which can still lead to false positives, e.g. because we don't
+    ;; distinguish between occurrences of the same symbol for
+    ;; different purposes, such as function name, var name, face name,
+    ;; property name, ...).
+    (concat
+     ;; The main "canonical" occurence of symbols is within '...'.
+     "'" quoted "'"
+     ;; Commands can also occur as `M-x blabla'.
+     "\\|M-x[ \t\n]+" quoted "\\_>"
+     ;; Other times we do '<key>' (<cmdname>).
+     "\\|(" quoted ")"
+     ;; Finally other times we just include sample code, which we will
+     ;; only recognize if it's indented by at least 2 spaces and start with
+     ;; an open paren.
+     "\\|^\\(?:  \\|\t\\)[ \t]*(\\(.*[( ']\\)?" quoted "\\_>")
+    ))
+
+
 (defun help-fns--first-release (symbol)
   "Return the likely first release that defined SYMBOL, or nil."
   ;; Code below relies on the etc/NEWS* files.
   ;; FIXME: Maybe we should also use the */ChangeLog* files when available.
   ;; FIXME: Maybe we should also look for announcements of the addition
   ;; of the *packages* in which the function is defined.
-  (let* ((name (symbol-name symbol))
-         (re (concat "\\_<" (regexp-quote name) "\\_>"))
+  (let* ((re (help-fns--first-release-regexp symbol))
          (news (directory-files data-directory t "\\`NEWS\\(\\'\\|\\.\\)"))
+         (case-fold-search nil)
          (place nil)
          (first nil))
     (with-temp-buffer
@@ -816,16 +841,59 @@ the C sources, too."
                 ;; Almost all entries are of the form "* ... in Emacs NN.MM."
                 ;; but there are also a few in the form "* Emacs NN.MM is a bug
                 ;; fix release ...".
-                (if (not (re-search-backward "^\\* .* Emacs \\([0-9.]+[0-9]\\)"
-                                             nil t))
-                    (message "Ref found in non-versioned section in %S"
-                             (file-name-nondirectory f))
+                (if (not (re-search-backward
+                          "^\\* \\(?:.* \\)?Emacs \\([0-9.]+[0-9]\\)"
+                          nil t))
+                    (message "Ref to %S found in non-versioned section in %S"
+                             symbol (file-name-nondirectory f))
                   (let ((version (match-string 1)))
                     (when (or (null first) (version< version first))
                       (setq place (list f pos))
                       (setq first version))))))))))
     (when first
       (make-text-button first nil 'type 'help-news 'help-args place))))
+
+;; (defun help-fns--check-first-releases ()
+;;   "Compare the old liberal regexp to the new more restrictive one."
+;;   (interactive)
+;;   (let* ((quoted nil)
+;;          (rx-fun (lambda (orig-fun symbol)
+;;                    (if quoted
+;;                        (funcall orig-fun symbol)
+;;                      (format "\\_<%s\\_>"
+;;                              (regexp-quote (symbol-name symbol))))))
+;;          (count
+;;           (let ((count 0))
+;;             (obarray-map (lambda (sym)
+;;                            (when (or (fboundp sym) (boundp sym))
+;;                              (cl-incf count)))
+;;                          obarray)
+;;             count))
+;;          (p (make-progress-reporter "Check first releases..." 0 count)))
+;;     (with-current-buffer (get-buffer-create "*Check-first-release*")
+;;       (unwind-protect
+;;           (progn
+;;             (advice-add 'help-fns--first-release-regexp :around rx-fun)
+;;             (erase-buffer)
+;;             (setq count 0)
+;;             (obarray-map
+;;              (lambda (sym)
+;;                (when (or (fboundp sym) (boundp sym))
+;;                  (cl-incf count)
+;;                  (progress-reporter-update p count)
+;;                  (let ((vt (progn (setq quoted t)
+;;                                   (help-fns--first-release sym)))
+;;                        (vnil (progn (setq quoted nil)
+;;                                     (help-fns--first-release sym))))
+;;                    (when (and vnil (not (equal vt vnil)))
+;;                      (insert (symbol-name sym)
+;;                              "\nnot-quoted: " (or vnil "nil")
+;;                              "\nquoted:     " (or vt "nil")
+;;                              "\n\n")))))
+;;              obarray)
+;;             (progress-reporter-done p))
+;;         (advice-remove 'help-fns--first-release-regexp rx-fun))
+;;       (display-buffer (current-buffer)))))
 
 (add-hook 'help-fns-describe-function-functions
           #'help-fns--mention-first-release)
@@ -868,7 +936,7 @@ the C sources, too."
                       (shortdoc-display-group group object
                                               help-window-keep-selected))
             'follow-link t
-            'help-echo (purecopy "mouse-1, RET: show documentation group")))
+            'help-echo "mouse-1, RET: show documentation group"))
          groups)
         (insert (if (= (length groups) 1)
                     " group.\n"
@@ -1402,7 +1470,7 @@ it is displayed along with the global value."
   :interactive nil)
 
 (defun help-fns-edit-mode-done (&optional kill)
-  "Update the value of the variable and kill the buffer.
+  "Update the value of the variable being edited and kill the edit buffer.
 If KILL (the prefix), don't update the value, but just kill the
 current buffer."
   (interactive "P" help-fns--edit-value-mode)
@@ -1423,7 +1491,8 @@ current buffer."
         (revert-buffer)))))
 
 (defun help-fns-edit-mode-cancel ()
-  "Kill the buffer without updating the value."
+  "Kill the edit buffer and cancel editing of the value.
+This cancels value editing without updating the value."
   (interactive nil help-fns--edit-value-mode)
   (help-fns-edit-mode-done t))
 
@@ -1790,8 +1859,10 @@ current buffer and the selected frame, respectively."
                                (when (funcall testfn symbol)
                                  ;; Don't record the current entry in the stack.
                                  (setq help-xref-stack-item nil)
-                                 (cons name
-                                       (funcall descfn symbol buffer frame))))
+                                 (let ((help-xref-stack nil)
+                                       (help-xref-forward-stack nil))
+                                   (funcall descfn symbol buffer frame))
+                                 (cons name (buffer-string))))
                              describe-symbol-backends))))
              (single (null (cdr docs))))
         (while (cdr docs)
@@ -1812,6 +1883,8 @@ current buffer and the selected frame, respectively."
           ;; Don't record the `describe-variable' item in the stack.
           (setq help-xref-stack-item nil)
           (help-setup-xref (list #'describe-symbol symbol) nil))
+        (goto-char (point-max))
+        (help-xref--navigation-buttons)
         (goto-char (point-min))))))
 
 ;;;###autoload
@@ -2122,6 +2195,8 @@ documentation for the major and minor modes of that buffer."
        (when (and (commandp sym)
                   ;; Ignore aliases.
                   (not (symbolp (symbol-function sym)))
+                  ;; Ignore obsolete commands.
+                  (not (get sym 'byte-obsolete-info))
                   ;; Ignore everything bound.
                   (not (where-is-internal sym nil t))
                   (apply #'derived-mode-p (command-modes sym)))

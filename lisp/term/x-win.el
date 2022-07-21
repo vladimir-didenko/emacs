@@ -1171,9 +1171,6 @@ as returned by `x-server-vendor'."
 
 ;;;; Selections
 
-(define-obsolete-function-alias 'x-cut-buffer-or-selection-value
-  'x-selection-value "24.1")
-
 ;; Arrange for the kill and yank functions to set and check the clipboard.
 
 (defun x-clipboard-yank ()
@@ -1571,8 +1568,7 @@ frames on all displays."
 
 (defun x-dnd-movement (_frame position)
   "Handle movement to POSITION during drag-and-drop."
-  (dnd-handle-movement position)
-  (redisplay))
+  (dnd-handle-movement position))
 
 (defun x-device-class (name)
   "Return the device class of NAME.

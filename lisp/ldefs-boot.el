@@ -313,8 +313,8 @@ Interactively, BEG and END are the mark/point of the current region.
 
 Many modes define specific alignment rules, and some of these
 rules in some modes react to the current prefix argument.  For
-instance, in `text-mode', `M-x align' will align into columns
-based on space delimiters, while `C-u - M-x align' will align
+instance, in `text-mode', \\`M-x align' will align into columns
+based on space delimiters, while \\`C-u -' \\`M-x align' will align
 into columns based on the \"$\" character.  See the
 `align-rules-list' variable definition for the specific rules.
 
@@ -639,7 +639,6 @@ hooks, by which independent code can cooperate with allout
 without changes to the allout core.  Here are key ones:
 
 `allout-mode-hook'
-`allout-mode-deactivate-hook' (deprecated)
 `allout-mode-off-hook'
 `allout-exposure-change-functions'
 `allout-structure-added-functions'
@@ -1483,6 +1482,7 @@ Major mode for editing Autoconf configure.ac files.
 
 ;;; Generated autoloads from autoinsert.el
 
+(put 'auto-insert 'safe-local-variable #'null)
 (autoload 'auto-insert "autoinsert" "\
 Insert default contents into new files if variable `auto-insert' is non-nil.
 Matches the visited file name against the elements of `auto-insert-alist'." t nil)
@@ -2119,10 +2119,10 @@ a reflection.
 
 ;;; Generated autoloads from bookmark.el
 
- (define-key ctl-x-r-map "b" 'bookmark-jump)
- (define-key ctl-x-r-map "m" 'bookmark-set)
- (define-key ctl-x-r-map "M" 'bookmark-set-no-overwrite)
- (define-key ctl-x-r-map "l" 'bookmark-bmenu-list)
+ (keymap-set ctl-x-r-map "b" #'bookmark-jump)
+ (keymap-set ctl-x-r-map "m" #'bookmark-set)
+ (keymap-set ctl-x-r-map "M" #'bookmark-set-no-overwrite)
+ (keymap-set ctl-x-r-map "l" #'bookmark-bmenu-list)
 (defvar-keymap bookmark-map :doc "\
 Keymap containing bindings to bookmark functions.
 It is not bound to any key by default: to bind it
@@ -2453,6 +2453,7 @@ When called non-interactively, optional second argument NEW-WINDOW is
 used instead of `browse-url-new-window-flag'.
 
 (fn URL &optional NEW-WINDOW)" t nil)
+(make-obsolete 'browse-url-mozilla 'nil "29.1")
 (autoload 'browse-url-firefox "browse-url" "\
 Ask the Firefox WWW browser to load URL.
 Defaults to the URL around or before point.  Passes the strings
@@ -2542,6 +2543,7 @@ When called non-interactively, optional second argument NEW-WINDOW is
 used instead of `browse-url-new-window-flag'.
 
 (fn URL &optional NEW-WINDOW)" t nil)
+(make-obsolete 'browse-url-w3 'nil "29.1")
 (autoload 'browse-url-w3-gnudoit "browse-url" "\
 Ask another Emacs running gnuserv to load the URL using the W3 browser.
 The `browse-url-gnudoit-program' program is used with options given by
@@ -2729,7 +2731,6 @@ it is disabled.
 ;;; Generated autoloads from emacs-lisp/bytecomp.el
 
 (put 'byte-compile-dynamic 'safe-local-variable 'booleanp)
-(put 'byte-compile-disable-print-circle 'safe-local-variable 'booleanp)
 (put 'byte-compile-dynamic-docstrings 'safe-local-variable 'booleanp)
 (put 'byte-compile-error-on-warn 'safe-local-variable 'booleanp)
 (put 'byte-compile-warnings 'safe-local-variable (lambda (v) (or (symbolp v) (null (delq nil (mapcar (lambda (x) (not (symbolp x))) v))))))
@@ -4289,11 +4290,11 @@ The buffer is left in Command History mode." t nil)
 Examine commands from variable `command-history' in a buffer.
 The number of commands listed is controlled by `list-command-history-max'.
 The command history is filtered by `list-command-history-filter' if non-nil.
-Use \\<command-history-map>\\[command-history-repeat] to repeat the command on the current line.
+Use \\<command-history-mode-map>\\[command-history-repeat] to repeat the command on the current line.
 
 Otherwise much like Emacs-Lisp Mode except that there is no self-insertion
 and digits provide prefix arguments.  Tab does not indent.
-\\{command-history-map}
+\\{command-history-mode-map}
 
 This command always recompiles the Command History listing
 and runs the normal hook `command-history-hook'." t nil)
@@ -5050,6 +5051,8 @@ evaluate `compilation-shell-minor-mode'.
 The mode's hook is called both when the mode is enabled and when
 it is disabled.
 
+\\{compilation-shell-minor-mode-map}
+
 (fn &optional ARG)" t nil)
 (autoload 'compilation-minor-mode "compile" "\
 Toggle Compilation minor mode.
@@ -5072,6 +5075,8 @@ evaluate `compilation-minor-mode'.
 
 The mode's hook is called both when the mode is enabled and when
 it is disabled.
+
+\\{compilation-minor-mode-map}
 
 (fn &optional ARG)" t nil)
 (autoload 'compilation-next-error-function "compile" "\
@@ -6139,7 +6144,6 @@ The mode's hook is called both when the mode is enabled and when
 it is disabled.
 
 (fn &optional ARG)" t nil)
-(define-obsolete-function-alias 'turn-on-cwarn-mode 'cwarn-mode "24.1")
 (put 'global-cwarn-mode 'globalized-minor-mode t)
 (defvar global-cwarn-mode nil "\
 Non-nil if Global Cwarn mode is enabled.
@@ -7269,8 +7273,11 @@ it is disabled.
 (autoload 'dig "dig" "\
 Query addresses of a DOMAIN using dig.
 See `dig-invoke' for an explanation for the parameters.
-When called interactively, DOMAIN is prompted for.  If given a prefix,
-also prompt for the QUERY-TYPE parameter.
+When called interactively, DOMAIN is prompted for.
+
+If given a \\[universal-argument] prefix, also prompt for the QUERY-TYPE parameter.
+
+If given a \\[universal-argument] \\[universal-argument] prefix, also prompt for the SERVER parameter.
 
 (fn DOMAIN &optional QUERY-TYPE QUERY-CLASS QUERY-OPTION DIG-OPTION SERVER)" t nil)
 (register-definition-prefixes "dig" '("dig-" "query-dig"))
@@ -7382,7 +7389,7 @@ Type \\[dired-do-copy] to Copy files.
 Type \\[dired-sort-toggle-or-edit] to toggle Sorting by name/date or change the `ls' switches.
 Type \\[revert-buffer] to read all currently expanded directories aGain.
   This retains all marks and hides subdirs again that were hidden before.
-Use `SPC' and `DEL' to move down and up by lines.
+Use \\`SPC' and \\`DEL' to move down and up by lines.
 
 If Dired ever gets confused, you can either type \\[revert-buffer] to read the
 directories again, type \\[dired-do-redisplay] to relist the file at point or the marked files or a
@@ -8368,7 +8375,7 @@ Major mode for Ebrowse class tree buffers.
 Each line corresponds to a class in a class tree.
 Letters do not insert themselves, they are commands.
 File operations in the tree buffer work on class tree data structures.
-E.g.\\[save-buffer] writes the tree to the file it was loaded from.
+E.g. \\[save-buffer] writes the tree to the file it was loaded from.
 
 Tree mode key bindings:
 \\{ebrowse-tree-mode-map}
@@ -8406,7 +8413,7 @@ A second call of this function without changing point inserts the next match.
 A call with prefix PREFIX reads the symbol to insert from the minibuffer with
 completion.
 
-(fn PREFIX)" '("P") nil)
+(fn PREFIX)" t nil)
 (autoload 'ebrowse-tags-loop-continue "ebrowse" "\
 Repeat last operation on files in tree.
 FIRST-TIME non-nil means this is not a repetition, but the first time.
@@ -9078,6 +9085,11 @@ It creates an autoload function for CNAME's constructor.
 
 ;;; Generated autoloads from emacs-lisp/eieio-custom.el
 
+(autoload 'customize-object "eieio-custom" "\
+Customize OBJ in a custom buffer.
+Optional argument GROUP is the sub-group of slots to display.
+
+(fn OBJ &optional GROUP)" nil nil)
 (register-definition-prefixes "eieio-custom" '("eieio-"))
 
 
@@ -9088,6 +9100,18 @@ It creates an autoload function for CNAME's constructor.
 
 ;;; Generated autoloads from emacs-lisp/eieio-opt.el
 
+(autoload 'eieio-browse "eieio-opt" "\
+Create an object browser window to show all objects.
+If optional ROOT-CLASS, then start with that, otherwise start with
+variable `eieio-default-superclass'.
+
+(fn &optional ROOT-CLASS)" t nil)
+(define-obsolete-function-alias 'eieio-help-class 'cl--describe-class "25.1")
+(autoload 'eieio-help-constructor "eieio-opt" "\
+Describe CTR if it is a class constructor.
+
+(fn CTR)" nil nil)
+(make-obsolete 'eieio-help-constructor '"use `describe-function' or `cl--describe-class'." "29.1")
 (register-definition-prefixes "eieio-opt" '("eieio-"))
 
 
@@ -9393,7 +9417,7 @@ See also `emacs-lock-unlockable-modes', which exempts buffers under
 some major modes from being locked under some circumstances.
 
 (fn &optional ARG)" t nil)
-(register-definition-prefixes "emacs-lock" '("emacs-lock-" "toggle-emacs-lock"))
+(register-definition-prefixes "emacs-lock" '("emacs-lock-"))
 
 
 ;;; Generated autoloads from textmodes/emacs-news-mode.el
@@ -9477,12 +9501,7 @@ Emerge two RCS revisions of a file, with another revision as ancestor.
 ;;; Generated autoloads from international/emoji.el
 
 (autoload 'emoji-insert "emoji" "\
-Choose and insert an emoji glyph.
-If TEXT (interactively, the prefix argument), choose the emoji
-by typing its Unicode Standard name (with completion), instead
-of selecting from emoji display.
-
-(fn &optional TEXT)" t nil)
+Choose and insert an emoji glyph." t nil)
 (autoload 'emoji-recent "emoji" "\
 Choose and insert one of the recently-used emoji glyphs." t nil)
 (autoload 'emoji-search "emoji" "\
@@ -9509,13 +9528,9 @@ the name is not known.
 Increase the size of the character under point.
 FACTOR is the multiplication factor for the size.
 
-This command will be repeatable if `repeat-mode' is switched on.
-
 (fn &optional FACTOR)" t nil)
 (autoload 'emoji-zoom-decrease "emoji" "\
-Decrease the size of the character under point.
-
-This command will be repeatable if `repeat-mode' is switched on." t nil)
+Decrease the size of the character under point." t nil)
 (register-definition-prefixes "emoji" '("emoji-"))
 
 
@@ -9906,8 +9921,10 @@ Non-interactively, it takes the keyword arguments
    (server (erc-compute-server))
    (port   (erc-compute-port))
    (nick   (erc-compute-nick))
+   (user   (erc-compute-user))
    password
    (full-name (erc-compute-full-name))
+   id
 
 That is, if called with
 
@@ -9917,7 +9934,11 @@ then the server and full-name will be set to those values,
 whereas `erc-compute-port' and `erc-compute-nick' will be invoked
 for the values of the other parameters.
 
-(fn &key (SERVER (erc-compute-server)) (PORT (erc-compute-port)) (NICK (erc-compute-nick)) PASSWORD (FULL-NAME (erc-compute-full-name)))" '((erc-select-read-args)) nil)
+When present, ID should be an opaque object used to identify the
+connection unequivocally.  This is rarely needed and not available
+interactively.
+
+(fn &key (SERVER (erc-compute-server)) (PORT (erc-compute-port)) (NICK (erc-compute-nick)) (USER (erc-compute-user)) PASSWORD (FULL-NAME (erc-compute-full-name)) ID)" t nil)
 (defalias 'erc-select #'erc)
 (autoload 'erc-tls "erc" "\
 ERC is a powerful, modular, and extensible IRC client.
@@ -9933,6 +9954,7 @@ Non-interactively, it takes the keyword arguments
    password
    (full-name (erc-compute-full-name))
    client-certificate
+   id
 
 That is, if called with
 
@@ -9957,7 +9979,13 @@ Example usage:
              \\='(\"/home/bandali/my-cert.key\"
                \"/home/bandali/my-cert.crt\"))
 
-(fn &key (SERVER (erc-compute-server)) (PORT (erc-compute-port)) (NICK (erc-compute-nick)) PASSWORD (FULL-NAME (erc-compute-full-name)) CLIENT-CERTIFICATE)" '((let ((erc-default-port erc-default-port-tls)) (erc-select-read-args))) nil)
+When present, ID should be an opaque object for identifying the
+connection unequivocally.  (In most cases, this would be a string or a
+symbol composed of letters from the Latin alphabet.)  This option is
+generally unneeded, however.  See info node `(erc) Connecting' for use
+cases.  Not available interactively.
+
+(fn &key (SERVER (erc-compute-server)) (PORT (erc-compute-port)) (NICK (erc-compute-nick)) (USER (erc-compute-user)) PASSWORD (FULL-NAME (erc-compute-full-name)) CLIENT-CERTIFICATE ID)" t nil)
 (autoload 'erc-handle-irc-url "erc" "\
 Use ERC to IRC on HOST:PORT in CHANNEL as USER with PASSWORD.
 If ERC is already connected to HOST:PORT, simply /join CHANNEL.
@@ -10073,6 +10101,7 @@ Otherwise, connect to HOST:PORT as USER and /join CHANNEL.
 Return the name of the network or \"Unknown\" as a symbol.
 Use the server parameter NETWORK if provided, otherwise parse the
 server name and search for a match in `erc-networks-alist'." nil nil)
+(make-obsolete 'erc-determine-network '"maybe see `erc-networks--determine'" "29.1")
 (autoload 'erc-server-select "erc-networks" "\
 Interactively select a server to connect to using `erc-server-alist'." t nil)
 (register-definition-prefixes "erc-networks" '("erc-"))
@@ -10172,7 +10201,9 @@ it has to be wrapped in `(eval (quote ...))'.
 If NAME is already defined as a test and Emacs is running
 in batch mode, an error is signalled.
 
-(fn NAME () [DOCSTRING] [:expected-result RESULT-TYPE] [:tags \\='(TAG...)] BODY...)" nil 'macro)
+(fn NAME () [DOCSTRING] [:expected-result RESULT-TYPE] [:tags \\='(TAG...)] BODY...)" nil t)
+(function-put 'ert-deftest 'doc-string-elt 3)
+(function-put 'ert-deftest 'lisp-indent-function 2)
 (autoload 'ert-run-tests-batch "ert" "\
 Run the tests specified by SELECTOR, printing results to the terminal.
 
@@ -10965,6 +10996,8 @@ If BUFFER, the data to be rendered is in that buffer.  In that
 case, this function doesn't actually fetch URL.  BUFFER will be
 killed after rendering.
 
+For more information, see Info node `(eww) Top'.
+
 (fn URL &optional NEW-BUFFER BUFFER)" t nil)
  (defalias 'browse-web 'eww)
 (autoload 'eww-open-file "eww" "\
@@ -11244,9 +11277,9 @@ INC may be passed as a numeric prefix argument.
 The actual adjustment made depends on the final component of the
 keybinding used to invoke the command, with all modifiers removed:
 
-   +, =   Increase font size in current buffer by one step
-   -      Decrease font size in current buffer by one step
-   0      Reset the font size to the global default
+   \\`+', \\`='   Increase font size in current buffer by one step
+   \\`-'      Decrease font size in current buffer by one step
+   \\`0'      Reset the font size to the global default
 
 After adjusting, continue to read input events and further adjust
 the font size as long as the input event read
@@ -11268,12 +11301,43 @@ that have an explicit `:height' setting.  The two exceptions to
 this are the `default' and `header-line' faces: they will both be
 scaled even if they have an explicit `:height' setting.
 
+See also the related command `global-text-scale-adjust'.
+
 (fn INC)" t nil)
  (define-key global-map [pinch] 'text-scale-pinch)
 (autoload 'text-scale-pinch "face-remap" "\
 Adjust the height of the default face by the scale in the pinch event EVENT.
 
 (fn EVENT)" t nil)
+ (define-key ctl-x-map [(control meta ?+)] 'global-text-scale-adjust)
+ (define-key ctl-x-map [(control meta ?=)] 'global-text-scale-adjust)
+ (define-key ctl-x-map [(control meta ?-)] 'global-text-scale-adjust)
+ (define-key ctl-x-map [(control meta ?0)] 'global-text-scale-adjust)
+(autoload 'global-text-scale-adjust "face-remap" "\
+Globally adjust the font size by INCREMENT.
+
+Interactively, INCREMENT may be passed as a numeric prefix argument.
+
+The adjustment made depends on the final component of the key binding
+used to invoke the command, with all modifiers removed:
+
+   \\`+', \\`='   Globally increase the height of the default face
+   \\`-'      Globally decrease the height of the default face
+   \\`0'      Globally reset the height of the default face
+
+After adjusting, further adjust the font size as long as the key,
+with all modifiers removed, is one of the above characters.
+
+Buffer-local face adjustements have higher priority than global
+face adjustments.
+
+The variable `global-text-scale-adjust-resizes-frames' controls
+whether the frames are resized to keep the same number of lines
+and characters per line when the font size is adjusted.
+
+See also the related command `text-scale-adjust'.
+
+(fn INCREMENT)" t nil)
 (autoload 'buffer-face-mode "face-remap" "\
 Minor mode for a buffer-specific default face.
 
@@ -11329,7 +11393,7 @@ An interface to `buffer-face-mode' which uses the `variable-pitch' face.
 Besides the choice of face, it is the same as `buffer-face-mode'.
 
 (fn &optional ARG)" t nil)
-(register-definition-prefixes "face-remap" '("buffer-face-mode-" "face-" "internal-lisp-face-attributes" "text-scale-"))
+(register-definition-prefixes "face-remap" '("buffer-face-mode-" "face-" "global-text-scale-adjust-" "internal-lisp-face-attributes" "text-scale-"))
 
 
 ;;; Generated autoloads from facemenu.el
@@ -11453,6 +11517,12 @@ double prefix to wrap forward, triple to wrap backwards.
 Actual search is done by the function `ffap-next-guess'.
 
 (fn &optional BACK WRAP)" t nil)
+(autoload 'ffap-machine-at-point "ffap" "\
+Return machine name at point if it exists, or nil." nil nil)
+(autoload 'ffap-url-at-point "ffap" "\
+Return URL from around point if it exists, or nil.
+
+Sets the variable `ffap-string-at-point-region' to the bounds of URL, if any." nil nil)
 (autoload 'find-file-at-point "ffap" "\
 Find FILENAME, guessing a default from text around point.
 If `ffap-url-regexp' is not nil, the FILENAME may also be an URL.
@@ -11761,6 +11831,11 @@ use in place of \"-ls\" as the final argument.
 
 Collect output in the \"*Find*\" buffer.  To kill the job before
 it finishes, type \\[kill-find].
+
+For more information on how to write valid find expressions for
+ARGS, see Info node `(find) Finding Files'.  If you are not
+using GNU findutils (on macOS and *BSD systems), see instead the
+man page for \"find\".
 
 (fn DIR ARGS)" t nil)
 (autoload 'find-dired-with-command "find-dired" "\
@@ -12208,6 +12283,8 @@ evaluate `flymake-mode'.
 
 The mode's hook is called both when the mode is enabled and when
 it is disabled.
+
+\\{flymake-mode-map}
 
 (fn &optional ARG)" t nil)
 (autoload 'flymake-mode-on "flymake" "\
@@ -13791,7 +13868,7 @@ Return intersection of LIST1 and LIST2.
 LIST1 and LIST2 have to be sorted over <.
 
 (fn LIST1 LIST2)" nil nil)
-(defalias 'gnus-set-sorted-intersection 'gnus-sorted-nintersection)
+(defalias 'gnus-set-sorted-intersection #'gnus-sorted-nintersection)
 (autoload 'gnus-sorted-nintersection "gnus-range" "\
 Return intersection of LIST1 and LIST2 by modifying cdr pointers of LIST1.
 LIST1 and LIST2 have to be sorted over <.
@@ -14235,7 +14312,7 @@ to specify a command to run.
 If CONFIRM is non-nil, the user will be given an opportunity to edit the
 command before it's run.
 
-Interactively, the user can use the `M-c' command while entering
+Interactively, the user can use the \\`M-c' command while entering
 the regexp to indicate whether the grep should be case sensitive
 or not.
 
@@ -15783,7 +15860,8 @@ inlined into the compiled format versions.  This means that if you
 change its definition, you should explicitly call
 `ibuffer-recompile-formats'.
 
-(fn SYMBOL (&key NAME INLINE PROPS SUMMARIZER) &rest BODY)" nil 'macro)
+(fn SYMBOL (&key NAME INLINE PROPS SUMMARIZER) &rest BODY)" nil t)
+(function-put 'define-ibuffer-column 'lisp-indent-function 'defun)
 (autoload 'define-ibuffer-sorter "ibuf-macs" "\
 Define a method of sorting named NAME.
 DOCUMENTATION is the documentation of the function, which will be called
@@ -15794,7 +15872,9 @@ For sorting, the forms in BODY will be evaluated with `a' bound to one
 buffer object, and `b' bound to another.  BODY should return a non-nil
 value if and only if `a' is \"less than\" `b'.
 
-(fn NAME DOCUMENTATION (&key DESCRIPTION) &rest BODY)" nil 'macro)
+(fn NAME DOCUMENTATION (&key DESCRIPTION) &rest BODY)" nil t)
+(function-put 'define-ibuffer-sorter 'lisp-indent-function 1)
+(function-put 'define-ibuffer-sorter 'doc-string-elt 2)
 (autoload 'define-ibuffer-op "ibuf-macs" "\
 Generate a function which operates on a buffer.
 OP becomes the name of the function; if it doesn't begin with
@@ -15833,7 +15913,9 @@ BODY define the operation; they are forms to evaluate per each
 marked buffer.  BODY is evaluated with `buf' bound to the
 buffer object.
 
-(fn OP ARGS DOCUMENTATION (&key INTERACTIVE MARK MODIFIER-P DANGEROUS OPSTRING ACTIVE-OPSTRING BEFORE AFTER COMPLEX) &rest BODY)" nil 'macro)
+(fn OP ARGS DOCUMENTATION (&key INTERACTIVE MARK MODIFIER-P DANGEROUS OPSTRING ACTIVE-OPSTRING BEFORE AFTER COMPLEX) &rest BODY)" nil t)
+(function-put 'define-ibuffer-op 'lisp-indent-function 2)
+(function-put 'define-ibuffer-op 'doc-string-elt 3)
 (autoload 'define-ibuffer-filter "ibuf-macs" "\
 Define a filter named NAME.
 DOCUMENTATION is the documentation of the function.
@@ -15848,7 +15930,9 @@ not a particular buffer should be displayed or not.  The forms in BODY
 will be evaluated with BUF bound to the buffer object, and QUALIFIER
 bound to the current value of the filter.
 
-(fn NAME DOCUMENTATION (&key READER DESCRIPTION) &rest BODY)" nil 'macro)
+(fn NAME DOCUMENTATION (&key READER DESCRIPTION) &rest BODY)" nil t)
+(function-put 'define-ibuffer-filter 'lisp-indent-function 2)
+(function-put 'define-ibuffer-filter 'doc-string-elt 2)
 (register-definition-prefixes "ibuf-macs" '("ibuffer-"))
 
 
@@ -16548,7 +16632,6 @@ See `inferior-emacs-lisp-mode' for details.
 
 ;;; Generated autoloads from iimage.el
 
-(define-obsolete-function-alias 'turn-on-iimage-mode 'iimage-mode "24.1")
 (autoload 'iimage-mode "iimage" "\
 Toggle Iimage mode on or off.
 
@@ -16770,6 +16853,15 @@ Return non-nil if there is an image at point." nil nil)
 
 ;;; Generated autoloads from image/image-converter.el
 
+(autoload 'image-converter-add-handler "image-converter" "\
+Make Emacs use CONVERTER to parse image files that end with SUFFIX.
+CONVERTER is a function with two parameters, where the first is
+the file name or a string with the image data, and the second is
+non-nil if the first parameter is image data.  The converter
+should output the image in the current buffer, converted to
+`image-convert-to-format'.
+
+(fn SUFFIX CONVERTER)" nil nil)
 (register-definition-prefixes "image-converter" '("image-convert"))
 
 
@@ -18676,6 +18768,41 @@ Major mode for browsing CVS log output.
 (register-definition-prefixes "log-view" '("log-view-"))
 
 
+;;; Generated autoloads from longlines.el
+
+(autoload 'longlines-mode "longlines" "\
+Toggle Long Lines mode in this buffer.
+
+When Long Lines mode is enabled, long lines are wrapped if they
+extend beyond `fill-column'.  The soft newlines used for line
+wrapping will not show up when the text is yanked or saved to
+disk.
+
+If the variable `longlines-auto-wrap' is non-nil, lines are
+automatically wrapped whenever the buffer is changed.  You can
+always call `fill-paragraph' to fill individual paragraphs.
+
+If the variable `longlines-show-hard-newlines' is non-nil, hard
+newlines are indicated with a symbol.
+
+This is a minor mode.  If called interactively, toggle the
+`Longlines mode' mode.  If the prefix argument is positive,
+enable the mode, and if it is zero or negative, disable the mode.
+
+If called from Lisp, toggle the mode if ARG is `toggle'.  Enable
+the mode if ARG is nil, omitted, or is a positive number.
+Disable the mode if ARG is a negative number.
+
+To check whether the minor mode is enabled in the current buffer,
+evaluate `longlines-mode'.
+
+The mode's hook is called both when the mode is enabled and when
+it is disabled.
+
+(fn &optional ARG)" t nil)
+(register-definition-prefixes "longlines" '("longlines-"))
+
+
 ;;; Generated autoloads from lpr.el
 
 (defvar lpr-windows-system (memq system-type '(ms-dos windows-nt)) "\
@@ -19096,13 +19223,6 @@ if it is quoted with double-quotes.
 (autoload 'mail-completion-at-point-function "mailalias" "\
 Compute completion data for mail aliases.
 For use on `completion-at-point-functions'." nil nil)
-(autoload 'mail-complete "mailalias" "\
-Perform completion on header field or word preceding point.
-Completable headers are according to `mail-complete-alist'.  If none matches
-current header, calls `mail-complete-function' and passes prefix ARG if any.
-
-(fn ARG)" t nil)
-(make-obsolete 'mail-complete 'mail-completion-at-point-function "24.1")
 (register-definition-prefixes "mailalias" '("build-mail-aliases" "mail-"))
 
 
@@ -20011,7 +20131,7 @@ ripples outward, changing the flow of the eddy currents in the
 upper atmosphere.  These cause momentary pockets of higher-pressure
 air to form, which act as lenses that deflect incoming cosmic rays,
 focusing them to strike the drive platter and flip the desired bit.
-You can type `M-x butterfly C-M-c' to run it.  This is a permuted
+You can type \\`M-x butterfly C-M-c' to run it.  This is a permuted
 variation of `C-x M-c M-butterfly' from url `https://xkcd.com/378/'." t nil)
 (autoload 'list-dynamic-libraries "misc" "\
 Display a list of all dynamic libraries known to Emacs.
@@ -20839,6 +20959,7 @@ Interactively, prompt for NAME-SERVER if invoked with prefix argument.
 This command uses `dig-program' for looking up the DNS information.
 
 (fn HOST &optional NAME-SERVER)" t nil)
+(make-obsolete 'run-dig 'dig "29.1")
 (autoload 'ftp "net-utils" "\
 Run `ftp-program' to connect to HOST.
 
@@ -20866,7 +20987,7 @@ This command uses `network-connection-service-alist', which see.
 Open a network connection to HOST on PORT.
 
 (fn HOST PORT)" t nil)
-(register-definition-prefixes "net-utils" '("arp-program" "dig-program" "dns-lookup-program" "finger-X.500-host-regexps" "ftp-" "ifconfig-program" "ipconfig" "iwconfig-program" "net" "nslookup-" "ping-program" "route-program" "run-network-program" "smbclient" "traceroute-program" "whois-"))
+(register-definition-prefixes "net-utils" '("arp-program" "dns-lookup-program" "finger-X.500-host-regexps" "ftp-" "ifconfig-program" "ipconfig" "iwconfig-program" "net" "nslookup-" "ping-program" "route-program" "run-network-program" "smbclient" "traceroute-program" "whois-"))
 
 
 ;;; Generated autoloads from net/netrc.el
@@ -23119,12 +23240,11 @@ Completion for the `chown' command." nil nil)
 Completion for the `chgrp' command." nil nil)
 (autoload 'pcomplete/ssh "pcmpl-unix" "\
 Completion rules for the `ssh' command." nil nil)
+(defalias 'pcomplete/rsh #'pcomplete/ssh)
 (autoload 'pcomplete/scp "pcmpl-unix" "\
 Completion rules for the `scp' command.
 Includes files as well as host names followed by a colon." nil nil)
 (autoload 'pcomplete/telnet "pcmpl-unix" nil nil nil)
-(autoload 'pcomplete/rsh "pcmpl-unix" "\
-Complete `rsh', which, after the user and hostname, is like xargs." nil nil)
 (register-definition-prefixes "pcmpl-unix" '("pcmpl-" "pcomplete/"))
 
 
@@ -23494,6 +23614,7 @@ it is disabled.
 
 ;;; Generated autoloads from plstore.el
 
+(put 'plstore-encrypt-to 'safe-local-variable (lambda (val) (or (stringp val) (and (listp val) (catch 'safe (mapc (lambda (elt) (unless (stringp elt) (throw 'safe nil))) val) t)))))
 (autoload 'plstore-open "plstore" "\
 Create a plstore instance associated with FILE.
 
@@ -25281,6 +25402,8 @@ evaluate `rectangle-mark-mode'.
 The mode's hook is called both when the mode is enabled and when
 it is disabled.
 
+\\{rectangle-mark-mode-map}
+
 (fn &optional ARG)" t nil)
 (register-definition-prefixes "rect" '("apply-on-rectangle" "clear-rectangle-line" "delete-" "extract-rectangle-" "killed-rectangle" "ope" "rectangle-" "spaces-string" "string-rectangle-"))
 
@@ -25773,49 +25896,6 @@ Make a ring that can contain SIZE elements.
 (register-definition-prefixes "ring" '("ring-"))
 
 
-;;; Generated autoloads from net/rlogin.el
-
-(autoload 'rlogin "rlogin" "\
-Open a network login connection via `rlogin' with args INPUT-ARGS.
-INPUT-ARGS should start with a host name; it may also contain
-other arguments for `rlogin'.
-
-Input is sent line-at-a-time to the remote connection.
-
-Communication with the remote host is recorded in a buffer `*rlogin-HOST*'
-(or `*rlogin-USER@HOST*' if the remote username differs).
-If a prefix argument is given and the buffer `*rlogin-HOST*' already exists,
-a new buffer with a different connection will be made.
-
-When called from a program, if the optional second argument BUFFER is
-a string or buffer, it specifies the buffer to use.
-
-The variable `rlogin-program' contains the name of the actual program to
-run.  It can be a relative or absolute path.
-
-The variable `rlogin-explicit-args' is a list of arguments to give to
-the rlogin when starting.  They are added after any arguments given in
-INPUT-ARGS.
-
-If the default value of `rlogin-directory-tracking-mode' is t, then the
-default directory in that buffer is set to a remote (FTP) file name to
-access your home directory on the remote machine.  Occasionally this causes
-an error, if you cannot access the home directory on that machine.  This
-error is harmless as long as you don't try to use that default directory.
-
-If `rlogin-directory-tracking-mode' is neither t nor nil, then the default
-directory is initially set up to your (local) home directory.
-This is useful if the remote machine and your local machine
-share the same files via NFS.  This is the default.
-
-If you wish to change directory tracking styles during a session, use the
-function `rlogin-directory-tracking-mode' rather than simply setting the
-variable.
-
-(fn INPUT-ARGS &optional BUFFER)" t nil)
-(register-definition-prefixes "rlogin" '("rlogin-"))
-
-
 ;;; Generated autoloads from mail/rmail.el
 
 (defvar rmail-file-name (purecopy "~/RMAIL") "\
@@ -25844,14 +25924,6 @@ Then it should be a regexp matching your mail addresses.
 
 Setting this variable has an effect only before reading a mail.")
 (custom-autoload 'rmail-user-mail-address-regexp "rmail" t)
-(define-obsolete-variable-alias 'rmail-dont-reply-to-names 'mail-dont-reply-to-names "\
-24.1")
-(defvar rmail-default-dont-reply-to-names nil "\
-Regexp specifying part of the default value of `mail-dont-reply-to-names'.
-This is used when the user does not set `mail-dont-reply-to-names'
-explicitly.")
-(make-obsolete-variable 'rmail-default-dont-reply-to-names 'mail-dont-reply-to-names "\
-24.1")
 (defvar rmail-ignored-headers (purecopy (concat "^via:\\|^mail-from:\\|^origin:\\|^references:\\|^sender:" "\\|^status:\\|^received:\\|^x400-originator:\\|^x400-recipients:" "\\|^x400-received:\\|^x400-mts-identifier:\\|^x400-content-type:" "\\|^\\(resent-\\|\\)message-id:\\|^summary-line:\\|^resent-date:" "\\|^nntp-posting-host:\\|^path:\\|^x-char.*:\\|^x-face:\\|^face:" "\\|^x-mailer:\\|^delivered-to:\\|^lines:" "\\|^content-transfer-encoding:\\|^x-coding-system:" "\\|^return-path:\\|^errors-to:\\|^return-receipt-to:" "\\|^precedence:\\|^mime-version:" "\\|^list-owner:\\|^list-help:\\|^list-post:\\|^list-subscribe:" "\\|^list-id:\\|^list-unsubscribe:\\|^list-archive:" "\\|^content-length:\\|^nntp-posting-date:\\|^user-agent" "\\|^importance:\\|^envelope-to:\\|^delivery-date\\|^openpgp:" "\\|^mbox-line:\\|^cancel-lock:" "\\|^DomainKey-Signature:\\|^dkim-signature:" "\\|^ARC-.*:" "\\|^Received-SPF:" "\\|^Authentication-Results:" "\\|^resent-face:\\|^resent-x.*:\\|^resent-organization:\\|^resent-openpgp:" "\\|^x-.*:")) "\
 Regexp to match header fields that Rmail should normally hide.
 (See also `rmail-nonignored-headers', which overrides this regexp.)
@@ -29306,6 +29378,15 @@ single space character, and leading/trailing whitespace is
 removed.
 
 (fn STRING)" nil nil)
+(autoload 'named-let "subr-x" "\
+Looping construct taken from Scheme.
+Like `let', bind variables in BINDINGS and then evaluate BODY,
+but with the twist that BODY can evaluate itself recursively by
+calling NAME, where the arguments passed to NAME are used
+as the new values of the bound variables in the recursive invocation.
+
+(fn NAME BINDINGS &rest BODY)" nil t)
+(function-put 'named-let 'lisp-indent-function 2)
 (autoload 'string-pixel-width "subr-x" "\
 Return the width of STRING in pixels.
 
@@ -29328,7 +29409,7 @@ this defaults to the current buffer.
 Query the user for a process and return the process object.
 
 (fn PROMPT)" nil nil)
-(register-definition-prefixes "subr-x" '("hash-table-" "internal--thread-argument" "named-let" "replace-region-contents" "string-" "thread-" "with-buffer-unmodified-if-unchanged"))
+(register-definition-prefixes "subr-x" '("hash-table-" "internal--thread-argument" "replace-region-contents" "string-" "thread-" "with-buffer-unmodified-if-unchanged"))
 
 
 ;;; Generated autoloads from progmodes/subword.el
@@ -30275,6 +30356,7 @@ Communication with HOST is recorded in a buffer `*rsh-HOST*'.
 Normally input is edited in Emacs and sent a line at a time.
 
 (fn HOST)" t nil)
+(make-obsolete 'rsh 'nil "29.1")
 (register-definition-prefixes "telnet" '("send-process-next-char" "telnet-"))
 
 
@@ -30309,7 +30391,7 @@ commands to use in that buffer.
 (autoload 'ansi-term "term" "\
 Start a terminal-emulator in a new buffer.
 This is almost the same as `term' apart from always creating a new buffer,
-and `C-x' being marked as a `term-escape-char'.
+and \\`C-x' being marked as a `term-escape-char'.
 
 (fn PROGRAM &optional NEW-BUFFER-NAME)" t nil)
 (autoload 'serial-term "term" "\
@@ -32082,6 +32164,14 @@ which specify the range to operate on.
 
 ;;; Generated autoloads from mail/undigest.el
 
+(autoload 'undigestify-rmail-message "undigest" "\
+Break up a digest message into its constituent messages.
+Leaves original message, deleted, before the undigestified messages." t nil)
+(autoload 'unforward-rmail-message "undigest" "\
+Extract a forwarded message from the containing message.
+This puts the forwarded message into a separate rmail message following
+the containing message.  This command is only useful when messages are
+forwarded with `rmail-enable-mime-composing' set to nil." t nil)
 (register-definition-prefixes "undigest" '("rmail-"))
 
 
@@ -34405,18 +34495,6 @@ The mode's hook is called both when the mode is enabled and when
 it is disabled.
 
 (fn &optional ARG)" t nil)
-(autoload 'view-return-to-alist-update "view" "\
-Update `view-return-to-alist' of buffer BUFFER.
-Remove from `view-return-to-alist' all entries referencing dead
-windows.  Optional argument ITEM non-nil means add ITEM to
-`view-return-to-alist' after purging.  For a description of items
-that can be added see the RETURN-TO-ALIST argument of the
-function `view-mode-exit'.  If `view-return-to-alist' contains an
-entry for the selected window, purge that entry from
-`view-return-to-alist' before adding ITEM.
-
-(fn BUFFER &optional ITEM)" nil nil)
-(make-obsolete 'view-return-to-alist-update '"this function has no effect." "24.1")
 (autoload 'view-mode-enter "view" "\
 Enter View mode and set up exit from view mode depending on optional arguments.
 Optional argument QUIT-RESTORE if non-nil must specify a valid
@@ -34624,7 +34702,6 @@ Please submit bug reports and other feedback to the author, Neil W. Van Dyke
 
  (put 'which-func-format 'risky-local-variable t)
  (put 'which-func-current 'risky-local-variable t)
-(define-obsolete-function-alias 'which-func-mode 'which-function-mode "24.1")
 (defvar which-function-mode nil "\
 Non-nil if Which-Function mode is enabled.
 See the `which-function-mode' command
@@ -35114,6 +35191,11 @@ The optional ARGS are additional keyword arguments.
 Delete WIDGET.
 
 (fn WIDGET)" nil nil)
+(autoload 'widget-convert "wid-edit" "\
+Convert TYPE to a widget without inserting it in the buffer.
+The optional ARGS are additional keyword arguments.
+
+(fn TYPE &rest ARGS)" nil nil)
 (autoload 'widget-insert "wid-edit" "\
 Call `insert' with ARGS even if surrounding text is read only.
 
@@ -35321,8 +35403,8 @@ Winner mode is a global minor mode that records the changes in
 the window configuration (i.e. how the frames are partitioned
 into windows) so that the changes can be \"undone\" using the
 command `winner-undo'.  By default this one is bound to the key
-sequence `C-c <left>'.  If you change your mind (while undoing),
-you can press `C-c <right>' (calling `winner-redo').
+sequence \\`C-c <left>'.  If you change your mind (while undoing),
+you can press \\`C-c <right>' (calling `winner-redo').
 
 This is a global minor mode.  If called interactively, toggle the
 `Winner mode' mode.  If the prefix argument is positive, enable

@@ -188,7 +188,7 @@ VALUE as a unibyte string, or nil if VALUE was not a string."
                           (error "Out of range octet: %d" octet))
                         (setq value
                               (logior value
-                                      (lsh octet
+                                      (ash octet
                                            (- (* (1- (length string)) 8)
                                               offset))))
                         (setq offset (+ offset 8))))
@@ -206,6 +206,7 @@ VALUE as a unibyte string, or nil if VALUE was not a string."
 (declare-function haiku-selection-owner-p "haikuselect.c")
 (declare-function haiku-put-resource "haikufns.c")
 (declare-function haiku-drag-message "haikuselect.c")
+(declare-function haiku-selection-timestamp "haikuselect.c")
 
 (defun haiku--handle-x-command-line-resources (command-line-resources)
   "Handle command line X resources specified with the option `-xrm'.
@@ -249,7 +250,7 @@ If TYPE is nil, return \"text/plain\"."
   "Find the types of data available from CLIPBOARD.
 CLIPBOARD should be the symbol `PRIMARY', `SECONDARY' or
 `CLIPBOARD'.  Return the available types as a list of strings."
-  (mapcar #'car (haiku-selection-data clipboard nil)))
+  (delq 'type (mapcar #'car (haiku-selection-data clipboard nil))))
 
 (defun haiku-select-encode-xstring (_selection value)
   "Convert VALUE to a system message association.
@@ -288,12 +289,19 @@ or a pair of markers) and turns it into a file system reference."
 
 (cl-defmethod gui-backend-get-selection (type data-type
                                               &context (window-system haiku))
-  (if (eq data-type 'TARGETS)
-      (apply #'vector (mapcar #'intern
-                              (haiku-selection-targets type)))
-    (if (eq type 'XdndSelection)
-        haiku-dnd-selection-value
-      (haiku-selection-data type (haiku--selection-type-to-mime data-type)))))
+  (cond
+   ((eq data-type 'TARGETS)
+    (apply #'vector (mapcar #'intern
+                            (haiku-selection-targets type))))
+   ;; The timestamp here is really the number of times a program has
+   ;; put data into the selection.  But it always increases, so it
+   ;; makes sense if one imagines that time is frozen until
+   ;; immediately before that happens.
+   ((eq data-type 'TIMESTAMP)
+    (haiku-selection-timestamp type))
+   ((eq type 'XdndSelection) haiku-dnd-selection-value)
+   (t (haiku-selection-data type
+                            (haiku--selection-type-to-mime data-type)))))
 
 (cl-defmethod gui-backend-set-selection (type value
                                               &context (window-system haiku))
@@ -401,8 +409,7 @@ take effect on menu items until the menu bar is updated again."
     (when (car mouse-position)
       (dnd-handle-movement (posn-at-x-y (cadr mouse-position)
                                         (cddr mouse-position)
-                                        (car mouse-position)))
-      (redisplay))))
+                                        (car mouse-position))))))
 
 (setq haiku-drag-track-function #'haiku-dnd-drag-handler)
 
@@ -452,7 +459,69 @@ take effect on menu items until the menu bar is updated again."
                           message allow-current-frame
                           follow-tooltip))))
 
-(add-variable-watcher 'use-system-tooltips #'haiku-use-system-tooltips-watcher)
+(add-variable-watcher 'use-system-tooltips
+                      #'haiku-use-system-tooltips-watcher)
+
+(defvar haiku-dnd-wheel-count nil
+  "Cons used to determine how many times the wheel has been turned.
+The car is just that; cdr is the timestamp of the last wheel
+movement.")
+
+(defvar haiku-last-wheel-direction nil
+  "Cons of two elements describing the direction the wheel last turned.
+The car is whether or not the movement was horizontal.
+The cdr is whether or not the movement was upwards or leftwards.")
+
+(defun haiku-note-wheel-click (timestamp)
+  "Note that the mouse wheel was moved at TIMESTAMP during drag-and-drop.
+Return the number of clicks that were made in quick succession."
+  (if (not (integerp double-click-time))
+      1
+    (let ((cell haiku-dnd-wheel-count))
+      (unless cell
+        (setq cell (cons 0 timestamp))
+        (setq haiku-dnd-wheel-count cell))
+      (when (< (cdr cell) (- timestamp double-click-time))
+        (setcar cell 0))
+      (setcar cell (1+ (car cell)))
+      (setcdr cell timestamp)
+      (car cell))))
+
+(defvar haiku-drag-wheel-function)
+
+(defun haiku-handle-drag-wheel (frame x y horizontal up)
+  "Handle wheel movement during drag-and-drop.
+FRAME is the frame on top of which the wheel moved.
+X and Y are the frame-relative coordinates of the wheel movement.
+HORIZONTAL is whether or not the wheel movement was horizontal.
+UP is whether or not the wheel moved up (or left)."
+  (when (not (equal haiku-last-wheel-direction
+                    (cons horizontal up)))
+    (setq haiku-last-wheel-direction
+          (cons horizontal up))
+    (when (consp haiku-dnd-wheel-count)
+      (setcar haiku-dnd-wheel-count 0)))
+  (let ((function (cond
+                   ((and (not horizontal) (not up))
+                    mwheel-scroll-up-function)
+                   ((not horizontal)
+                    mwheel-scroll-down-function)
+                   ((not up) (if mouse-wheel-flip-direction
+                                 mwheel-scroll-right-function
+                               mwheel-scroll-left-function))
+                   (t (if mouse-wheel-flip-direction
+                          mwheel-scroll-left-function
+                        mwheel-scroll-right-function))))
+        (timestamp (time-convert nil 1000)))
+    (when function
+      (let ((posn (posn-at-x-y x y frame)))
+        (when (windowp (posn-window posn))
+          (with-selected-window (posn-window posn)
+            (funcall function
+                     (or (and (not mouse-wheel-progressive-speed) 1)
+                         (haiku-note-wheel-click (car timestamp))))))))))
+
+(setq haiku-drag-wheel-function #'haiku-handle-drag-wheel)
 
 
 ;;;; Session management.

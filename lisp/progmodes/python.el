@@ -248,7 +248,6 @@
 (eval-when-compile (require 'subr-x))   ;For `string-empty-p'.
 
 ;; Avoid compiler warnings
-(defvar view-return-to-alist)
 (defvar compilation-error-regexp-alist)
 (defvar outline-heading-end-regexp)
 
@@ -1455,21 +1454,24 @@ With positive ARG search backwards, else search forwards."
          (line-beg-pos (line-beginning-position))
          (line-content-start (+ line-beg-pos (current-indentation)))
          (pos (point-marker))
-         (min-indentation (+ (current-indentation)
-                             (if (python-info-looking-at-beginning-of-defun)
-                                 python-indent-offset 0)))
+         (min-indentation (if (python-info-current-line-empty-p)
+                              most-positive-fixnum
+                            (current-indentation)))
          (body-indentation
           (and (> arg 0)
-               (save-excursion
-                 (while (and
-                         (or (not (python-info-looking-at-beginning-of-defun))
-                             (>= (current-indentation) min-indentation))
-                         (setq min-indentation
-                               (min min-indentation (current-indentation)))
-                         (python-nav-backward-block)))
-                 (or (and (python-info-looking-at-beginning-of-defun)
-                          (+ (current-indentation) python-indent-offset))
-                     0))))
+               (or (and (python-info-looking-at-beginning-of-defun)
+                        (+ (current-indentation) python-indent-offset))
+                   (save-excursion
+                     (while
+                         (and
+                          (python-nav-backward-block)
+                          (or (not (python-info-looking-at-beginning-of-defun))
+                              (>= (current-indentation) min-indentation))
+                          (setq min-indentation
+                                (min min-indentation (current-indentation)))))
+                     (or (and (python-info-looking-at-beginning-of-defun)
+                              (+ (current-indentation) python-indent-offset))
+                         0)))))
          (found
           (progn
             (when (and (python-info-looking-at-beginning-of-defun nil t)
