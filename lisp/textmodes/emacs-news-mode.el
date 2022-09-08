@@ -25,6 +25,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'outline)
+(require 'subr-x)    ; `emacs-etc--hide-local-variables'
 
 (defgroup emacs-news-mode nil
   "Major mode for editing and viewing the Emacs NEWS file."
@@ -56,10 +57,15 @@
   "C-c C-g" #'emacs-news-goto-section
   "C-c C-j" #'emacs-news-find-heading
   "C-c C-e" #'emacs-news-count-untagged-entries
+  "C-x C-q" #'emacs-news-view-mode
   "<remap> <open-line>" #'emacs-news-open-line)
 
-(defvar-keymap emacs-news-view-mode-map
-  :parent emacs-news-common-map)
+(defvar emacs-news-view-mode-map
+  ;; This is defined this way instead of inheriting because we're
+  ;; deriving the mode from `special-mode' and want the keys from there.
+  (let ((map (copy-keymap emacs-news-common-map)))
+    (keymap-set map "C-x C-q" #'emacs-news-mode)
+    map))
 
 (defvar emacs-news-mode-font-lock-keywords
   `(("^---$" 0 'emacs-news-does-not-need-documentation)
@@ -67,17 +73,23 @@
 
 (defun emacs-news--mode-common ()
   (setq-local font-lock-defaults '(emacs-news-mode-font-lock-keywords t))
-  (setq-local outline-regexp "\\*+ "
+  ;; This `outline-regexp' matches leading spaces inserted
+  ;; by the current implementation of `outline-minor-mode-use-buttons'.
+  (setq-local outline-regexp "\\(?: +\\)?\\(\\*+\\) "
+              outline-level (lambda () (length (match-string 1)))
               outline-minor-mode-cycle t
-              ;; We subtract one from the level, because we have a
-              ;; space after the asterisks.
-              outline-level (lambda () (1- (length (match-string 0))))
               outline-minor-mode-highlight 'append)
-  (outline-minor-mode))
+  (outline-minor-mode)
+  (emacs-etc--hide-local-variables))
 
 ;;;###autoload
 (define-derived-mode emacs-news-mode text-mode "NEWS"
   "Major mode for editing the Emacs NEWS file."
+  ;; Disable buttons.
+  (button-mode nil)
+  ;; And make the buffer writable.  This is used when toggling
+  ;; emacs-news-mode.
+  (setq buffer-read-only nil)
   (setq-local fill-paragraph-function #'emacs-news--fill-paragraph)
   (emacs-news--mode-common))
 

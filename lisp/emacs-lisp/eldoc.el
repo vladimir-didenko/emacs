@@ -381,7 +381,6 @@ Also store it in `eldoc-last-message' and return that value."
 (defun eldoc-display-message-no-interference-p ()
   "Return nil if displaying a message would cause interference."
   (not (or executing-kbd-macro
-           (bound-and-true-p edebug-active)
            ;; The following configuration shows "Matches..." in the
            ;; echo area when point is after a closing bracket, which
            ;; conflicts with eldoc.
@@ -491,9 +490,9 @@ If INTERACTIVE, display it.  Else, return said buffer."
       (setq-local eldoc--doc-buffer-docs docs)
       (let ((inhibit-read-only t)
             (things-reported-on))
-        (erase-buffer) (setq buffer-read-only t)
+        (special-mode)
+        (erase-buffer)
         (setq-local nobreak-char-display nil)
-        (local-set-key "q" 'quit-window)
         (cl-loop for (docs . rest) on docs
                  for (this-doc . plist) = docs
                  for thing = (plist-get plist :thing)

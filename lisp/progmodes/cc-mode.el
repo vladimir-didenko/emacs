@@ -1518,7 +1518,12 @@ Note that the style variables are always made local to the buffer."
 
       ;; Move to end of logical line (as it will be after the change, or as it
       ;; was before unescaping a NL.)
-      (re-search-forward "\\(?:\\\\\\(?:.\\|\n\\)\\|[^\\\n\r]\\)*" nil t)
+      (while
+	  (progn (end-of-line)
+		 (and
+		  (eq (char-before) ?\\)
+		  (not (eobp))))
+	(forward-line))
       ;; We're at an EOLL or point-max.
       (if (equal (c-get-char-property (point) 'syntax-table) '(15))
 	  (if (memq (char-after) '(?\n ?\r))
@@ -1636,8 +1641,12 @@ Note that the style variables are always made local to the buffer."
 		  (min (1+ end)	; 1+, if we're inside an escaped NL.
 		       (point-max))
 		end))
-	     (re-search-forward "\\(?:\\\\\\(?:.\\|\n\\)\\|[^\\\n\r]\\)*"
-				nil t)
+	     (while
+		 (progn (end-of-line)
+			(and
+			 (eq (char-before) ?\\)
+			 (not (eobp))))
+	       (forward-line))
 	     (point))
 	   c-new-END))
 	 s)
@@ -2431,49 +2440,59 @@ with // and /*, not more generic line and block comments."
       (and (/= new-pos pos) new-pos))))
 
 (defun c-fl-decl-end (pos)
-  ;; If POS is inside a declarator, return the end of the token that follows
-  ;; the declarator, otherwise return nil.  POS being in a literal does not
-  ;; count as being in a declarator (on pragmatic grounds).  POINT is not
-  ;; preserved.
+  ;; If POS is inside a declarator, return the position of the end of the
+  ;; paren pair that terminates it, or of the end of the token that follows
+  ;; the declarator, otherwise return nil.  If there is no such token, the end
+  ;; of the last token in the buffer is used.  POS being in a literal is now
+  ;; (2022-07) handled correctly.  POINT is not preserved.
   (goto-char pos)
   (let ((lit-start (c-literal-start))
 	(lim (c-determine-limit 1000))
 	enclosing-attribute pos1)
-    (unless lit-start
-      (c-backward-syntactic-ws
-       lim)
-      (when (setq enclosing-attribute (c-enclosing-c++-attribute))
-	(goto-char (car enclosing-attribute))) ; Only happens in C++ Mode.
-      (when (setq pos1 (c-on-identifier))
-	(goto-char pos1)
-	(let ((lim (save-excursion
-		     (and (c-beginning-of-macro)
-			  (progn (c-end-of-macro) (point))))))
-	  (and (c-forward-declarator lim)
-	       (if (eq (char-after) ?\()
-		   (and
-		    (c-go-list-forward nil lim)
-		    (progn (c-forward-syntactic-ws lim)
-			   (not (eobp)))
-		    (progn
-		      (if (looking-at c-symbol-char-key)
-			  ;; Deal with baz (foo((bar)) type var), where
-			  ;; foo((bar)) is not semantically valid.  The result
-			  ;; must be after var).
-			  (and
-			   (goto-char pos)
-			   (setq pos1 (c-on-identifier))
-			   (goto-char pos1)
-			   (progn
-			     (c-backward-syntactic-ws lim)
-			     (eq (char-before) ?\())
-			   (c-fl-decl-end (1- (point))))
-			(c-backward-syntactic-ws lim)
-			(point))))
-		 (and (progn (c-forward-syntactic-ws lim)
-			     (not (eobp)))
+    (if lit-start
+	(goto-char lit-start))
+    (c-backward-syntactic-ws lim)
+    (when (setq enclosing-attribute (c-enclosing-c++-attribute))
+      (goto-char (car enclosing-attribute)) ; Only happens in C++ Mode.
+      (c-backward-syntactic-ws lim))
+    (while (and (> (point) lim)
+		(memq (char-before) '(?\[ ?\()))
+      (backward-char)
+      (c-backward-syntactic-ws lim))
+    (when (setq pos1 (c-on-identifier))
+      (goto-char pos1)
+      (let ((lim (save-excursion
+		   (and (c-beginning-of-macro)
+			(progn (c-end-of-macro) (point))))))
+	(and (c-forward-declarator lim)
+	     (if (and (eq (char-after) ?\()
+		      (c-go-list-forward nil lim))
+		 (and
+		  (progn (c-forward-syntactic-ws lim)
+			 (not (eobp)))
+		  (progn
+		    (if (looking-at c-symbol-char-key)
+			;; Deal with baz (foo((bar)) type var), where
+			;; foo((bar)) is not semantically valid.  The result
+			;; must be after var).
+			(and
+			 (goto-char pos)
+			 (setq pos1 (c-on-identifier))
+			 (goto-char pos1)
+			 (progn
+			   (c-backward-syntactic-ws lim)
+			   (eq (char-before) ?\())
+			 (c-fl-decl-end (1- (point))))
 		      (c-backward-syntactic-ws lim)
-		      (point)))))))))
+		      (point))))
+	       (if (progn (c-forward-syntactic-ws lim)
+			  (not (eobp)))
+		   (c-forward-over-token)
+		 (let ((lit-start (c-literal-start)))
+		   (when lit-start
+		       (goto-char lit-start))
+		   (c-backward-syntactic-ws)))
+	       (and (>= (point) pos) (point))))))))
 
 (defun c-change-expand-fl-region (_beg _end _old-len)
   ;; Expand the region (c-new-BEG c-new-END) to an after-change font-lock

@@ -55,18 +55,24 @@
     (should (equal (help-split-fundoc nil t 'usage)  nil))
     (should (equal (help-split-fundoc nil t 'doc)    nil))))
 
+(ert-deftest help--key-description-fontified ()
+  (should (equal (help--key-description-fontified
+                  (where-is-internal #'next-line nil t))
+                 "C-n"))
+  (should-not (help--key-description-fontified nil)))
+
 
 ;;; substitute-command-keys
 
 (defmacro with-substitute-command-keys-test (&rest body)
   `(cl-flet* ((test
-               (lambda (orig result)
-                 (should (equal (substitute-command-keys orig)
-                                result))))
+                (lambda (orig result)
+                  (should (equal (substitute-command-keys orig)
+                                 result))))
               (test-re
-               (lambda (orig regexp)
-                 (should (string-match (concat "\\`" regexp "\\'")
-                                       (substitute-command-keys orig))))))
+                (lambda (orig regexp)
+                  (should (string-match (concat "\\`" regexp "\\'")
+                                        (substitute-command-keys orig))))))
      ,@body))
 
 (ert-deftest help-tests-substitute-command-keys/no-change ()
@@ -93,7 +99,9 @@
   (with-substitute-command-keys-test
    (test "\\`C-m'" "C-m")
    (test "\\`C-m'\\`C-j'" "C-mC-j")
-   (test "foo\\`C-m'bar\\`C-j'baz" "fooC-mbarC-jbaz")))
+   (test "foo\\`C-m'bar\\`C-j'baz" "fooC-mbarC-jbaz")
+   (test "\\`M-x next-line'" "M-x next-line")
+   (test "\\`mouse-1'" "mouse-1")))
 
 (ert-deftest help-tests-substitute-command-keys/literal-key-sequence-ignore-invalid ()
   "Ignore any invalid literal key sequence."

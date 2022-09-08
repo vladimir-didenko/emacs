@@ -556,7 +556,9 @@ select_window (Lisp_Object window, Lisp_Object norecord,
 	 frame is active.  */
       Fselect_frame (frame, norecord);
       /* Fselect_frame called us back so we've done all the work already.  */
-      eassert (EQ (window, selected_window));
+      eassert (EQ (window, selected_window)
+	       || (EQ (window, f->minibuffer_window)
+		   && NILP (Fminibufferp (XWINDOW (window)->contents, Qt))));
       return window;
     }
   else
@@ -1275,7 +1277,10 @@ set_window_hscroll (struct window *w, EMACS_INT hscroll)
 
   /* Prevent redisplay shortcuts when changing the hscroll.  */
   if (w->hscroll != new_hscroll)
-    XBUFFER (w->contents)->prevent_redisplay_optimizations_p = true;
+    {
+      XBUFFER (w->contents)->prevent_redisplay_optimizations_p = true;
+      wset_redisplay (w);
+    }
 
   w->hscroll = new_hscroll;
   w->suspend_auto_hscroll = true;
@@ -1295,31 +1300,6 @@ window so that the location of point moves off-window.  */)
 {
   CHECK_FIXNUM (ncol);
   return set_window_hscroll (decode_live_window (window), XFIXNUM (ncol));
-}
-
-DEFUN ("window-redisplay-end-trigger", Fwindow_redisplay_end_trigger,
-       Swindow_redisplay_end_trigger, 0, 1, 0,
-       doc: /* Return WINDOW's redisplay end trigger value.
-WINDOW must be a live window and defaults to the selected one.
-See `set-window-redisplay-end-trigger' for more information.  */)
-  (Lisp_Object window)
-{
-  return decode_live_window (window)->redisplay_end_trigger;
-}
-
-DEFUN ("set-window-redisplay-end-trigger", Fset_window_redisplay_end_trigger,
-       Sset_window_redisplay_end_trigger, 2, 2, 0,
-       doc: /* Set WINDOW's redisplay end trigger value to VALUE.
-WINDOW must be a live window and defaults to the selected one.  VALUE
-should be a buffer position (typically a marker) or nil.  If it is a
-buffer position, then if redisplay in WINDOW reaches a position beyond
-VALUE, the functions in `redisplay-end-trigger-functions' are called
-with two arguments: WINDOW, and the end trigger value.  Afterwards the
-end-trigger value is reset to nil.  */)
-  (register Lisp_Object window, Lisp_Object value)
-{
-  wset_redisplay_end_trigger (decode_live_window (window), value);
-  return value;
 }
 
 /* Test if the character at column X, row Y is within window W.
@@ -6597,9 +6577,12 @@ and redisplay normally--don't erase and redraw the frame.  */)
      in case scroll_margin is buffer-local.  */
   this_scroll_margin = window_scroll_margin (w, MARGIN_IN_LINES);
 
-  /* Don't use redisplay code for initial frames, as the necessary
-     data structures might not be set up yet then.  */
-  if (!FRAME_INITIAL_P (XFRAME (w->frame)))
+  /* Don't use the display code for initial frames, as the necessary
+     data structures might not be set up yet then.  Also don't use it
+     for buffers with very long lines, as it tremdously slows down
+     redisplay, especially when lines are truncated.  */
+  if (!FRAME_INITIAL_P (XFRAME (w->frame))
+      && !current_buffer->long_line_optimizations_p)
     {
       specpdl_ref count = SPECPDL_INDEX ();
 
@@ -6684,7 +6667,7 @@ and redisplay normally--don't erase and redraw the frame.  */)
 	     considered to be part of the visible height of the line.
 	  */
 	  h += extra_line_spacing;
-	  while (-it.current_y > h)
+	  while (-it.current_y > h && it.what != IT_EOB)
 	    move_it_by_lines (&it, 1);
 
 	  charpos = IT_CHARPOS (it);
@@ -8380,7 +8363,8 @@ on their symbols to be controlled by this variable.  */);
   Vscroll_preserve_screen_position = Qnil;
 
   DEFVAR_LISP ("window-point-insertion-type", Vwindow_point_insertion_type,
-	       doc: /* Type of marker to use for `window-point'.  */);
+	       doc: /* Insertion type of marker to use for `window-point'.
+See `marker-insertion-type' for the meaning of the possible values.  */);
   Vwindow_point_insertion_type = Qnil;
   DEFSYM (Qwindow_point_insertion_type, "window-point-insertion-type");
 
@@ -8637,8 +8621,6 @@ displayed after a scrolling operation to be somewhat inaccurate.  */);
   defsubr (&Swindow_body_width);
   defsubr (&Swindow_hscroll);
   defsubr (&Sset_window_hscroll);
-  defsubr (&Swindow_redisplay_end_trigger);
-  defsubr (&Sset_window_redisplay_end_trigger);
   defsubr (&Swindow_mode_line_height);
   defsubr (&Swindow_header_line_height);
   defsubr (&Swindow_tab_line_height);

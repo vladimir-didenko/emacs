@@ -243,6 +243,8 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
   "Predicates for Strings"
   (string-equal
    :eval (string-equal "foo" "foo"))
+  (string-equal-ignore-case
+   :eval (string-equal-ignore-case "foo" "FOO"))
   (eq
    :eval (eq "foo" "foo"))
   (eql
@@ -501,7 +503,7 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
   (set-file-modes
    :no-value "(set-file-modes \"/tmp/foo\" #o644)")
   (set-file-times
-   :no-value (set-file-times "/tmp/foo" (current-time)))
+   :no-value (set-file-times "/tmp/foo"))
   "File Modes"
   (set-default-file-modes
    :no-value "(set-default-file-modes #o755)")
@@ -844,6 +846,10 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :eval (seq-find #'numberp '(a b 3 4 f 6)))
   (seq-position
    :eval (seq-position '(a b c) 'c))
+  (seq-positions
+   :eval (seq-positions '(a b c a d) 'a)
+   :eval (seq-positions '(a b c a d) 'z)
+   :eval (seq-positions '(11 5 7 12 9 15) 10 #'>=))
   (seq-length
    :eval (seq-length "abcde"))
   (seq-max
@@ -886,6 +892,9 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :eval (seq-filter #'numberp '(a b 3 4 f 6)))
   (seq-remove
    :eval (seq-remove #'numberp '(1 2 c d 5)))
+  (seq-remove-at-position
+   :eval (seq-remove-at-position '(a b c d e) 3)
+   :eval (seq-remove-at-position [a b c d e] 0))
   (seq-group-by
    :eval (seq-group-by #'cl-plusp '(-1 2 3 -4 -5 6)))
   (seq-union
@@ -939,12 +948,24 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :eval (point-min))
   (point-max
    :eval (point-max))
+  (pos-bol
+   :eval (pos-bol))
+  (pos-eol
+   :eval (pos-eol))
+  (bolp
+   :eval (bolp))
+  (eolp
+   :eval (eolp))
   (line-beginning-position
    :eval (line-beginning-position))
   (line-end-position
    :eval (line-end-position))
   (buffer-size
    :eval (buffer-size))
+  (bobp
+   :eval (bobp))
+  (eobp
+   :eval (eobp))
   "Moving Around"
   (goto-char
    :no-eval (goto-char (point-max))
@@ -970,8 +991,13 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
   (following-char
    :no-eval (following-char)
    :eg-result 67)
+  (preceding-char
+   :no-eval (preceding-char)
+   :eg-result 38)
   (char-after
    :eval (char-after 45))
+  (char-before
+   :eval (char-before 13))
   (get-byte
    :no-eval (get-byte 45)
    :eg-result-string "#xff")
@@ -980,6 +1006,8 @@ A FUNC form can have any number of `:no-eval' (or `:no-value'),
    :no-value (delete-region (point-min) (point-max)))
   (erase-buffer
    :no-value (erase-buffer))
+  (delete-line
+   :no-value (delete-line))
   (insert
    :no-value (insert "This string will be inserted in the buffer\n"))
   (subst-char-in-region

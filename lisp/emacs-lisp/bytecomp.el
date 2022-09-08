@@ -846,6 +846,8 @@ the unwind-action")
 (byte-defop 178 -1 byte-stack-set)	; Stack offset in following one byte.
 (byte-defop 179 -1 byte-stack-set2)	; Stack offset in following two bytes.
 
+;; unused: 180-181
+
 ;; If (following one byte & 0x80) == 0
 ;;    discard (following one byte & 0x7F) stack entries
 ;; else
@@ -1159,7 +1161,7 @@ message buffer `default-directory'."
 
 ;; Log something that isn't a warning.
 (defun byte-compile-log-1 (string)
-  (with-current-buffer byte-compile-log-buffer
+  (with-current-buffer (get-buffer-create byte-compile-log-buffer)
     (let ((inhibit-read-only t))
       (goto-char (point-max))
       (byte-compile-warning-prefix nil nil)
@@ -1233,7 +1235,8 @@ Order is by depth-first search."
                     (let (new-l new-c)
                       (save-excursion
                         (goto-char offset)
-                        (setq new-l (1+ (count-lines (point-min) (point-at-bol)))
+                        (setq new-l (1+ (count-lines (point-min)
+                                                     (line-beginning-position)))
                               new-c (1+ (current-column)))
                         (format "%d:%d:" new-l new-c))))
 		""))
@@ -1353,16 +1356,23 @@ FORMAT and ARGS are as in `byte-compile-warn'."
   (let ((byte-compile-form-stack (cons arg byte-compile-form-stack)))
     (apply #'byte-compile-warn format args)))
 
-(defun byte-compile-warn-obsolete (symbol)
-  "Warn that SYMBOL (a variable or function) is obsolete."
+;;;###autoload
+(defun byte-compile-warn-obsolete (symbol type)
+  "Warn that SYMBOL (a variable, function or generalized variable) is obsolete.
+TYPE is a string that say which one of these three types it is."
   (when (byte-compile-warning-enabled-p 'obsolete symbol)
-    (let* ((funcp (get symbol 'byte-obsolete-info))
-           (msg (macroexp--obsolete-warning
-                 symbol
-                 (or funcp (get symbol 'byte-obsolete-variable))
-                 (if funcp "function" "variable"))))
-      (unless (and funcp (memq symbol byte-compile-not-obsolete-funcs))
-	(byte-compile-warn-x symbol "%s" msg)))))
+    (byte-compile-warn-x
+     symbol "%s"
+     (macroexp--obsolete-warning
+      symbol
+      (pcase type
+        ("function"
+         (get symbol 'byte-obsolete-info))
+        ("variable"
+         (get symbol 'byte-obsolete-variable))
+        ("generalized variable"
+         (get symbol 'byte-obsolete-generalized-variable)))
+      type))))
 
 (defun byte-compile-report-error (error-info &optional fill)
   "Report Lisp error in compilation.
@@ -1393,7 +1403,7 @@ when printing the error message."
 		      (or (symbolp (symbol-function fn))
 			  (consp (symbol-function fn))
 			  (and (not macro-p)
-			       (byte-code-function-p (symbol-function fn)))))
+			       (compiled-function-p (symbol-function fn)))))
 	    (setq fn (symbol-function fn)))
           (let ((advertised (gethash (if (and (symbolp fn) (fboundp fn))
                                          ;; Could be a subr.
@@ -1405,7 +1415,7 @@ when printing the error message."
               (if macro-p
                   `(macro lambda ,advertised)
                 `(lambda ,advertised)))
-             ((and (not macro-p) (byte-code-function-p fn)) fn)
+             ((and (not macro-p) (compiled-function-p fn)) fn)
              ((not (consp fn)) nil)
              ((eq 'macro (car fn)) (cdr fn))
              (macro-p nil)
@@ -1466,8 +1476,8 @@ when printing the error message."
 
 (defun byte-compile-function-warn (f nargs def)
   (when (and (get f 'byte-obsolete-info)
-             (byte-compile-warning-enabled-p 'obsolete f))
-    (byte-compile-warn-obsolete f))
+             (not (memq f byte-compile-not-obsolete-funcs)))
+    (byte-compile-warn-obsolete f "function"))
 
   ;; Check to see if the function will be available at runtime
   ;; and/or remember its arity if it's unknown.
@@ -1758,7 +1768,7 @@ It is too wide if it has any lines longer than the largest of
            kind name col))
         ;; There's a "naked" ' character before a symbol/list, so it
         ;; should probably be quoted with \=.
-        (when (string-match-p "\\( \"\\|[ \t]\\|^\\)'[a-z(]" docs)
+        (when (string-match-p "\\( [\"#]\\|[ \t]\\|^\\)'[a-z(]" docs)
           (byte-compile-warn-x
            name "%s%sdocstring has wrong usage of unescaped single quotes (use \\= or different quoting)"
            kind name))
@@ -2077,7 +2087,6 @@ value is `no-byte-compile'.
 
 See also `emacs-lisp-byte-compile-and-load'."
   (declare (advertised-calling-convention (filename) "28.1"))
-;;  (interactive "fByte compile file: \nP")
   (interactive
    (let ((file buffer-file-name)
 	 (file-dir nil))
@@ -2403,8 +2412,8 @@ Call from the source buffer."
 
 (defun byte-compile-output-file-form (form)
   ;; Write the given form to the output buffer, being careful of docstrings
-  ;; in defvar, defvaralias, defconst, autoload and
-  ;; custom-declare-variable because make-docfile is so amazingly stupid.
+  ;; (for `byte-compile-dynamic-docstrings') in defvar, defvaralias,
+  ;; defconst, autoload, and custom-declare-variable.
   ;; defalias calls are output directly by byte-compile-file-form-defmumble;
   ;; it does not pay to first build the defalias in defmumble and then parse
   ;; it here.
@@ -2450,21 +2459,9 @@ list that represents a doc string reference.
       (let (position
             (print-symbols-bare t))     ; Possibly redundant binding.
         ;; Insert the doc string, and make it a comment with #@LENGTH.
-        (and (>= (nth 1 info) 0)
-             dynamic-docstrings
-             (progn
-               ;; Make the doc string start at beginning of line
-               ;; for make-docfile's sake.
-               (insert "\n")
-               (setq position
-                     (byte-compile-output-as-comment
-                      (nth (nth 1 info) form) nil))
-               ;; If the doc string starts with * (a user variable),
-               ;; negate POSITION.
-               (if (and (stringp (nth (nth 1 info) form))
-                        (> (length (nth (nth 1 info) form)) 0)
-                        (eq (aref (nth (nth 1 info) form) 0) ?*))
-                   (setq position (- position)))))
+        (when (and (>= (nth 1 info) 0) dynamic-docstrings)
+          (setq position (byte-compile-output-as-comment
+                          (nth (nth 1 info) form) nil)))
 
         (let ((print-continuous-numbering t)
               print-number-table
@@ -2591,8 +2588,8 @@ list that represents a doc string reference.
 	  (t
 	   (byte-compile-keep-pending form)))))
 
-;; Functions and variables with doc strings must be output separately,
-;; so make-docfile can recognize them.  Most other things can be output
+;; Functions and variables with doc strings must be output specially,
+;; for `byte-compile-dynamic-docstrings'.  Most other things can be output
 ;; as byte-code.
 
 (put 'autoload 'byte-hunk-handler 'byte-compile-file-form-autoload)
@@ -2957,11 +2954,11 @@ If FORM is a lambda or a macro, byte-compile it as a function."
 	  (setq fun (cdr fun)))
       (prog1
           (cond
-           ;; Up until Emacs-24.1, byte-compile silently did nothing when asked to
-           ;; compile something invalid.  So let's tune down the complaint from an
-           ;; error to a simple message for the known case where signaling an error
-           ;; causes problems.
-           ((byte-code-function-p fun)
+           ;; Up until Emacs-24.1, byte-compile silently did nothing
+           ;; when asked to compile something invalid.  So let's tone
+           ;; down the complaint from an error to a simple message for
+           ;; the known case where signaling an error causes problems.
+           ((compiled-function-p fun)
             (message "Function %s is already compiled"
                      (if (symbolp form) form "provided"))
             fun)
@@ -3538,7 +3535,7 @@ lambda-expression."
     (byte-compile-out-tag endtag)))
 
 (defun byte-compile-unfold-bcf (form)
-  "Inline call to byte-code-functions."
+  "Inline call to byte-code function."
   (let* ((byte-compile-bound-variables byte-compile-bound-variables)
          (fun (car form))
          (fargs (aref fun 0))
@@ -3615,7 +3612,7 @@ lambda-expression."
                   ('set (not (eq access-type 'reference)))
                   ('get (eq access-type 'reference))
                   (_ t))))
-	 (byte-compile-warn-obsolete var))))
+	 (byte-compile-warn-obsolete var "variable"))))
 
 (defsubst byte-compile-dynamic-variable-op (base-op var)
   (let ((tmp (assq var byte-compile-variables)))
@@ -3759,7 +3756,6 @@ If it is nil, then the handler is \"byte-compile-SYMBOL.\""
 (put 'byte-insertN 'byte-opcode-invert 'insert)
 
 (byte-defop-compiler point		0)
-;;(byte-defop-compiler mark		0) ;; obsolete
 (byte-defop-compiler point-max		0)
 (byte-defop-compiler point-min		0)
 (byte-defop-compiler following-char	0)
@@ -3770,8 +3766,6 @@ If it is nil, then the handler is \"byte-compile-SYMBOL.\""
 (byte-defop-compiler bolp		0)
 (byte-defop-compiler bobp		0)
 (byte-defop-compiler current-buffer	0)
-;;(byte-defop-compiler read-char	0) ;; obsolete
-;; (byte-defop-compiler interactive-p	0) ;; Obsolete.
 (byte-defop-compiler widen		0)
 (byte-defop-compiler end-of-line    0-1)
 (byte-defop-compiler forward-char   0-1)
@@ -3792,7 +3786,6 @@ If it is nil, then the handler is \"byte-compile-SYMBOL.\""
 (byte-defop-compiler goto-char		1)
 (byte-defop-compiler char-after		0-1)
 (byte-defop-compiler set-buffer		1)
-;;(byte-defop-compiler set-mark		1) ;; obsolete
 (byte-defop-compiler forward-word	0-1)
 (byte-defop-compiler char-syntax	1)
 (byte-defop-compiler nreverse		1)
@@ -3845,7 +3838,6 @@ If it is nil, then the handler is \"byte-compile-SYMBOL.\""
 (byte-defop-compiler (+ byte-plus)	byte-compile-variadic-numeric)
 (byte-defop-compiler (* byte-mult)	byte-compile-variadic-numeric)
 
-;;####(byte-defop-compiler move-to-column	1)
 (byte-defop-compiler-1 interactive byte-compile-noop)
 
 
@@ -4800,8 +4792,6 @@ binding slots have been popped."
 (byte-defop-compiler-1 save-excursion)
 (byte-defop-compiler-1 save-current-buffer)
 (byte-defop-compiler-1 save-restriction)
-;; (byte-defop-compiler-1 save-window-excursion)      ;Obsolete: now a macro.
-;; (byte-defop-compiler-1 with-output-to-temp-buffer) ;Obsolete: now a macro.
 
 (defun byte-compile-catch (form)
   (byte-compile-form (car (cdr form)))
@@ -4998,7 +4988,7 @@ binding slots have been popped."
   ;;
   ;; FIXME: we also use this hunk-handler to implement the function's
   ;; dynamic docstring feature (via byte-compile-file-form-defmumble).
-  ;; We should actually implement it (more elegantly) in
+  ;; We should probably actually implement it (more elegantly) in
   ;; byte-compile-lambda so it applies to all lambdas.  We did it here
   ;; so the resulting .elc format was recognizable by make-docfile,
   ;; but since then we stopped using DOC for the docstrings of
@@ -5272,11 +5262,13 @@ invoked interactively."
 		((not (consp f))
 		 "<malformed function>")
 		((eq 'macro (car f))
-		 (if (or (byte-code-function-p (cdr f))
+		 (if (or (compiled-function-p (cdr f))
+			 ;; FIXME: Can this still happen?
 			 (assq 'byte-code (cdr (cdr (cdr f)))))
 		     " <compiled macro>"
 		   " <macro>"))
 		((assq 'byte-code (cdr (cdr f)))
+		 ;; FIXME: Can this still happen?
 		 "<compiled lambda>")
 		((eq 'lambda (car f))
 		 "<function>")
@@ -5525,9 +5517,7 @@ and corresponding effects."
 ;; itself, compile some of its most used recursive functions (at load time).
 ;;
 (eval-when-compile
-  (or (byte-code-function-p (symbol-function 'byte-compile-form))
-      (subr-native-elisp-p (symbol-function 'byte-compile-form))
-      (assq 'byte-code (symbol-function 'byte-compile-form))
+  (or (compiled-function-p (symbol-function 'byte-compile-form))
       (let ((byte-optimize nil)		; do it fast
 	    (byte-compile-warnings nil))
 	(mapc (lambda (x)

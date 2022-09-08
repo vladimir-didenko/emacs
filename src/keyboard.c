@@ -1295,7 +1295,8 @@ command_loop_1 (void)
       /* Note that the value cell will never directly contain nil
 	 if the symbol is a local variable.  */
       if (!NILP (Vpost_command_hook) && !NILP (Vrun_hooks))
-	safe_run_hooks (Qpost_command_hook);
+	safe_run_hooks_maybe_narrowed (Qpost_command_hook,
+				       XWINDOW (selected_window));
 
       /* If displaying a message, resize the echo area window to fit
 	 that message's size exactly.  */
@@ -1330,6 +1331,7 @@ command_loop_1 (void)
 	display_malloc_warning ();
 
       Vdeactivate_mark = Qnil;
+      backtrace_yet = false;
 
       /* Don't ignore mouse movements for more than a single command
 	 loop.  (This flag is set in xdisp.c whenever the tool bar is
@@ -1461,7 +1463,9 @@ command_loop_1 (void)
       }
       Vthis_command = cmd;
       Vreal_this_command = cmd;
-      safe_run_hooks (Qpre_command_hook);
+
+      safe_run_hooks_maybe_narrowed (Qpre_command_hook,
+				     XWINDOW (selected_window));
 
       already_adjusted = 0;
 
@@ -1513,7 +1517,8 @@ command_loop_1 (void)
           }
       kset_last_prefix_arg (current_kboard, Vcurrent_prefix_arg);
 
-      safe_run_hooks (Qpost_command_hook);
+      safe_run_hooks_maybe_narrowed (Qpost_command_hook,
+				     XWINDOW (selected_window));
 
       /* If displaying a message, resize the echo area window to fit
 	 that message's size exactly.  Do this only if the echo area
@@ -1822,13 +1827,15 @@ adjust_point_for_property (ptrdiff_t last_pt, bool modified)
     }
 }
 
-/* Subroutine for safe_run_hooks: run the hook, which is ARGS[1].  */
+/* Subroutine for safe_run_hooks: run the hook's function.
+   ARGS[0] holds the name of the hook, which we don't need here (we only use
+   it in the failure case of the internal_condition_case_n).  */
 
 static Lisp_Object
 safe_run_hooks_1 (ptrdiff_t nargs, Lisp_Object *args)
 {
-  eassert (nargs == 2);
-  return call0 (args[1]);
+  eassert (nargs >= 2);
+  return Ffuncall (nargs - 1, args + 1);
 }
 
 /* Subroutine for safe_run_hooks: handle an error by clearing out the function
@@ -1837,7 +1844,7 @@ safe_run_hooks_1 (ptrdiff_t nargs, Lisp_Object *args)
 static Lisp_Object
 safe_run_hooks_error (Lisp_Object error, ptrdiff_t nargs, Lisp_Object *args)
 {
-  eassert (nargs == 2);
+  eassert (nargs >= 2);
   AUTO_STRING (format, "Error in %s (%S): %S");
   Lisp_Object hook = args[0];
   Lisp_Object fun = args[1];
@@ -1873,11 +1880,13 @@ safe_run_hooks_error (Lisp_Object error, ptrdiff_t nargs, Lisp_Object *args)
 static Lisp_Object
 safe_run_hook_funcall (ptrdiff_t nargs, Lisp_Object *args)
 {
-  eassert (nargs == 2);
-  /* Yes, run_hook_with_args works with args in the other order.  */
-  internal_condition_case_n (safe_run_hooks_1,
-			     2, ((Lisp_Object []) {args[1], args[0]}),
-			     Qt, safe_run_hooks_error);
+  eassert (nargs >= 2);
+  /* We need to swap args[0] and args[1] here or in `safe_run_hooks_1`.
+     It's more convenient to do it here.  */
+  Lisp_Object fun = args[0], hook = args[1];
+  args[0] = hook, args[1] = fun;
+  internal_condition_case_n (safe_run_hooks_1, nargs, args,
+                             Qt, safe_run_hooks_error);
   return Qnil;
 }
 
@@ -1891,7 +1900,36 @@ safe_run_hooks (Lisp_Object hook)
   specpdl_ref count = SPECPDL_INDEX ();
 
   specbind (Qinhibit_quit, Qt);
-  run_hook_with_args (2, ((Lisp_Object []) {hook, hook}), safe_run_hook_funcall);
+  run_hook_with_args (2, ((Lisp_Object []) {hook, hook}),
+                      safe_run_hook_funcall);
+  unbind_to (count, Qnil);
+}
+
+void
+safe_run_hooks_maybe_narrowed (Lisp_Object hook, struct window *w)
+{
+  specpdl_ref count = SPECPDL_INDEX ();
+
+  specbind (Qinhibit_quit, Qt);
+
+  if (current_buffer->long_line_optimizations_p)
+    narrow_to_region_internal (make_fixnum (get_narrowed_begv (w, PT)),
+			       make_fixnum (get_narrowed_zv (w, PT)),
+			       true);
+
+  run_hook_with_args (2, ((Lisp_Object []) {hook, hook}),
+                      safe_run_hook_funcall);
+  unbind_to (count, Qnil);
+}
+
+void
+safe_run_hooks_2 (Lisp_Object hook, Lisp_Object arg1, Lisp_Object arg2)
+{
+  specpdl_ref count = SPECPDL_INDEX ();
+
+  specbind (Qinhibit_quit, Qt);
+  run_hook_with_args (4, ((Lisp_Object []) {hook, hook, arg1, arg2}),
+		      safe_run_hook_funcall);
   unbind_to (count, Qnil);
 }
 
@@ -4622,6 +4660,11 @@ timer_check_2 (Lisp_Object timers, Lisp_Object idle_timers)
       /* If timer is ripe, run it if it hasn't been run.  */
       if (ripe)
 	{
+	  /* If we got here, presumably `decode_timer` has checked
+             that this timer has not yet been triggered.  */
+	  eassert (NILP (AREF (chosen_timer, 0)));
+	  /* In a production build, where assertions compile to
+	     nothing, we still want to play it safe here.  */
 	  if (NILP (AREF (chosen_timer, 0)))
 	    {
 	      specpdl_ref count = SPECPDL_INDEX ();
@@ -4640,8 +4683,8 @@ timer_check_2 (Lisp_Object timers, Lisp_Object idle_timers)
 
 	      /* Since we have handled the event,
 		 we don't need to tell the caller to wake up and do it.  */
-              /* But the caller must still wait for the next timer, so
-                 return 0 to indicate that.  */
+	      /* But the caller must still wait for the next timer, so
+		 return 0 to indicate that.  */
 	    }
 
 	  nexttime = make_timespec (0, 0);
@@ -12613,31 +12656,54 @@ cancels any modification.  */);
 
   DEFSYM (Qdeactivate_mark, "deactivate-mark");
   DEFVAR_LISP ("deactivate-mark", Vdeactivate_mark,
-	       doc: /* If an editing command sets this to t, deactivate the mark afterward.
+    doc: /* Whether to deactivate the mark after an editing command.
 The command loop sets this to nil before each command,
 and tests the value when the command returns.
-Buffer modification stores t in this variable.  */);
+If an editing command sets this non-nil, deactivate the mark after
+the command returns.
+
+Buffer modifications store t in this variable.
+
+By default, deactivating the mark will save the contents of the region
+according to `select-active-regions', unless this is set to the symbol
+`dont-save'.  */);
   Vdeactivate_mark = Qnil;
   Fmake_variable_buffer_local (Qdeactivate_mark);
 
   DEFVAR_LISP ("pre-command-hook", Vpre_command_hook,
 	       doc: /* Normal hook run before each command is executed.
-If an unhandled error happens in running this hook,
-the function in which the error occurred is unconditionally removed, since
-otherwise the error might happen repeatedly and make Emacs nonfunctional.
+
+If an unhandled error happens in running this hook, the function in
+which the error occurred is unconditionally removed, since otherwise
+the error might happen repeatedly and make Emacs nonfunctional.
+
+Note that, when the current buffer contains one or more lines whose
+length is above `long-line-threshold', these hook functions are called
+with the buffer narrowed to a small portion around point, and the
+narrowing is locked (see `narrow-to-region'), so that these hook
+functions cannot use `widen' to gain access to other portions of
+buffer text.
 
 See also `post-command-hook'.  */);
   Vpre_command_hook = Qnil;
 
   DEFVAR_LISP ("post-command-hook", Vpost_command_hook,
 	       doc: /* Normal hook run after each command is executed.
-If an unhandled error happens in running this hook,
-the function in which the error occurred is unconditionally removed, since
-otherwise the error might happen repeatedly and make Emacs nonfunctional.
+
+If an unhandled error happens in running this hook, the function in
+which the error occurred is unconditionally removed, since otherwise
+the error might happen repeatedly and make Emacs nonfunctional.
 
 It is a bad idea to use this hook for expensive processing.  If
 unavoidable, wrap your code in `(while-no-input (redisplay) CODE)' to
 avoid making Emacs unresponsive while the user types.
+
+Note that, when the current buffer contains one or more lines whose
+length is above `long-line-threshold', these hook functions are called
+with the buffer narrowed to a small portion around point, and the
+narrowing is locked (see `narrow-to-region'), so that these hook
+functions cannot use `widen' to gain access to other portions of
+buffer text.
 
 See also `pre-command-hook'.  */);
   Vpost_command_hook = Qnil;
@@ -12914,7 +12980,10 @@ This variable only has an effect when Transient Mark mode is enabled.
 
 If the value is `only', only temporarily active regions (usually made
 by mouse-dragging or shift-selection) set the window system's primary
-selection.  */);
+selection.
+
+If this variable causes the region to be set as the primary selection,
+`post-select-region-hook' is then run afterwards.  */);
   Vselect_active_regions = Qt;
 
   DEFVAR_LISP ("saved-region-selection",

@@ -1402,15 +1402,17 @@ instead of deleted."
   :version "24.1")
 
 (setq region-extract-function
-  (lambda (method)
-    (when (region-beginning)
-      (cond
-       ((eq method 'bounds)
-        (list (cons (region-beginning) (region-end))))
-       ((eq method 'delete-only)
-        (delete-region (region-beginning) (region-end)))
-       (t
-        (filter-buffer-substring (region-beginning) (region-end) method))))))
+      (lambda (method)
+        ;; This call either signals an error (if there is no region)
+        ;; or returns a number.
+        (let ((beg (region-beginning)))
+          (cond
+           ((eq method 'bounds)
+            (list (cons beg (region-end))))
+           ((eq method 'delete-only)
+            (delete-region beg (region-end)))
+           (t
+            (filter-buffer-substring beg (region-end) method))))))
 
 (defvar region-insert-function
   (lambda (lines)
@@ -2229,9 +2231,20 @@ See `extended-command-versions'."
   "Alist of prompts and what the extended command predicate should be.
 This is used by the \\<minibuffer-local-must-match-map>\\[execute-extended-command-cycle] command when reading an extended command.")
 
+(defvar-keymap read-extended-command-mode-map
+  :doc "Local keymap added to the current map when reading an extended command."
+  "M-X" #'execute-extended-command-cycle)
+
+(define-minor-mode read-extended-command-mode
+  "Minor mode used for completion in `read-extended-command'.")
+
 (defun read-extended-command (&optional prompt)
-  "Read command name to invoke in `execute-extended-command'.
-This function uses the `read-extended-command-predicate' user option."
+  "Read command name to invoke via `execute-extended-command'.
+Use `read-extended-command-predicate' to determine which commands
+to include among completion candidates.
+
+This function activates the `read-extended-command-mode' minor
+mode when reading the command name."
   (let ((default-predicate read-extended-command-predicate)
         (read-extended-command-predicate read-extended-command-predicate)
         already-typed ret)
@@ -2270,6 +2283,8 @@ This function uses the `read-extended-command-predicate' user option."
                       (setq execute-extended-command--last-typed
                             (minibuffer-contents)))
                     nil 'local)
+          ;; This is so that we define the `M-X' toggling command.
+          (read-extended-command-mode)
           (setq-local minibuffer-default-add-function
 	              (lambda ()
 	                ;; Get a command name at point in the original buffer
@@ -2701,12 +2716,15 @@ don't clear it."
          (t
           ;; Pass `cmd' rather than `final', for the backtrace's sake.
           (prog1 (call-interactively cmd record-flag keys)
-            (when (and (symbolp cmd)
-                       (get cmd 'byte-obsolete-info)
-                       (not (get cmd 'command-execute-obsolete-warned)))
+            (when-let ((info
+                        (and (symbolp cmd)
+                             (not (get cmd 'command-execute-obsolete-warned))
+                             (get cmd 'byte-obsolete-info))))
               (put cmd 'command-execute-obsolete-warned t)
               (message "%s" (macroexp--obsolete-warning
-                             cmd (get cmd 'byte-obsolete-info) "command"))))))))))
+                             cmd info "command"
+                             (help--key-description-fontified
+                              (where-is-internal (car info) nil t))))))))))))
 
 (defun command-execute--query (command)
   "Query the user whether to run COMMAND."
@@ -3530,10 +3548,7 @@ Return what remains of the list."
                  (setq visited-file-time
                       (with-current-buffer (buffer-base-buffer)
                         (visited-file-modtime))))
-             (when (or (equal time visited-file-time)
-                       (and (consp time)
-                            (equal (list (car time) (cdr time))
-                                   visited-file-time)))
+	     (when (time-equal-p time visited-file-time)
                (unlock-buffer)
                (set-buffer-modified-p nil))))
           ;; Element (nil PROP VAL BEG . END) is property change.
@@ -6721,7 +6736,8 @@ If Transient Mark mode is disabled, this function normally does
 nothing; but if FORCE is non-nil, it deactivates the mark anyway.
 
 Deactivating the mark sets `mark-active' to nil, updates the
-primary selection according to `select-active-regions', and runs
+primary selection according to `select-active-regions' (unless
+`deactivate-mark' is `dont-save'), and runs
 `deactivate-mark-hook'.
 
 If Transient Mark mode was temporarily enabled, reset the value
@@ -6732,6 +6748,7 @@ run `deactivate-mark-hook'."
     (when (and (if (eq select-active-regions 'only)
 		   (eq (car-safe transient-mark-mode) 'only)
 		 select-active-regions)
+               (not (eq deactivate-mark 'dont-save))
 	       (region-active-p)
 	       (display-selections-p))
       ;; The var `saved-region-selection', if non-nil, is the text in
@@ -6853,6 +6870,18 @@ point otherwise."
   :version "23.1"
   :group 'editing-basics)
 
+(defun use-region-beginning ()
+  "Return the start of the region if `use-region-p'."
+  (and (use-region-p) (region-beginning)))
+
+(defun use-region-end ()
+  "Return the end of the region if `use-region-p'."
+  (and (use-region-p) (region-end)))
+
+(defun use-region-noncontiguous-p ()
+  "Return non-nil for a non-contiguous region if `use-region-p'."
+  (and (use-region-p) (region-noncontiguous-p)))
+
 (defun use-region-p ()
   "Return t if the region is active and it is appropriate to act on it.
 This is used by commands that act specially on the region under
@@ -6863,7 +6892,11 @@ mark is active; furthermore, if `use-empty-active-region' is nil,
 the region must not be empty.  Otherwise, the return value is nil.
 
 For some commands, it may be appropriate to ignore the value of
-`use-empty-active-region'; in that case, use `region-active-p'."
+`use-empty-active-region'; in that case, use `region-active-p'.
+
+Also see the convenience functions `use-region-beginning' and
+`use-region-end', which may be handy when writing `interactive'
+specs."
   (and (region-active-p)
        (or use-empty-active-region (> (region-end) (region-beginning)))
        t))
@@ -6893,7 +6926,7 @@ see `region-noncontiguous-p' and `extract-rectangle-bounds'."
   "Return non-nil if the region contains several pieces.
 An example is a rectangular region handled as a list of
 separate contiguous regions for each line."
-  (cdr (region-bounds)))
+  (let ((bounds (region-bounds))) (and (cdr bounds) bounds)))
 
 (defun redisplay--unhighlight-overlay-function (rol)
   "If ROL is an overlay, call `delete-overlay'."
@@ -7270,7 +7303,7 @@ or \"mark.*active\" at the prompt."
 
 (define-minor-mode indent-tabs-mode
   "Toggle whether indentation can insert TAB characters."
-  :global t :group 'indent :variable indent-tabs-mode)
+  :group 'indent)
 
 (defvar widen-automatically t
   "Non-nil means it is ok for commands to call `widen' when they want to.
@@ -7668,11 +7701,23 @@ not vscroll."
 		 ;; But don't vscroll in a keyboard macro.
 		 (not defining-kbd-macro)
 		 (not executing-kbd-macro)
+                 ;; Lines are not truncated...
+                 (not
+                  (and
+                   (or truncate-lines (truncated-partial-width-window-p))
+                   ;; ...or if lines are truncated, this buffer
+                   ;; doesn't have very long lines.
+                   (long-line-optimizations-p)))
 		 (line-move-partial arg noerror))
       (set-window-vscroll nil 0 t)
       (if (and line-move-visual
 	       ;; Display-based column are incompatible with goal-column.
 	       (not goal-column)
+               ;; Lines aren't truncated.
+               (not
+                (and
+                 (or truncate-lines (truncated-partial-width-window-p))
+                 (long-line-optimizations-p)))
 	       ;; When the text in the window is scrolled to the left,
 	       ;; display-based motion doesn't make sense (because each
 	       ;; logical line occupies exactly one screen line).
@@ -8109,10 +8154,11 @@ For motion by visual lines, see `beginning-of-visual-line'."
 	  (line-move (1- arg) t)))
 
     ;; Move to beginning-of-line, ignoring fields and invisible text.
-    (skip-chars-backward "^\n")
-    (while (and (not (bobp)) (invisible-p (1- (point))))
-      (goto-char (previous-char-property-change (point)))
-      (skip-chars-backward "^\n"))
+    (let ((inhibit-field-text-motion t))
+      (goto-char (line-beginning-position))
+      (while (and (not (bobp)) (invisible-p (1- (point))))
+        (goto-char (previous-char-property-change (point)))
+        (goto-char (line-beginning-position))))
 
     ;; Now find first visible char in the line.
     (while (and (< (point) orig) (invisible-p (point)))
@@ -10348,8 +10394,15 @@ command works by setting the variable `buffer-read-only', which
 does not affect read-only regions caused by text properties.  To
 ignore read-only status in a Lisp program (whether due to text
 properties or buffer state), bind `inhibit-read-only' temporarily
-to a non-nil value."
+to a non-nil value.
+
+Reverting a buffer will keep the read-only status set by using
+this command."
   :variable buffer-read-only
+  ;; We're saving this value here so that we can restore the
+  ;; readedness state after reverting the buffer to the value that's
+  ;; been explicitly set by the user.
+  (setq-local read-only-mode--state buffer-read-only)
   (cond
    ((and (not buffer-read-only) view-mode)
     (View-exit-and-edit)
@@ -10382,7 +10435,9 @@ and setting it to nil."
     map))
 
 (define-derived-mode messages-buffer-mode special-mode "Messages"
-  "Major mode used in the \"*Messages*\" buffer.")
+  "Major mode used in the \"*Messages*\" buffer."
+  ;; Make it easy to do like "tail -f".
+  (setq-local window-point-insertion-type t))
 
 (defun messages-buffer ()
   "Return the \"*Messages*\" buffer.

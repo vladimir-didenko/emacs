@@ -566,13 +566,16 @@ To record all your input, use `open-dribble-file'."
 ;; Key bindings
 
 (defun help--key-description-fontified (keys &optional prefix)
-  "Like `key-description' but add face for \"*Help*\" buffers."
-  ;; We add both the `font-lock-face' and `face' properties here, as this
-  ;; seems to be the only way to get this to work reliably in any
-  ;; buffer.
-  (propertize (key-description keys prefix)
-              'font-lock-face 'help-key-binding
-              'face 'help-key-binding))
+  "Like `key-description' but add face for \"*Help*\" buffers.
+KEYS is the return value of `(where-is-internal \\='foo-cmd nil t)'.
+Return nil if KEYS is nil."
+  (when keys
+    ;; We add both the `font-lock-face' and `face' properties here, as this
+    ;; seems to be the only way to get this to work reliably in any
+    ;; buffer.
+    (propertize (key-description keys prefix)
+                'font-lock-face 'help-key-binding
+                'face 'help-key-binding)))
 
 (defcustom describe-bindings-outline t
   "Non-nil enables outlines in the output buffer of `describe-bindings'."
@@ -606,7 +609,6 @@ or a buffer name."
           (setq-local outline-level (lambda () 1))
           (setq-local outline-minor-mode-cycle t
                       outline-minor-mode-highlight t)
-          (setq-local outline-minor-mode-use-buttons t)
           (outline-minor-mode 1)
           (save-excursion
             (goto-char (point-min))
@@ -906,6 +908,18 @@ Describe the following key, mouse click, or menu item: "
 ;; Defined in help-fns.el.
 (defvar describe-function-orig-buffer)
 
+;; These two are named functions because lambda-functions cannot be
+;; serialized in a native-compilation build, which breaks bookmark
+;; support in help-mode.el.
+(defun describe-key--helper (key-list buf)
+  (describe-key key-list
+                (if (buffer-live-p buf) buf)))
+
+(defun describe-function--helper (func buf)
+  (let ((describe-function-orig-buffer
+         (if (buffer-live-p buf) buf)))
+    (describe-function func)))
+
 (defun describe-key (&optional key-list buffer up-event)
   "Display documentation of the function invoked by KEY-LIST.
 KEY-LIST can be any kind of a key sequence; it can include keyboard events,
@@ -959,10 +973,7 @@ current buffer."
                          `(,seq ,brief-desc ,defn ,locus)))
                      key-list))
            2)))
-    (help-setup-xref (list (lambda (key-list buf)
-                             (describe-key key-list
-                                           (if (buffer-live-p buf) buf)))
-                           key-list buf)
+    (help-setup-xref (list #'describe-key--helper key-list buf)
 		     (called-interactively-p 'interactive))
     (if (and (<= (length info-list) 1)
              (help--binding-undefined-p (nth 2 (car info-list))))
@@ -1174,6 +1185,7 @@ Otherwise, return a new string."
                 (let ((k (buffer-substring-no-properties (+ orig-point 2)
                                                          end-point)))
                   (when (or (key-valid-p k)
+                            (string-match-p "\\`mouse-[1-9]" k)
                             (string-match-p "\\`M-x " k))
                     (goto-char orig-point)
                     (delete-char 2)
@@ -1314,18 +1326,17 @@ If BUFFER, lookup keys while in that buffer.  This only affects
 things like :filters for menu bindings."
   (let* ((amaps (accessible-keymaps startmap prefix))
          (orig-maps (if no-menu
-                        (progn
-                          ;; Delete from MAPS each element that is for
-                          ;; the menu bar.
-                          (let* ((tail amaps)
-                                 result)
-                            (while tail
-                              (let ((elem (car tail)))
-                                (when (not (and (>= (length (car elem)) 1)
-                                                (eq (elt (car elem) 0) 'menu-bar)))
-                                  (setq result (append result (list elem)))))
-                              (setq tail (cdr tail)))
-                            result))
+                        ;; Delete from MAPS each element that is for
+                        ;; the menu bar.
+                        (let* ((tail amaps)
+                               result)
+                          (while tail
+                            (let ((elem (car tail)))
+                              (when (not (and (>= (length (car elem)) 1)
+                                              (eq (elt (car elem) 0) 'menu-bar)))
+                                (setq result (append result (list elem)))))
+                            (setq tail (cdr tail)))
+                          result)
                       amaps))
          (maps orig-maps)
          (print-title (or maps always-title))
@@ -1439,8 +1450,7 @@ prefix keys PREFIX (a string or vector).
 TRANSL, PARTIAL, SHADOW, NOMENU, MENTION-SHADOW and BUFFER are as
 in `describe-map-tree'."
   ;; Converted from describe_map in keymap.c.
-  (let* ((suppress (and partial 'suppress-keymap))
-         (map (keymap-canonicalize map))
+  (let* ((map (keymap-canonicalize map))
          (tail map)
          (first t)
          done vect)
@@ -1471,7 +1481,7 @@ in `describe-map-tree'."
                     ;; commands.
                     (setq definition (keymap--get-keyelt (cdr (car tail)) nil))
                     (or (not (symbolp definition))
-                        (null (get definition suppress)))
+                        (not (get definition (when partial 'suppress-keymap))))
                     ;; Don't show a command that isn't really
                     ;; visible because a local definition of the
                     ;; same key shadows it.
@@ -1504,7 +1514,7 @@ in `describe-map-tree'."
                  (push (cons tail prefix) help--keymaps-seen)))))
       (setq tail (cdr tail)))
     ;; If we found some sparse map events, sort them.
-    (let ((vect (sort vect 'help--describe-map-compare))
+    (let ((vect (sort vect #'help--describe-map-compare))
           (columns ())
           line-start key-end column)
       ;; Now output them in sorted order.

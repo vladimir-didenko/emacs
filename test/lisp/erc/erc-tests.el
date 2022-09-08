@@ -522,7 +522,7 @@
         (erc-send-current-line)
         (should (ring-p erc-input-ring))
         (should (zerop (ring-member erc-input-ring "/one"))) ; equal
-        (should (save-excursion (forward-line -1) (goto-char (point-at-bol))
+        (should (save-excursion (forward-line -1) (goto-char (pos-bol))
                                 (looking-at-p "[*]+ echo: one")))
         (should-not erc-input-ring-index)
         (erc-bol)
@@ -575,15 +575,15 @@
     (goto-char (point-min))
     (search-forward "Version")
     (search-forward "\r\n\r\n")
-    (search-forward "myproxy.localhost:6667 >> PASS" (line-end-position))
+    (search-forward "myproxy.localhost:6667 >> PASS" (pos-eol))
     (forward-line)
-    (search-forward "irc.gnu.org << :irc.gnu.org 001" (line-end-position))
+    (search-forward "irc.gnu.org << :irc.gnu.org 001" (pos-eol))
     (forward-line)
-    (search-forward "irc.gnu.org << :irc.gnu.org 002" (line-end-position))
+    (search-forward "irc.gnu.org << :irc.gnu.org 002" (pos-eol))
     (forward-line)
-    (search-forward "FooNet << :irc.gnu.org 422" (line-end-position))
+    (search-forward "FooNet << :irc.gnu.org 422" (pos-eol))
     (forward-line)
-    (search-forward "BarNet << :irc.gnu.org 221" (line-end-position)))
+    (search-forward "BarNet << :irc.gnu.org 221" (pos-eol)))
   (when noninteractive
     (kill-buffer "*erc-protocol*")
     (should-not erc-debug-irc-protocol)))
@@ -892,5 +892,87 @@
                            '("PRIVMSG #chan : \r\n" . utf-8))))
 
           (should-not calls))))))
+
+;; Note: if adding an erc-backend-tests.el, please relocate this there.
+
+(ert-deftest erc-message ()
+  (should-not erc-server-last-peers)
+  (let (server-proc
+        calls
+        erc-kill-channel-hook erc-kill-server-hook erc-kill-buffer-hook)
+    (cl-letf (((symbol-function 'erc-display-message)
+               (lambda (_ _ _ line) (push line calls)))
+              ((symbol-function 'erc-server-send)
+               (lambda (line _) (push line calls)))
+              ((symbol-function 'erc-server-buffer)
+               (lambda () (process-buffer server-proc))))
+      (with-current-buffer (get-buffer-create "ExampleNet")
+        (erc-mode)
+        (setq erc-server-current-nick "tester"
+              server-proc (start-process "sleep" (current-buffer) "sleep" "1")
+              erc-server-process server-proc
+              erc-server-last-peers (cons nil nil)
+              erc-server-users (make-hash-table :test 'equal)
+              erc-network 'ExampleNet)
+        (set-process-query-on-exit-flag erc-server-process nil))
+
+      (with-current-buffer (get-buffer-create "#chan")
+        (erc-mode)
+        (setq erc-server-process (buffer-local-value 'erc-server-process
+                                                     (get-buffer "ExampleNet"))
+              erc-default-recipients '("#chan")
+              erc-channel-users (make-hash-table :test 'equal)
+              erc-network 'ExampleNet)
+        (erc-update-current-channel-member "alice" "alice")
+        (erc-update-current-channel-member "tester" "tester"))
+
+      (with-current-buffer "ExampleNet"
+        (erc-server-PRIVMSG erc-server-process
+                            (make-erc-response
+                             :sender "alice!~u@fsf.org"
+                             :command "PRIVMSG"
+                             :command-args '("#chan" "hi")
+                             :unparsed ":alice!~u@fsf.org PRIVMSG #chan :hi"))
+        (should (equal erc-server-last-peers '("alice")))
+        (should (string-match "<alice>" (pop calls))))
+
+      (with-current-buffer "#chan"
+        (ert-info ("Shortcuts usable in target buffers")
+          (should-not (local-variable-p 'erc-server-last-peers))
+          (should-not erc-server-last-peers)
+          (erc-message "PRIVMSG" ". hi")
+          (should-not erc-server-last-peers)
+          (should (eq 'no-target (pop calls)))
+          (erc-message "PRIVMSG" ", hi")
+          (should-not erc-server-last-peers)
+          (should (string-match "alice :hi" (pop calls)))))
+
+      (with-current-buffer "ExampleNet"
+        (ert-info ("Shortcuts local in server bufs")
+          (should (equal erc-server-last-peers '("alice" . "alice")))
+          (erc-message "PRIVMSG" ", hi")
+          (should (equal erc-server-last-peers '("alice" . "alice")))
+          (should (string-match "PRIVMSG alice :hi" (pop calls)))
+          (setcdr erc-server-last-peers "bob")
+          (erc-message "PRIVMSG" ". hi")
+          (should (equal erc-server-last-peers '("alice" . "bob")))
+          (should (string-match "PRIVMSG bob :hi" (pop calls)))))
+
+      (with-current-buffer "#chan"
+        (ert-info ("Non-shortcuts are local to server buffer")
+          (should-not (local-variable-p 'erc-server-last-peers))
+          (should-not erc-server-last-peers)
+          (erc-message "PRIVMSG" "#chan hola")
+          (should-not erc-server-last-peers)
+          (should-not (default-value 'erc-server-last-peers))
+          (should (equal (buffer-local-value 'erc-server-last-peers
+                                             (get-buffer "ExampleNet"))
+                         '("alice" . "#chan")))
+          (should (string-match "hola" (pop calls))))))
+
+    (should-not erc-server-last-peers)
+    (should-not calls)
+    (kill-buffer "ExampleNet")
+    (kill-buffer "#chan")))
 
 ;;; erc-tests.el ends here

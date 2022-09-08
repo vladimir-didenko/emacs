@@ -5,6 +5,7 @@
 ;; Author: Roland McGrath <roland@gnu.org>
 ;; Keywords: maint
 ;; Package: emacs
+;; Obsolete-since: 29.1
 
 ;; This file is part of GNU Emacs.
 
@@ -28,8 +29,11 @@
 ;; Lisp source files in various useful ways.  To learn more, read the
 ;; source; if you're going to use this, you'd better be able to.
 
-;; The functions in this file have been largely superseded by
-;; loaddefs-gen.el.
+;; The functions in this file have been superseded by loaddefs-gen.el.
+
+;; Note: When removing this file, also remove the references to
+;; `make-directory-autoloads' and `update-directory-autoloads' in
+;; subr.el.
 
 ;;; Code:
 
@@ -266,12 +270,6 @@ if `autoload-timestamps' is non-nil, otherwise a fixed fake time is inserted)."
 	  (enable-local-eval nil))
       (hack-local-variables))
     (current-buffer)))
-
-(defalias 'autoload-insert-section-header
-  #'loaddefs-generate--insert-section-header)
-
-(defvar no-update-autoloads nil
-  "File local variable to prevent scanning this file for autoload cookies.")
 
 (defalias 'autoload-file-load-name #'loaddefs-generate--file-load-name)
 
@@ -715,7 +713,7 @@ autoload definitions.  When called from Lisp, use the existing
 value of `generated-autoload-file'.  If any Lisp file binds
 `generated-autoload-file' as a file-local variable, write its
 autoloads into the specified file instead."
-  (declare (obsolete make-directory-autoloads "28.1"))
+  (declare (obsolete loaddefs-generate "29.1"))
   (interactive "DUpdate autoloads from directory: ")
   (make-directory-autoloads
    dirs
@@ -735,6 +733,7 @@ its autoloads into the specified file instead.
 
 The function does NOT recursively descend into subdirectories of the
 directory or directories specified."
+  (declare (obsolete loaddefs-generate "29.1"))
   (interactive "DUpdate autoloads from directory: \nFWrite to file: ")
   (let* ((files-re (let ((tmp nil))
 		     (dolist (suf (get-load-suffixes))
@@ -908,7 +907,8 @@ should be non-nil)."
   (let ((args command-line-args-left))
     (batch-update-autoloads--summary args)
     (setq command-line-args-left nil)
-    (make-directory-autoloads args generated-autoload-file)))
+    (with-suppressed-warnings ((obsolete make-directory-autoloads))
+      (make-directory-autoloads args generated-autoload-file))))
 
 (provide 'autoload)
 

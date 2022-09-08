@@ -609,24 +609,24 @@ x_relative_mouse_position (struct frame *f, int *x, int *y)
 
   block_input ();
 
-  XQueryPointer (FRAME_X_DISPLAY (f),
-                 FRAME_DISPLAY_INFO (f)->root_window,
+  x_query_pointer (FRAME_X_DISPLAY (f),
+		   FRAME_DISPLAY_INFO (f)->root_window,
 
-                 /* The root window which contains the pointer.  */
-                 &root,
+		   /* The root window which contains the pointer.  */
+		   &root,
 
-                 /* Window pointer is on, not used  */
-                 &dummy_window,
+		   /* Window pointer is on, not used  */
+		   &dummy_window,
 
-                 /* The position on that root window.  */
-                 x, y,
+		   /* The position on that root window.  */
+		   x, y,
 
-                 /* x/y in dummy_window coordinates, not used.  */
-                 &dummy, &dummy,
+		   /* x/y in dummy_window coordinates, not used.  */
+		   &dummy, &dummy,
 
-                 /* Modifier keys and pointer buttons, about which
-                    we don't care.  */
-                 (unsigned int *) &dummy);
+		   /* Modifier keys and pointer buttons, about which
+		      we don't care.  */
+		   (unsigned int *) &dummy);
 
   XTranslateCoordinates (FRAME_X_DISPLAY (f),
 
@@ -838,21 +838,9 @@ x_set_inhibit_double_buffering (struct frame *f,
 
       block_input ();
       if (want_double_buffering != was_double_buffered)
-	{
-	  /* Force XftDraw etc to be recreated with the new double
-	     buffered drawable.  */
-	  font_drop_xrender_surfaces (f);
-
-	  /* Scroll bars decide whether or not to use a back buffer
-	     based on the value of this frame parameter, so destroy
-	     all scroll bars.  */
-#ifndef USE_TOOLKIT_SCROLL_BARS
-	  if (FRAME_TERMINAL (f)->condemn_scroll_bars_hook)
-	    FRAME_TERMINAL (f)->condemn_scroll_bars_hook (f);
-	  if (FRAME_TERMINAL (f)->judge_scroll_bars_hook)
-	    FRAME_TERMINAL (f)->judge_scroll_bars_hook (f);
-#endif
-	}
+	/* Force XftDraw etc to be recreated with the new double
+	   buffered drawable.  */
+	font_drop_xrender_surfaces (f);
       if (FRAME_X_DOUBLE_BUFFERED_P (f) && !want_double_buffering)
         tear_down_x_back_buffer (f);
       else if (!FRAME_X_DOUBLE_BUFFERED_P (f) && want_double_buffering)
@@ -975,6 +963,16 @@ x_set_parent_frame (struct frame *f, Lisp_Object new_value, Lisp_Object old_valu
 	  window = gtk_widget_get_window (FRAME_GTK_OUTER_WIDGET (f));
 	  gdk_x11_window_set_frame_sync_enabled (window, FALSE);
 	}
+#endif
+
+#if defined HAVE_XSYNC && !defined USE_GTK && defined HAVE_CLOCK_GETTIME
+      /* Frame synchronization can't be used in child frames since
+	 they are not directly managed by the compositing manager.
+	 Re-enabling vsync in former child frames also leads to
+	 inconsistent display.  In addition, they can only be updated
+	 outside of a toplevel frame.  */
+      FRAME_X_OUTPUT (f)->use_vsync_p = false;
+      FRAME_X_WAITING_FOR_DRAW (f) = false;
 #endif
       unblock_input ();
 
@@ -1203,20 +1201,6 @@ x_set_background_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
 #ifdef USE_GTK
       xg_set_background_color (f, bg);
 #endif
-
-#ifndef USE_TOOLKIT_SCROLL_BARS /* Turns out to be annoying with
-				   toolkit scroll bars.  */
-      {
-	Lisp_Object bar;
-	for (bar = FRAME_SCROLL_BARS (f);
-	     !NILP (bar);
-	     bar = XSCROLL_BAR (bar)->next)
-	  {
-	    Window window = XSCROLL_BAR (bar)->x_window;
-	    XSetWindowBackground (dpy, window, bg);
-	  }
-      }
-#endif /* USE_TOOLKIT_SCROLL_BARS */
 
       unblock_input ();
       update_face_from_frame_parameter (f, Qbackground_color, arg);
@@ -2431,6 +2415,47 @@ x_set_alpha (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
       FRAME_TERMINAL (f)->set_frame_alpha_hook (f);
       unblock_input ();
     }
+}
+
+static void
+x_set_use_frame_synchronization (struct frame *f, Lisp_Object arg,
+				 Lisp_Object oldval)
+{
+#if defined HAVE_XSYNC && !defined USE_GTK && defined HAVE_CLOCK_GETTIME
+  struct x_display_info *dpyinfo;
+  unsigned long bypass_compositor;
+
+  dpyinfo = FRAME_DISPLAY_INFO (f);
+
+  if (!NILP (arg) && FRAME_X_EXTENDED_COUNTER (f))
+    {
+      FRAME_X_OUTPUT (f)->use_vsync_p
+	= x_wm_supports (f, dpyinfo->Xatom_net_wm_frame_drawn);
+
+      /* At the same time, write the bypass compositor property to the
+	 outer window.  2 means to never bypass the compositor, as we
+	 need its cooperation for frame synchronization.  */
+      bypass_compositor = 2;
+      XChangeProperty (dpyinfo->display, FRAME_OUTER_WINDOW (f),
+		       dpyinfo->Xatom_net_wm_bypass_compositor,
+		       XA_CARDINAL, 32, PropModeReplace,
+		       (unsigned char *) &bypass_compositor, 1);
+    }
+  else
+    {
+      FRAME_X_OUTPUT (f)->use_vsync_p = false;
+
+      /* Remove the compositor bypass property from the outer
+	 window.  */
+      XDeleteProperty (dpyinfo->display, FRAME_OUTER_WINDOW (f),
+		       dpyinfo->Xatom_net_wm_bypass_compositor);
+    }
+
+  store_frame_param (f, Quse_frame_synchronization,
+		     FRAME_X_OUTPUT (f)->use_vsync_p ? Qt : Qnil);
+#else
+  store_frame_param (f, Quse_frame_synchronization, Qnil);
+#endif
 }
 
 
@@ -3767,14 +3792,11 @@ setup_xi_event_mask (struct frame *f)
   memset (m, 0, l);
 #endif
 
-  mask.deviceid = XIAllDevices;
-
-  XISetMask (m, XI_PropertyEvent);
-  XISetMask (m, XI_HierarchyChanged);
-  XISetMask (m, XI_DeviceChanged);
 #ifdef HAVE_XINPUT2_2
   if (FRAME_DISPLAY_INFO (f)->xi2_version >= 2)
     {
+      mask.deviceid = XIAllDevices;
+
       XISetMask (m, XI_TouchBegin);
       XISetMask (m, XI_TouchUpdate);
       XISetMask (m, XI_TouchEnd);
@@ -3786,11 +3808,12 @@ setup_xi_event_mask (struct frame *f)
 	  XISetMask (m, XI_GesturePinchEnd);
 	}
 #endif
+
+      XISelectEvents (FRAME_X_DISPLAY (f),
+		      FRAME_X_WINDOW (f),
+		      &mask, 1);
     }
 #endif
-  XISelectEvents (FRAME_X_DISPLAY (f),
-		  FRAME_X_WINDOW (f),
-		  &mask, 1);
 
 #ifndef HAVE_XINPUT2_1
   FRAME_X_OUTPUT (f)->xi_masks = selected;
@@ -3950,10 +3973,6 @@ x_window (struct frame *f, long window_prompting)
 
   XtManageChild (pane_widget);
   XtRealizeWidget (shell_widget);
-
-  if (FRAME_X_EMBEDDED_P (f))
-    XReparentWindow (FRAME_X_DISPLAY (f), XtWindow (shell_widget),
-		     f->output_data.x->parent_desc, 0, 0);
 
   FRAME_X_WINDOW (f) = XtWindow (frame_widget);
   initial_set_up_x_back_buffer (f);
@@ -4128,7 +4147,7 @@ x_window (struct frame *f)
   block_input ();
   FRAME_X_WINDOW (f)
     = XCreateWindow (FRAME_X_DISPLAY (f),
-		     f->output_data.x->parent_desc,
+		     FRAME_DISPLAY_INFO (f)->root_window,
 		     f->left_pos,
 		     f->top_pos,
 		     FRAME_PIXEL_WIDTH (f), FRAME_PIXEL_HEIGHT (f),
@@ -4954,6 +4973,12 @@ This function is an internal primitive--use `make-frame' instead.  */)
   x_window (f);
 #endif
 
+#ifndef USE_GTK
+  if (FRAME_X_EMBEDDED_P (f)
+      && !x_embed_frame (dpyinfo, f))
+    error ("The frame could not be embedded; does the embedder exist?");
+#endif
+
   x_icon (f, parms);
   x_make_gc (f);
 
@@ -5113,7 +5138,10 @@ This function is an internal primitive--use `make-frame' instead.  */)
     }
 
 #ifdef HAVE_XSYNC
-  if (dpyinfo->xsync_supported_p)
+  if (dpyinfo->xsync_supported_p
+      /* Frame synchronization isn't supported in child frames.  */
+      && NILP (parent_frame)
+      && !f->output_data.x->explicit_parent)
     {
 #ifndef HAVE_GTK3
       XSyncValue initial_value;
@@ -5148,11 +5176,20 @@ This function is an internal primitive--use `make-frame' instead.  */)
 		       (unsigned char *) &counters,
 		       ((STRINGP (value)
 			 && !strcmp (SSDATA (value), "extended")) ? 2 : 1));
+
+#if defined HAVE_XSYNCTRIGGERFENCE && !defined USE_GTK \
+  && defined HAVE_CLOCK_GETTIME
+      x_sync_init_fences (f);
+#endif
 #endif
     }
 #endif
 
   unblock_input ();
+
+  /* Set whether or not frame synchronization is enabled.  */
+  gui_default_parameter (f, parms, Quse_frame_synchronization, Qt,
+			 NULL, NULL, RES_TYPE_BOOLEAN);
 
   /* Works iff frame has been already mapped.  */
   gui_default_parameter (f, parms, Qskip_taskbar, Qnil,
@@ -6806,10 +6843,10 @@ selected frame's display.  */)
     return Qnil;
 
   block_input ();
-  XQueryPointer (FRAME_X_DISPLAY (f),
-		 FRAME_DISPLAY_INFO (f)->root_window,
-                 &root, &dummy_window, &x, &y, &dummy, &dummy,
-                 (unsigned int *) &dummy);
+  x_query_pointer (FRAME_X_DISPLAY (f),
+		   FRAME_DISPLAY_INFO (f)->root_window,
+		   &root, &dummy_window, &x, &y, &dummy, &dummy,
+		   (unsigned int *) &dummy);
   unblock_input ();
 
   return Fcons (make_fixnum (x), make_fixnum (y));
@@ -6834,17 +6871,16 @@ The coordinates X and Y are interpreted in pixels relative to a position
 #ifdef HAVE_XINPUT2
   int deviceid;
 
-  if (FRAME_DISPLAY_INFO (f)->supports_xi2)
+  deviceid = FRAME_DISPLAY_INFO (f)->client_pointer_device;
+
+  if (FRAME_DISPLAY_INFO (f)->supports_xi2
+      && deviceid != -1)
     {
-      XGrabServer (FRAME_X_DISPLAY (f));
-      if (XIGetClientPointer (FRAME_X_DISPLAY (f), FRAME_X_WINDOW (f),
-			      &deviceid))
-	{
-	  XIWarpPointer (FRAME_X_DISPLAY (f), deviceid, None,
-			 FRAME_DISPLAY_INFO (f)->root_window,
-			 0, 0, 0, 0, xval, yval);
-	}
-      XUngrabServer (FRAME_X_DISPLAY (f));
+      x_catch_errors_for_lisp (FRAME_DISPLAY_INFO (f));
+      XIWarpPointer (FRAME_X_DISPLAY (f), deviceid, None,
+		     FRAME_DISPLAY_INFO (f)->root_window,
+		     0, 0, 0, 0, xval, yval);
+      x_uncatch_errors_for_lisp (FRAME_DISPLAY_INFO (f));
     }
   else
 #endif
@@ -8365,8 +8401,8 @@ compute_tip_xy (struct frame *f, Lisp_Object parms, Lisp_Object dx,
       Lisp_Object frame, attributes, monitor, geometry;
 
       block_input ();
-      XQueryPointer (FRAME_X_DISPLAY (f), FRAME_DISPLAY_INFO (f)->root_window,
-		     &root, &child, root_x, root_y, &win_x, &win_y, &pmask);
+      x_query_pointer (FRAME_X_DISPLAY (f), FRAME_DISPLAY_INFO (f)->root_window,
+		       &root, &child, root_x, root_y, &win_x, &win_y, &pmask);
       unblock_input ();
 
       XSETFRAME (frame, f);
@@ -8681,7 +8717,8 @@ Text larger than the specified size is clipped.  */)
   if (!NILP (tip_frame) && FRAME_LIVE_P (XFRAME (tip_frame)))
     {
       if (FRAME_VISIBLE_P (XFRAME (tip_frame))
-	  && BASE_EQ (frame, tip_last_frame)
+	  && (FRAME_X_DISPLAY (XFRAME (frame))
+	      == FRAME_X_DISPLAY (XFRAME (tip_last_frame)))
 	  && !NILP (Fequal_including_properties (tip_last_string, string))
 	  && !NILP (Fequal (tip_last_parms, parms)))
 	{
@@ -9767,6 +9804,7 @@ frame_parm_handler x_frame_parm_handlers[] =
   x_set_override_redirect,
   gui_set_no_special_glyphs,
   x_set_alpha_background,
+  x_set_use_frame_synchronization,
   x_set_shaded,
 };
 

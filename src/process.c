@@ -1209,8 +1209,8 @@ If PROCESS has not yet exited or died, return 0.  */)
 
 DEFUN ("process-id", Fprocess_id, Sprocess_id, 1, 1, 0,
        doc: /* Return the process id of PROCESS.
-This is the pid of the external process which PROCESS uses or talks to.
-It is a fixnum if the value is small enough, otherwise a bignum.
+This is the pid of the external process which PROCESS uses or talks to,
+an integer.
 For a network, serial, and pipe connections, this value is nil.  */)
   (register Lisp_Object process)
 {
@@ -1243,14 +1243,31 @@ or t (process is stopped).  */)
   return XPROCESS (process)->command;
 }
 
-DEFUN ("process-tty-name", Fprocess_tty_name, Sprocess_tty_name, 1, 1, 0,
+DEFUN ("process-tty-name", Fprocess_tty_name, Sprocess_tty_name, 1, 2, 0,
        doc: /* Return the name of the terminal PROCESS uses, or nil if none.
 This is the terminal that the process itself reads and writes on,
-not the name of the pty that Emacs uses to talk with that terminal.  */)
-  (register Lisp_Object process)
+not the name of the pty that Emacs uses to talk with that terminal.
+
+If STREAM is nil, return the terminal name if any of PROCESS's
+standard streams use a terminal for communication.  If STREAM is one
+of `stdin', `stdout', or `stderr', return the name of the terminal
+PROCESS uses for that stream specifically, or nil if that stream
+communicates via a pipe.  */)
+  (register Lisp_Object process, Lisp_Object stream)
 {
   CHECK_PROCESS (process);
-  return XPROCESS (process)->tty_name;
+  register struct Lisp_Process *p = XPROCESS (process);
+
+  if (NILP (stream))
+    return p->tty_name;
+  else if (EQ (stream, Qstdin))
+    return p->pty_in ? p->tty_name : Qnil;
+  else if (EQ (stream, Qstdout))
+    return p->pty_out ? p->tty_name : Qnil;
+  else if (EQ (stream, Qstderr))
+    return p->pty_out && NILP (p->stderrproc) ? p->tty_name : Qnil;
+  else
+    signal_error ("Unknown stream", stream);
 }
 
 static void
@@ -1314,6 +1331,19 @@ set_process_filter_masks (struct Lisp_Process *p)
 	   /* Network or serial process not stopped:  */
 	   && !EQ (p->command, Qt))
     add_process_read_fd (p->infd);
+}
+
+static bool
+is_pty_from_symbol (Lisp_Object symbol)
+{
+  if (EQ (symbol, Qpty))
+    return true;
+  else if (EQ (symbol, Qpipe))
+    return false;
+  else if (NILP (symbol))
+    return !NILP (Vprocess_connection_type);
+  else
+    report_file_error ("Unknown connection type", symbol);
 }
 
 DEFUN ("set-process-filter", Fset_process_filter, Sset_process_filter,
@@ -1741,15 +1771,18 @@ signals to stop and continue a process.
 :connection-type TYPE -- TYPE is control type of device used to
 communicate with subprocesses.  Values are `pipe' to use a pipe, `pty'
 to use a pty, or nil to use the default specified through
-`process-connection-type'.
+`process-connection-type'.  If TYPE is a cons (INPUT . OUTPUT), then
+INPUT will be used for standard input and OUTPUT for standard output
+(and standard error if `:stderr' is nil).
 
 :filter FILTER -- Install FILTER as the process filter.
 
 :sentinel SENTINEL -- Install SENTINEL as the process sentinel.
 
 :stderr STDERR -- STDERR is either a buffer or a pipe process attached
-to the standard error of subprocess.  Specifying this implies
-`:connection-type' is set to `pipe'.  If STDERR is nil, standard error
+to the standard error of subprocess.  When specifying this, the
+subprocess's standard error will always communicate via a pipe, no
+matter the value of `:connection-type'.  If STDERR is nil, standard error
 is mixed with standard output and sent to BUFFER or FILTER.  (Note
 that specifying :stderr will create a new, separate (but associated)
 process, with its own filter and sentinel.  See
@@ -1845,21 +1878,19 @@ usage: (make-process &rest ARGS)  */)
   CHECK_TYPE (NILP (tem), Qnull, tem);
 
   tem = plist_get (contact, QCconnection_type);
-  if (EQ (tem, Qpty))
-    XPROCESS (proc)->pty_flag = true;
-  else if (EQ (tem, Qpipe))
-    XPROCESS (proc)->pty_flag = false;
-  else if (NILP (tem))
-    XPROCESS (proc)->pty_flag = !NILP (Vprocess_connection_type);
+  if (CONSP (tem))
+    {
+      XPROCESS (proc)->pty_in = is_pty_from_symbol (XCAR (tem));
+      XPROCESS (proc)->pty_out = is_pty_from_symbol (XCDR (tem));
+    }
   else
-    report_file_error ("Unknown connection type", tem);
+    {
+      XPROCESS (proc)->pty_in = XPROCESS (proc)->pty_out =
+	is_pty_from_symbol (tem);
+    }
 
   if (!NILP (stderrproc))
-    {
-      pset_stderrproc (XPROCESS (proc), stderrproc);
-
-      XPROCESS (proc)->pty_flag = false;
-    }
+    pset_stderrproc (XPROCESS (proc), stderrproc);
 
 #ifdef HAVE_GNUTLS
   /* AKA GNUTLS_INITSTAGE(proc).  */
@@ -2099,66 +2130,80 @@ static void
 create_process (Lisp_Object process, char **new_argv, Lisp_Object current_dir)
 {
   struct Lisp_Process *p = XPROCESS (process);
-  int inchannel, outchannel;
+  int inchannel = -1, outchannel = -1;
   pid_t pid = -1;
   int vfork_errno;
   int forkin, forkout, forkerr = -1;
-  bool pty_flag = 0;
+  bool pty_in = false, pty_out = false;
   char pty_name[PTY_NAME_SIZE];
   Lisp_Object lisp_pty_name = Qnil;
+  int ptychannel = -1, pty_tty = -1;
   sigset_t oldset;
 
   /* Ensure that the SIGCHLD handler can notify
      `wait_reading_process_output'.  */
   child_signal_init ();
 
-  inchannel = outchannel = -1;
+  if (p->pty_in || p->pty_out)
+    ptychannel = allocate_pty (pty_name);
 
-  if (p->pty_flag)
-    outchannel = inchannel = allocate_pty (pty_name);
-
-  if (inchannel >= 0)
+  if (ptychannel >= 0)
     {
-      p->open_fd[READ_FROM_SUBPROCESS] = inchannel;
 #if ! defined (USG) || defined (USG_SUBTTY_WORKS)
       /* On most USG systems it does not work to open the pty's tty here,
 	 then close it and reopen it in the child.  */
       /* Don't let this terminal become our controlling terminal
 	 (in case we don't have one).  */
-      forkout = forkin = emacs_open (pty_name, O_RDWR | O_NOCTTY, 0);
-      if (forkin < 0)
+      pty_tty = emacs_open (pty_name, O_RDWR | O_NOCTTY, 0);
+      if (pty_tty < 0)
 	report_file_error ("Opening pty", Qnil);
-      p->open_fd[SUBPROCESS_STDIN] = forkin;
-#else
-      forkin = forkout = -1;
 #endif /* not USG, or USG_SUBTTY_WORKS */
-      pty_flag = 1;
+      pty_in = p->pty_in;
+      pty_out = p->pty_out;
       lisp_pty_name = build_string (pty_name);
+    }
+
+  /* Set up stdin for the child process.  */
+  if (ptychannel >= 0 && p->pty_in)
+    {
+      p->open_fd[SUBPROCESS_STDIN] = forkin = pty_tty;
+      outchannel = ptychannel;
     }
   else
     {
-      if (emacs_pipe (p->open_fd + SUBPROCESS_STDIN) != 0
-	  || emacs_pipe (p->open_fd + READ_FROM_SUBPROCESS) != 0)
+      if (emacs_pipe (p->open_fd + SUBPROCESS_STDIN) != 0)
 	report_file_error ("Creating pipe", Qnil);
       forkin = p->open_fd[SUBPROCESS_STDIN];
       outchannel = p->open_fd[WRITE_TO_SUBPROCESS];
+    }
+
+  /* Set up stdout for the child process.  */
+  if (ptychannel >= 0 && p->pty_out)
+    {
+      forkout = pty_tty;
+      p->open_fd[READ_FROM_SUBPROCESS] = inchannel = ptychannel;
+    }
+  else
+    {
+      if (emacs_pipe (p->open_fd + READ_FROM_SUBPROCESS) != 0)
+	report_file_error ("Creating pipe", Qnil);
       inchannel = p->open_fd[READ_FROM_SUBPROCESS];
       forkout = p->open_fd[SUBPROCESS_STDOUT];
 
 #if defined(GNU_LINUX) && defined(F_SETPIPE_SZ)
       fcntl (inchannel, F_SETPIPE_SZ, read_process_output_max);
 #endif
+    }
 
-      if (!NILP (p->stderrproc))
-	{
-	  struct Lisp_Process *pp = XPROCESS (p->stderrproc);
+  if (!NILP (p->stderrproc))
+    {
+      struct Lisp_Process *pp = XPROCESS (p->stderrproc);
 
-	  forkerr = pp->open_fd[SUBPROCESS_STDOUT];
+      forkerr = pp->open_fd[SUBPROCESS_STDOUT];
 
-	  /* Close unnecessary file descriptors.  */
-	  close_process_fd (&pp->open_fd[WRITE_TO_SUBPROCESS]);
-	  close_process_fd (&pp->open_fd[SUBPROCESS_STDIN]);
-	}
+      /* Close unnecessary file descriptors.  */
+      close_process_fd (&pp->open_fd[WRITE_TO_SUBPROCESS]);
+      close_process_fd (&pp->open_fd[SUBPROCESS_STDIN]);
     }
 
   if (FD_SETSIZE <= inchannel || FD_SETSIZE <= outchannel)
@@ -2183,7 +2228,8 @@ create_process (Lisp_Object process, char **new_argv, Lisp_Object current_dir)
      we just reopen the device (see emacs_get_tty_pgrp) as this is
      more portable (see USG_SUBTTY_WORKS above).  */
 
-  p->pty_flag = pty_flag;
+  p->pty_in = pty_in;
+  p->pty_out = pty_out;
   pset_status (p, Qrun);
 
   if (!EQ (p->command, Qt)
@@ -2199,13 +2245,15 @@ create_process (Lisp_Object process, char **new_argv, Lisp_Object current_dir)
   block_input ();
   block_child_signal (&oldset);
 
-  pty_flag = p->pty_flag;
-  eassert (pty_flag == ! NILP (lisp_pty_name));
+  pty_in = p->pty_in;
+  pty_out = p->pty_out;
+  eassert ((pty_in || pty_out) == ! NILP (lisp_pty_name));
 
   vfork_errno
     = emacs_spawn (&pid, forkin, forkout, forkerr, new_argv, env,
                    SSDATA (current_dir),
-                   pty_flag ? SSDATA (lisp_pty_name) : NULL, &oldset);
+                   pty_in || pty_out ? SSDATA (lisp_pty_name) : NULL,
+                   pty_in, pty_out, &oldset);
 
   eassert ((vfork_errno == 0) == (0 < pid));
 
@@ -2263,7 +2311,7 @@ create_pty (Lisp_Object process)
 {
   struct Lisp_Process *p = XPROCESS (process);
   char pty_name[PTY_NAME_SIZE];
-  int pty_fd = !p->pty_flag ? -1 : allocate_pty (pty_name);
+  int pty_fd = !(p->pty_in || p->pty_out) ? -1 : allocate_pty (pty_name);
 
   if (pty_fd >= 0)
     {
@@ -2301,7 +2349,7 @@ create_pty (Lisp_Object process)
 	 we just reopen the device (see emacs_get_tty_pgrp) as this is
 	 more portable (see USG_SUBTTY_WORKS above).  */
 
-      p->pty_flag = 1;
+      p->pty_in = p->pty_out = true;
       pset_status (p, Qrun);
       setup_process_coding_systems (process);
 
@@ -2412,7 +2460,7 @@ usage:  (make-pipe-process &rest ARGS)  */)
     p->kill_without_query = 1;
   if (tem = plist_get (contact, QCstop), !NILP (tem))
     pset_command (p, Qt);
-  eassert (! p->pty_flag);
+  eassert (! p->pty_in && ! p->pty_out);
 
   if (!EQ (p->command, Qt)
       && !EQ (p->filter, Qt))
@@ -3147,7 +3195,7 @@ usage:  (make-serial-process &rest ARGS)  */)
     p->kill_without_query = 1;
   if (tem = plist_get (contact, QCstop), !NILP (tem))
     pset_command (p, Qt);
-  eassert (! p->pty_flag);
+  eassert (! p->pty_in && ! p->pty_out);
 
   if (!EQ (p->command, Qt)
       && !EQ (p->filter, Qt))
@@ -4641,15 +4689,20 @@ network_lookup_address_info_1 (Lisp_Object host, const char *service,
 }
 
 DEFUN ("network-lookup-address-info", Fnetwork_lookup_address_info,
-       Snetwork_lookup_address_info, 1, 2, 0,
+       Snetwork_lookup_address_info, 1, 3, 0,
        doc: /* Look up Internet Protocol (IP) address info of NAME.
-Optional parameter FAMILY controls whether to look up IPv4 or IPv6
+Optional argument FAMILY controls whether to look up IPv4 or IPv6
 addresses.  The default of nil means both, symbol `ipv4' means IPv4
-only, symbol `ipv6' means IPv6 only.  Returns a list of addresses, or
-nil if none were found.  Each address is a vector of integers, as per
-the description of ADDRESS in `make-network-process'.  In case of
-error displays the error message.  */)
-     (Lisp_Object name, Lisp_Object family)
+only, symbol `ipv6' means IPv6 only.
+Optional argument HINTS allows specifying the hints passed to the
+underlying library call.  The only supported value is `numeric', which
+means treat NAME as a numeric IP address.  This also suppresses DNS
+traffic.
+Return a list of addresses, or nil if none were found.  Each address
+is a vector of integers, as per the description of ADDRESS in
+`make-network-process'.  In case of error log the error message
+returned from the lookup.  */)
+  (Lisp_Object name, Lisp_Object family, Lisp_Object hint)
 {
   Lisp_Object addresses = Qnil;
   Lisp_Object msg = Qnil;
@@ -4667,8 +4720,13 @@ error displays the error message.  */)
     hints.ai_family = AF_INET6;
 #endif
   else
-    error ("Unsupported lookup type");
+    error ("Unsupported family");
   hints.ai_socktype = SOCK_DGRAM;
+
+  if (EQ (hint, Qnumeric))
+    hints.ai_flags = AI_NUMERICHOST;
+  else if (!NILP (hint))
+    error ("Unsupported hints value");
 
   msg = network_lookup_address_info_1 (name, NULL, &hints, &res);
   if (!EQ (msg, Qt))
@@ -6798,7 +6856,7 @@ process_send_signal (Lisp_Object process, int signo, Lisp_Object current_group,
     error ("Process %s is not active",
 	   SDATA (p->name));
 
-  if (!p->pty_flag)
+  if (! p->pty_in)
     current_group = Qnil;
 
   /* If we are using pgrps, get a pgrp number and make it negative.  */
@@ -7167,7 +7225,7 @@ process has been transmitted to the serial port.  */)
       send_process (proc, "", 0, Qnil);
     }
 
-  if (XPROCESS (proc)->pty_flag)
+  if (XPROCESS (proc)->pty_in)
     send_process (proc, "\004", 1, Qnil);
   else if (EQ (XPROCESS (proc)->type, Qserial))
     {
@@ -7713,46 +7771,6 @@ DEFUN ("process-coding-system",
   CHECK_PROCESS (process);
   return Fcons (XPROCESS (process)->decode_coding_system,
 		XPROCESS (process)->encode_coding_system);
-}
-
-DEFUN ("set-process-filter-multibyte", Fset_process_filter_multibyte,
-       Sset_process_filter_multibyte, 2, 2, 0,
-       doc: /* Set multibyteness of the strings given to PROCESS's filter.
-If FLAG is non-nil, the filter is given multibyte strings.
-If FLAG is nil, the filter is given unibyte strings.  In this case,
-all character code conversion except for end-of-line conversion is
-suppressed.  */)
-  (Lisp_Object process, Lisp_Object flag)
-{
-  CHECK_PROCESS (process);
-
-  struct Lisp_Process *p = XPROCESS (process);
-  if (NILP (flag))
-    pset_decode_coding_system
-      (p, raw_text_coding_system (p->decode_coding_system));
-
-  /* If the sockets haven't been set up yet, the final setup part of
-     this will be called asynchronously. */
-  if (p->infd < 0 || p->outfd < 0)
-    return Qnil;
-
-  setup_process_coding_systems (process);
-
-  return Qnil;
-}
-
-DEFUN ("process-filter-multibyte-p", Fprocess_filter_multibyte_p,
-       Sprocess_filter_multibyte_p, 1, 1, 0,
-       doc: /* Return t if a multibyte string is given to PROCESS's filter.*/)
-  (Lisp_Object process)
-{
-  CHECK_PROCESS (process);
-  struct Lisp_Process *p = XPROCESS (process);
-  if (p->infd < 0)
-    return Qnil;
-  eassert (p->infd < FD_SETSIZE);
-  struct coding_system *coding = proc_decode_coding_system[p->infd];
-  return (CODING_FOR_UNIBYTE (coding) ? Qnil : Qt);
 }
 
 
@@ -8515,6 +8533,7 @@ syms_of_process (void)
 #ifdef AF_INET6
   DEFSYM (Qipv6, "ipv6");
 #endif
+  DEFSYM (Qnumeric, "numeric");
   DEFSYM (Qdatagram, "datagram");
   DEFSYM (Qseqpacket, "seqpacket");
 
@@ -8749,8 +8768,6 @@ sentinel or a process filter function has an error.  */);
   defsubr (&Sinternal_default_process_filter);
   defsubr (&Sset_process_coding_system);
   defsubr (&Sprocess_coding_system);
-  defsubr (&Sset_process_filter_multibyte);
-  defsubr (&Sprocess_filter_multibyte_p);
 
  {
    Lisp_Object subfeatures = Qnil;

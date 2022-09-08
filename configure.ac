@@ -2155,17 +2155,16 @@ AC_SUBST([NS_OBJ])
 AC_SUBST([NS_OBJC_OBJ])
 
 if test "${HAVE_NS}" = yes; then
+  AC_LANG_PUSH([Objective C])
   AC_CACHE_CHECK(
     [if the Objective C compiler supports instancetype],
     [emacs_cv_objc_instancetype],
-    [AC_LANG_PUSH([Objective C])
-     AC_COMPILE_IFELSE(
+    [AC_COMPILE_IFELSE(
        [AC_LANG_SOURCE([[@interface Test
                           + (instancetype)test;
                           @end]])],
        [emacs_cv_objc_instancetype=yes],
-       [emacs_cv_objc_instancetype=no])
-     AC_LANG_POP([Objective C])])
+       [emacs_cv_objc_instancetype=no])])
 
   if test x$emacs_cv_objc_instancetype = xyes ; then
     AC_DEFINE([NATIVE_OBJC_INSTANCETYPE], [1],
@@ -2175,16 +2174,15 @@ if test "${HAVE_NS}" = yes; then
   AC_CACHE_CHECK(
     [if the Objective C compiler defaults to C99],
     [emacs_cv_objc_c99],
-    [AC_LANG_PUSH([Objective C])
-     AC_COMPILE_IFELSE(
+    [AC_COMPILE_IFELSE(
        [AC_LANG_PROGRAM([], [[for (int i = 0;;);]])],
        [emacs_cv_objc_c99=yes],
-       [emacs_cv_objc_c99=no])
-     AC_LANG_POP([Objective C])])
+       [emacs_cv_objc_c99=no])])
 
-   if test x$emacs_cv_objc_c99 = xno ; then
-     GNU_OBJC_CFLAGS="$GNU_OBJC_CFLAGS -std=c99"
-   fi
+  if test x$emacs_cv_objc_c99 = xno ; then
+    GNU_OBJC_CFLAGS="$GNU_OBJC_CFLAGS -std=c99"
+  fi
+  AC_LANG_POP([Objective C])
 fi
 
 HAVE_BE_APP=no
@@ -2775,12 +2773,9 @@ if test "${with_webp}" != "no"; then
    || test "${HAVE_W32}" = "yes" || test "${HAVE_NS}" = "yes" \
    || test "${HAVE_BE_APP}" = "yes" || test "${HAVE_PGTK}" = "yes"; then
       WEBP_REQUIRED=0.6.0
-      WEBP_MODULE="libwebp >= $WEBP_REQUIRED"
+      WEBP_MODULE="libwebpdemux >= $WEBP_REQUIRED"
 
       EMACS_CHECK_MODULES([WEBP], [$WEBP_MODULE])
-      if test "$HAVE_WEBP" = "yes"; then
-        WEBP_LIBS="-lwebp -lwebpdemux"
-      fi
       AC_SUBST([WEBP_CFLAGS])
       AC_SUBST([WEBP_LIBS])
    fi
@@ -4240,8 +4235,8 @@ if test "${with_native_compilation}" != "no"; then
         if test -n "`$BREW --prefix --installed libgccjit 2>/dev/null`"; then
           MAC_CFLAGS="-I$(dirname $($BREW ls -v libgccjit | \
                                                 grep libgccjit.h))"
-          MAC_LIBS="-L$(dirname $($BREW ls -v libgccjit| \
-                                            grep -E 'libgccjit\.(so|dylib)$'))"
+          MAC_LIBS="-L$(dirname $($BREW ls -v libgccjit \
+                                  | grep -m1 -E 'libgccjit\.(so|dylib)$'))"
         fi
       fi
 
@@ -4675,6 +4670,10 @@ if test "${HAVE_X11}" = "yes"; then
     AC_DEFINE([HAVE_XSYNC], [1],
       [Define to 1 if the X Synchronization Extension is available.])
     XSYNC_LIBS="-lXext"
+    OLDLIBS="$LIBS"
+    LIBS="-lXext $LIBS" # Set this temporarily for AC_CHECK_FUNC
+    AC_CHECK_FUNCS([XSyncTriggerFence]) # Check for version 3.1
+    LIBS="$OLDLIBS"
   fi
 fi
 AC_SUBST([XSYNC_LIBS])

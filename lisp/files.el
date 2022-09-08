@@ -396,19 +396,24 @@ add a final newline, whenever you save a file that really needs one."
      ;; transformed to "/2" on DOS/Windows.
      ,(concat temporary-file-directory "\\2") t))
   "Transforms to apply to buffer file name before making auto-save file name.
+
 Each transform is a list (REGEXP REPLACEMENT UNIQUIFY):
+
 REGEXP is a regular expression to match against the file name.
 If it matches, `replace-match' is used to replace the
 matching part with REPLACEMENT.
-If the optional element UNIQUIFY is non-nil, the auto-save file name is
-constructed by taking the directory part of the replaced file-name,
-concatenated with the buffer file name with all directory separators
-changed to `!' to prevent clashes.  This will not work
-correctly if your filesystem truncates the resulting name.
-If UNIQUIFY is one of the members of `secure-hash-algorithms',
-Emacs constructs the nondirectory part of the auto-save file name
-by applying that `secure-hash' to the buffer file name.  This
-avoids any risk of excessively long file names.
+
+If the optional element UNIQUIFY is nil, Emacs does not check for
+file name clashes, so using that is not recommended.  If UNIQUIFY
+is one of the members of `secure-hash-algorithms', Emacs
+constructs the nondirectory part of the auto-save file name by
+applying that `secure-hash' to the buffer file name.  This avoids
+any risk of excessively long file names.  Finally, if UNIQUIFY is
+any other value the auto-save file name is constructed by taking
+the directory part of the replaced file-name, concatenated with
+the buffer file name with all directory separators changed to `!'
+to prevent clashes.  This will not work correctly if your
+filesystem truncates the resulting name.
 
 All the transforms in the list are tried, in the order they are listed.
 When one transform applies, its result is final;
@@ -421,8 +426,13 @@ editing a remote file.
 On MS-DOS filesystems without long names this variable is always
 ignored."
   :group 'auto-save
-  :type '(repeat (list (regexp :tag "Regexp") (string :tag "Replacement")
-					   (boolean :tag "Uniquify")))
+  :type `(repeat (list (regexp :tag "Regexp")
+                       (string :tag "Replacement")
+                       (choice
+		        (const :tag "Uniquify" t)
+                        ,@(mapcar (lambda (algo)
+                                    (list 'const algo))
+                                  (secure-hash-algorithms)))))
   :initialize 'custom-initialize-delay
   :version "21.1")
 
@@ -577,8 +587,6 @@ location of point in the current buffer."
 
 ;;;It is not useful to make this a local variable.
 ;;;(put 'find-file-not-found-functions 'permanent-local t)
-(define-obsolete-variable-alias 'find-file-not-found-hooks
-    'find-file-not-found-functions "22.1")
 (defvar find-file-not-found-functions nil
   "List of functions to be called for `find-file' on nonexistent file.
 These functions are called as soon as the error is detected.
@@ -843,15 +851,20 @@ resulting list of directory names.  For an empty path element (i.e.,
 a leading or trailing separator, or two adjacent separators), return
 nil (meaning `default-directory') as the associated list element."
   (when (stringp search-path)
-    (let ((spath (substitute-env-vars search-path)))
+    (let ((spath (substitute-env-vars search-path))
+          (double-slash-special-p
+           (memq system-type '(windows-nt cygwin ms-dos))))
       (mapcar (lambda (f)
                 (if (equal "" f) nil
                   (let ((dir (file-name-as-directory f)))
                     ;; Previous implementation used `substitute-in-file-name'
-                    ;; which collapse multiple "/" in front.  Do the same for
-                    ;; backward compatibility.
-                    (if (string-match "\\`/+" dir)
-                        (substring dir (1- (match-end 0))) dir))))
+                    ;; which collapses multiple "/" in front, while
+                    ;; preserving double slash where it matters.  Do
+                    ;; the same for backward compatibility.
+                    (if (string-match "\\`//+" dir)
+                        (substring dir (- (match-end 0)
+                                          (if double-slash-special-p 2 1)))
+                      dir))))
               (split-string spath path-separator)))))
 
 (defun cd-absolute (dir)
@@ -1428,7 +1441,7 @@ containing it, until no links are left at any level.
 	    ;; If these are equal, we have the (or a) root directory.
 	    (or (string= dir dirfile)
 		(and (file-name-case-insensitive-p dir)
-		     (eq (compare-strings dir 0 nil dirfile 0 nil t) t))
+		     (string-equal-ignore-case dir dirfile))
 		;; If this is the same dir we last got the truename for,
 		;; save time--don't recalculate.
 		(if (assoc dir (car prev-dirs))
@@ -2952,7 +2965,7 @@ ARC\\|ZIP\\|LZH\\|LHA\\|ZOO\\|[JEW]AR\\|XPI\\|RAR\\|CBR\\|7Z\\|SQUASHFS\\)\\'" .
      ("\\.js[mx]?\\'" . javascript-mode)
      ;; https://en.wikipedia.org/wiki/.har
      ("\\.har\\'" . javascript-mode)
-     ("\\.json\\'" . javascript-mode)
+     ("\\.json\\'" . js-json-mode)
      ("\\.[ds]?va?h?\\'" . verilog-mode)
      ("\\.by\\'" . bovine-grammar-mode)
      ("\\.wy\\'" . wisent-grammar-mode)
@@ -3850,10 +3863,8 @@ DIR-NAME is the name of the associated directory.  Otherwise it is nil."
 	(cond ((memq var ignored-local-variables)
 	       ;; Ignore any variable in `ignored-local-variables'.
 	       nil)
-              ((seq-some (lambda (elem)
-                           (and (eq (car elem) var)
-                                (eq (cdr elem) val)))
-                         ignored-local-variable-values)
+              ;; Ignore variables with the specified values.
+              ((member elt ignored-local-variable-values)
                nil)
 	      ;; Obey `enable-local-eval'.
 	      ((eq var 'eval)
@@ -4448,7 +4459,8 @@ This function returns either:
                   ;; The entry MTIME should match the most recent
                   ;; MTIME among matching files.
                   (and cached-files
-		       (equal (nth 2 dir-elt)
+		       (time-equal-p
+			      (nth 2 dir-elt)
 			      (let ((latest 0))
 				(dolist (f cached-files latest)
 				  (let ((f-time
@@ -5119,14 +5131,16 @@ extension, the value is \"\"."
             "")))))
 
 (defun file-name-with-extension (filename extension)
-  "Set the EXTENSION of a FILENAME.
+  "Return FILENAME modified to have the specified EXTENSION.
 The extension (in a file name) is the part that begins with the last \".\".
+This function removes any existing extension from FILENAME, and then
+appends EXTENSION to it.
 
-Trims a leading dot from the EXTENSION so that either \"foo\" or
-\".foo\" can be given.
+EXTENSION may include the leading dot; if it doesn't, this function
+will provide it.
 
-Errors if the FILENAME or EXTENSION are empty, or if the given
-FILENAME has the format of a directory.
+It is an error if FILENAME or EXTENSION is empty, or if FILENAME
+is in the form of a directory name according to `directory-name-p'.
 
 See also `file-name-sans-extension'."
   (let ((extn (string-trim-left extension "[.]")))
@@ -5182,7 +5196,9 @@ to `default-directory', and the result will also be relative."
     (cond
      ;; filename is at top-level, therefore no parent
      ((or (null parent)
-          (file-equal-p parent expanded-filename))
+          ;; `equal' is enough, we don't need to resolve symlinks here
+          ;; with `file-equal-p', also for performance
+          (equal parent expanded-filename))
       nil)
      ;; filename is relative, return relative parent
      ((not (file-name-absolute-p filename))
@@ -5459,21 +5475,17 @@ on a DOS/Windows machine, it returns FILENAME in expanded form."
 	     ;; Test for different drive letters
 	     (not (eq t (compare-strings filename 0 2 directory 0 2 fold-case)))
 	     ;; Test for UNCs on different servers
-	     (not (eq t (compare-strings
-			 (progn
-			   (if (string-match "\\`//\\([^:/]+\\)/" filename)
-			       (match-string 1 filename)
-			     ;; Windows file names cannot have ? in
-			     ;; them, so use that to detect when
-			     ;; neither FILENAME nor DIRECTORY is a
-			     ;; UNC.
-			     "?"))
-			 0 nil
-			 (progn
-			   (if (string-match "\\`//\\([^:/]+\\)/" directory)
-			       (match-string 1 directory)
-			     "?"))
-			 0 nil t)))))
+	     (not (string-equal-ignore-case
+		   (if (string-match "\\`//\\([^:/]+\\)/" filename)
+		       (match-string 1 filename)
+		     ;; Windows file names cannot have ? in
+		     ;; them, so use that to detect when
+		     ;; neither FILENAME nor DIRECTORY is a
+		     ;; UNC.
+		     "?")
+		   (if (string-match "\\`//\\([^:/]+\\)/" directory)
+		       (match-string 1 directory)
+		     "?")))))
 	   ;; Test for different remote file system identification
 	   (not (equal fremote dremote)))
 	  filename
@@ -6622,9 +6634,14 @@ preserve markers and overlays, at the price of being slower."
   ;; interface, but leaving the programmatic interface the same.
   (interactive (list (not current-prefix-arg)))
   (let ((revert-buffer-in-progress-p t)
-        (revert-buffer-preserve-modes preserve-modes))
+        (revert-buffer-preserve-modes preserve-modes)
+        (state (and (boundp 'read-only-mode--state)
+                    (list read-only-mode--state))))
     (funcall (or revert-buffer-function #'revert-buffer--default)
-             ignore-auto noconfirm)))
+             ignore-auto noconfirm)
+    (when state
+      (setq buffer-read-only (car state))
+      (setq-local read-only-mode--state (car state)))))
 
 (defun revert-buffer--default (ignore-auto noconfirm)
   "Default function for `revert-buffer'.
@@ -8238,6 +8255,7 @@ arguments as the running Emacs)."
         (_
          (apply operation arguments))))))
 
+;;;###autoload
 (defsubst file-name-quoted-p (name &optional top)
   "Whether NAME is quoted with prefix \"/:\".
 If NAME is a remote file name and TOP is nil, check the local part of NAME."

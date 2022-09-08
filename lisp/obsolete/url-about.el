@@ -1,8 +1,9 @@
 ;;; url-about.el --- Show internal URLs  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2001, 2004-2022 Free Software Foundation, Inc.
+;; Copyright (C) 2001-2022 Free Software Foundation, Inc.
 
 ;; Keywords: comm, data, processes, hypermedia
+;; Obsolete-since: 29.1
 
 ;; This file is part of GNU Emacs.
 ;;
@@ -31,14 +32,14 @@
   (or (get 'url-extension-protocols 'probed)
       (mapc (lambda (s) (url-scheme-get-property s 'name))
 	    (or (get 'url-extension-protocols 'schemes)
-		(let ((schemes '("info" "man" "rlogin" "telnet"
+                (let ((schemes '("info" "man" "telnet"
 				 "tn3270" "data" "snews")))
 		  (mapc (lambda (d)
 			  (mapc (lambda (f)
 				  (if (string-match "url-\\(.*\\).el$" f)
 				      (push (match-string 1 f) schemes)))
 				(directory-files d nil "\\`url-.*\\.el\\'")))
-			load-path)
+                        (seq-filter #'file-exists-p load-path))
 		  (put 'url-extension-protocols 'schemes schemes)
 		  schemes)))))
 

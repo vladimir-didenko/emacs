@@ -301,6 +301,7 @@ packages in `package-directory-list'."
   :type 'directory
   :initialize #'custom-initialize-delay
   :risky t
+  :group 'applications
   :version "24.1")
 
 ;;;###autoload
@@ -319,6 +320,7 @@ These directories contain packages intended for system-wide; in
 contrast, `package-user-dir' contains packages for personal use."
   :type '(repeat directory)
   :initialize #'custom-initialize-delay
+  :group 'applications
   :risky t
   :version "24.1")
 
@@ -627,6 +629,7 @@ called via `package-activate-all'.  To change which packages are
 loaded and/or activated, customize `package-load-list'.")
 (put 'package-alist 'risky-local-variable t)
 
+;;;###autoload
 (defvar package-activated-list nil
   ;; FIXME: This should implicitly include all builtin packages.
   "List of the names of currently activated packages.")
@@ -785,10 +788,14 @@ byte-compilation of the new package to fail."
   (with-demoted-errors "Error in package--load-files-for-activation: %s"
     (let* (result
            (dir (package-desc-dir pkg-desc))
-           (load-path-sans-dir
-            (cl-remove-if (apply-partially #'string= dir)
-                          (or (bound-and-true-p find-function-source-path)
-                              load-path)))
+           ;; A previous implementation would skip `dir' itself.
+           ;; However, in normal use reloading from the same directory
+           ;; never happens anyway, while in certain cases external to
+           ;; Emacs a package in the same directory not necessary
+           ;; stays byte-identical, e.g.  during development.  Just
+           ;; don't special-case `dir'.
+           (effective-path (or (bound-and-true-p find-library-source-path)
+                               load-path))
            (files (directory-files-recursively dir "\\`[^\\.].*\\.el\\'"))
            (history (mapcar #'file-truename
                             (cl-remove-if-not #'stringp
@@ -796,8 +803,19 @@ byte-compilation of the new package to fail."
       (dolist (file files)
         (when-let ((library (package--library-stem
                              (file-relative-name file dir)))
-                   (canonical (locate-library library nil load-path-sans-dir))
-                   (found (member (file-truename canonical) history))
+                   (canonical (locate-library library nil effective-path))
+                   (truename (file-truename canonical))
+                   ;; Normally, all files in a package are compiled by
+                   ;; now, but don't assume that.  E.g. different
+                   ;; versions can add or remove `no-byte-compile'.
+                   (altname (if (string-suffix-p ".el" truename)
+                                (replace-regexp-in-string
+                                 "\\.el\\'" ".elc" truename t)
+                              (replace-regexp-in-string
+                               "\\.elc\\'" ".el" truename t)))
+                   (found (or (member truename history)
+                              (and (not (string= altname truename))
+                                   (member altname history))))
                    (recent-index (length found)))
           (unless (equal (file-name-base library)
                          (format "%s-autoloads" (package-desc-name pkg-desc)))
@@ -1006,7 +1024,9 @@ untar into a directory named DIR; otherwise, signal an error."
   (unless (file-exists-p file)
     (require 'autoload)
     (let ((coding-system-for-write 'utf-8-emacs-unix))
-      (write-region (autoload-rubric file "package" nil) nil file nil 'silent)))
+      (with-suppressed-warnings ((obsolete autoload-rubric))
+        (write-region (autoload-rubric file "package" nil)
+                      nil file nil 'silent))))
   file)
 
 (defvar autoload-timestamps)
@@ -1310,7 +1330,7 @@ errors signaled by ERROR-FORM or by BODY).
 
 (cl-defun package--with-response-buffer-1 (url body &key async file error-function noerror &allow-other-keys)
   (if (string-match-p "\\`https?:" url)
-        (let ((url (concat url file)))
+        (let ((url (url-expand-file-name file url)))
           (if async
               (package--unless-error #'ignore
                 (url-retrieve
@@ -1645,6 +1665,7 @@ The variable `package-load-list' controls which packages to load."
       (require 'package)
       (package--activate-all)))))
 
+;;;###autoload
 (defun package--activate-all ()
   (dolist (elt (package--alist))
     (condition-case err
@@ -2066,7 +2087,10 @@ If PACKAGE is a `package-desc' object, MIN-VERSION is ignored."
          package-activated-list)
     ;; We used the quickstart: make it possible to use package-installed-p
     ;; even before package is fully initialized.
-    (memq package package-activated-list))
+    (or
+     (memq package package-activated-list)
+     ;; Also check built-in packages.
+     (package-built-in-p package min-version)))
    (t
     (or
      (let ((pkg-descs (cdr (assq package (package--alist)))))
@@ -3506,7 +3530,7 @@ If optional arg BUTTON is non-nil, describe its associated package."
         (let ((place (cdr desc))
               (out (copy-sequence (car desc))))
           (add-text-properties place (1+ place)
-                               '(face (bold font-lock-warning-face))
+                               '(face help-key-binding)
                                out)
           out))
     (package--prettify-quick-help-key (cons desc 0))))
@@ -4271,6 +4295,7 @@ activations need to be changed, such as when `package-load-list' is modified."
   (locate-user-emacs-file "package-quickstart.el")
   "Location of the file used to speed up activation of packages at startup."
   :type 'file
+  :group 'applications
   :initialize #'custom-initialize-delay
   :version "27.1")
 

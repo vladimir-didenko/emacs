@@ -53,7 +53,8 @@
 ;; - responsible-p (file)                          OK
 ;; - receive-file (file rev)                       NOT NEEDED
 ;; - unregister (file)                             OK
-;; * checkin (files rev comment)                   OK
+;; * checkin (files comment rev)                   OK
+;; - checkin-patch (patch-string comment)          OK
 ;; * find-revision (file rev buffer)               OK
 ;; * checkout (file &optional rev)                 OK
 ;; * revert (file &optional contents-done)         OK
@@ -664,32 +665,26 @@ or an empty string if none."
                                  :files files
                                  :update-function update-function)))
 
-(defvar vc-git-stash-shared-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map "S" #'vc-git-stash-snapshot)
-    (define-key map "C" #'vc-git-stash)
-    map))
+(defvar-keymap vc-git-stash-shared-map
+  "S" #'vc-git-stash-snapshot
+  "C" #'vc-git-stash)
 
-(defvar vc-git-stash-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map vc-git-stash-shared-map)
-    ;; Turn off vc-dir marking
-    (define-key map [mouse-2] #'ignore)
+(defvar-keymap vc-git-stash-map
+  :parent vc-git-stash-shared-map
+  ;; Turn off vc-dir marking
+  "<mouse-2>"      #'ignore
 
-    (define-key map [down-mouse-3] #'vc-git-stash-menu)
-    (define-key map "\C-k" #'vc-git-stash-delete-at-point)
-    (define-key map "=" #'vc-git-stash-show-at-point)
-    (define-key map "\C-m" #'vc-git-stash-show-at-point)
-    (define-key map "A" #'vc-git-stash-apply-at-point)
-    (define-key map "P" #'vc-git-stash-pop-at-point)
-    map))
+  "<down-mouse-3>" #'vc-git-stash-menu
+  "C-k"            #'vc-git-stash-delete-at-point
+  "="              #'vc-git-stash-show-at-point
+  "RET"            #'vc-git-stash-show-at-point
+  "A"              #'vc-git-stash-apply-at-point
+  "P"              #'vc-git-stash-pop-at-point)
 
-(defvar vc-git-stash-button-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map vc-git-stash-shared-map)
-    (define-key map [mouse-2] #'push-button)
-    (define-key map "\C-m" #'push-button)
-    map))
+(defvar-keymap vc-git-stash-button-map
+  :parent vc-git-stash-shared-map
+  "<mouse-2>" #'push-button
+  "RET"     #'push-button)
 
 (defconst vc-git-stash-shared-help
   "\\<vc-git-stash-shared-map>\\[vc-git-stash]: Create named stash\n\\[vc-git-stash-snapshot]: Snapshot stash")
@@ -863,6 +858,47 @@ The car of the list is the current branch."
 
 ;;; STATE-CHANGING FUNCTIONS
 
+(defcustom vc-git-log-edit-summary-target-len nil
+  "Target length for Git commit summary lines.
+If a number, characters in Summary: lines beyond this length are
+displayed in the `vc-git-log-edit-summary-target-warning' face.
+A value of any other type means no highlighting.
+
+By setting this to an integer around 50, you can improve the
+compatibility of your commit messages with Git commands that
+print the summary line in width-constrained contexts.  However,
+many commit summaries will need to exceed this length.
+
+See also `vc-git-log-edit-summary-max-len'."
+  :type '(choice (const :tag "No target" nil)
+                 (natnum :tag "Target length"))
+  :safe (lambda (x) (or (not x) (natnump x))))
+
+(defface vc-git-log-edit-summary-target-warning
+  '((t :inherit warning))
+  "Face for Git commit summary lines beyond the target length.
+See `vc-git-log-edit-summary-target-len'.")
+
+(defcustom vc-git-log-edit-summary-max-len 68
+  "Maximum length for Git commit summary lines.
+If a number, characters in summary lines beyond this length are
+displayed in the `vc-git-log-edit-summary-max-warning' face.
+A value of any other type means no highlighting.
+
+It is good practice to avoid writing summary lines longer than
+this because otherwise the summary line will be truncated in many
+contexts in which Git commands display summary lines.
+
+See also `vc-git-log-edit-summary-target-len'."
+  :type '(choice (const :tag "No target" nil)
+                 (natnum :tag "Target length"))
+  :safe (lambda (x) (or (not x) (natnump x))))
+
+(defface vc-git-log-edit-summary-max-warning
+  '((t :inherit error))
+  "Face for Git commit summary lines beyond the maximum length.
+See `vc-git-log-edit-summary-max-len'.")
+
 (defun vc-git-create-repo ()
   "Create a new Git repository."
   (vc-git-command nil 0 nil "init"))
@@ -910,16 +946,44 @@ If toggling on, also insert its message into the buffer."
         standard-output 1 nil
         "log" "--max-count=1" "--pretty=format:%B" "HEAD")))))
 
-(defvar vc-git-log-edit-mode-map
-  (let ((map (make-sparse-keymap "Git-Log-Edit")))
-    (define-key map "\C-c\C-s" #'vc-git-log-edit-toggle-signoff)
-    (define-key map "\C-c\C-n" #'vc-git-log-edit-toggle-no-verify)
-    (define-key map "\C-c\C-e" #'vc-git-log-edit-toggle-amend)
-    map))
+(defvar-keymap vc-git-log-edit-mode-map
+  :name "Git-Log-Edit"
+  "C-c C-s" #'vc-git-log-edit-toggle-signoff
+  "C-c C-n" #'vc-git-log-edit-toggle-no-verify
+  "C-c C-e" #'vc-git-log-edit-toggle-amend)
+
+(defun vc-git--log-edit-summary-check (limit)
+  (and (re-search-forward "^Summary: " limit t)
+       (when-let ((regex
+                   (cond ((and (natnump vc-git-log-edit-summary-max-len)
+                               (natnump vc-git-log-edit-summary-target-len))
+                          (format ".\\{,%d\\}\\(.\\{,%d\\}\\)\\(.*\\)"
+                                  vc-git-log-edit-summary-target-len
+                                  (- vc-git-log-edit-summary-max-len
+                                     vc-git-log-edit-summary-target-len)))
+                         ((natnump vc-git-log-edit-summary-max-len)
+                          (format ".\\{,%d\\}\\(?2:.*\\)"
+                                  vc-git-log-edit-summary-max-len))
+                         ((natnump vc-git-log-edit-summary-target-len)
+                          (format ".\\{,%d\\}\\(.*\\)"
+                                  vc-git-log-edit-summary-target-len)))))
+         (re-search-forward regex limit t))))
 
 (define-derived-mode vc-git-log-edit-mode log-edit-mode "Log-Edit/git"
   "Major mode for editing Git log messages.
-It is based on `log-edit-mode', and has Git-specific extensions.")
+It is based on `log-edit-mode', and has Git-specific extensions."
+  (setq-local
+   log-edit-font-lock-keywords
+   (append log-edit-font-lock-keywords
+           '((vc-git--log-edit-summary-check
+	      (1 'vc-git-log-edit-summary-target-warning prepend t)
+              (2 'vc-git-log-edit-summary-max-warning prepend t))))))
+
+(defvar vc-git-patch-string nil)
+
+(defun vc-git-checkin-patch (patch-string comment)
+  (let ((vc-git-patch-string patch-string))
+    (vc-git-checkin nil comment)))
 
 (defun vc-git-checkin (files comment &optional _rev)
   (let* ((file1 (or (car files) default-directory))
@@ -943,12 +1007,21 @@ It is based on `log-edit-mode', and has Git-specific extensions.")
           (if (eq system-type 'windows-nt)
               (let ((default-directory (file-name-directory file1)))
                 (make-nearby-temp-file "git-msg")))))
+    (when vc-git-patch-string
+      (unless (zerop (vc-git-command nil t nil "diff" "--cached" "--quiet"))
+        (user-error "Index not empty"))
+      (let ((patch-file (make-temp-file "git-patch")))
+        (with-temp-file patch-file
+          (insert vc-git-patch-string))
+        (unwind-protect
+            (vc-git-command nil 0 patch-file "apply" "--cached")
+          (delete-file patch-file))))
     (cl-flet ((boolean-arg-fn
                (argument)
                (lambda (value) (when (equal value "yes") (list argument)))))
       ;; When operating on the whole tree, better pass "-a" than ".", since "."
       ;; fails when we're committing a merge.
-      (apply #'vc-git-command nil 0 (if only files)
+      (apply #'vc-git-command nil 0 (if (and only (not vc-git-patch-string)) files)
              (nconc (if msg-file (list "commit" "-F"
                                        (file-local-name msg-file))
                       (list "commit" "-m"))
@@ -966,7 +1039,8 @@ It is based on `log-edit-mode', and has Git-specific extensions.")
                           (write-region (car args) nil msg-file))
                         (setq args (cdr args)))
                       args)
-		    (if only (list "--only" "--") '("-a")))))
+                    (unless vc-git-patch-string
+                      (if only (list "--only" "--") '("-a"))))))
     (if (and msg-file (file-exists-p msg-file)) (delete-file msg-file))))
 
 (defun vc-git-find-revision (file rev buffer)

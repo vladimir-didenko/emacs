@@ -53,6 +53,11 @@
   :prefix "dired-"
   :group 'dired)
 
+(defgroup dired-guess nil
+  "Guess shell command in Dired."
+  :prefix "dired-"
+  :group 'dired)
+
 ;;;###autoload
 (defcustom dired-listing-switches (purecopy "-al")
   "Switches passed to `ls' for Dired.  MUST contain the `l' option.
@@ -419,6 +424,72 @@ is anywhere on its Dired line, except the beginning of the line."
   :type 'boolean
   :version "28.1")
 
+(defcustom dired-guess-shell-case-fold-search t
+  "If non-nil, `dired-guess-shell-alist-default' and
+`dired-guess-shell-alist-user' are matched case-insensitively."
+  :group 'dired-guess
+  :type 'boolean
+  :version "29.1")
+
+(defcustom dired-guess-shell-alist-user nil
+  "User-defined alist of rules for suggested commands.
+These rules take precedence over the predefined rules in the variable
+`dired-guess-shell-alist-default' (to which they are prepended).
+
+Each element of this list looks like
+
+    (REGEXP COMMAND...)
+
+COMMAND will be used if REGEXP matches the file to be processed.
+If several files are to be processed, REGEXP has to match all the
+files.
+
+Each COMMAND can either be a string or a Lisp expression that evaluates
+to a string.  If this expression needs to consult the name of the file for
+which the shell commands are being requested, it can access that file name
+as the variable `file'.
+
+If several COMMANDs are given, the first one will be the default
+and the rest will be added temporarily to the history and can be retrieved
+with `previous-history-element' (\\<minibuffer-mode-map>\\[previous-history-element]).
+
+The variable `dired-guess-shell-case-fold-search' controls whether
+REGEXP is matched case-sensitively."
+  :group 'dired-guess
+  :type '(alist :key-type regexp :value-type (repeat sexp))
+  :version "29.1")
+
+(defcustom dired-guess-shell-gnutar
+  (catch 'found
+    (dolist (exe '("tar" "gtar"))
+      (if (with-temp-buffer
+            (ignore-errors (call-process exe nil t nil "--version"))
+            (and (re-search-backward "GNU tar" nil t) t))
+          (throw 'found exe))))
+  "If non-nil, name of GNU tar executable.
+\(E.g., \"tar\" or \"gtar\").  The `z' switch will be used with it for
+compressed or gzip'ed tar files.  If you don't have GNU tar, set this
+to nil: a pipe using `zcat' or `gunzip -c' will be used."
+  ;; Changed from system-type test to testing --version output.
+  ;; Maybe test --help for -z instead?
+  :group 'dired-guess
+  :type '(choice (const :tag "Not GNU tar" nil)
+                 (string :tag "Command name"))
+  :version "29.1")
+
+(defcustom dired-guess-shell-gzip-quiet t
+  "Non-nil says pass -q to gzip overriding verbose GZIP environment."
+  :group 'dired-guess
+  :type 'boolean
+  :version "29.1")
+
+(defcustom dired-guess-shell-znew-switches nil
+  "If non-nil, then string of switches passed to `znew', example: \"-K\"."
+  :group 'dired-guess
+  :type '(choice (const :tag "None" nil)
+                 (string :tag "Switches"))
+  :version "29.1")
+
 
 ;;; Internal variables
 
@@ -715,7 +786,7 @@ Subexpression 2 must end right before the \\n.")
                nil
                '(1 'dired-broken-symlink)
                '(2 dired-symlink-face)
-               '(3 'dired-broken-symlink)))
+               '(3 '(face dired-broken-symlink dired-symlink-filename t))))
    ;;
    ;; Symbolic link to a directory.
    (list dired-re-sym
@@ -727,7 +798,7 @@ Subexpression 2 must end right before the \\n.")
                '(dired-move-to-filename)
                nil
                '(1 dired-symlink-face)
-               '(2 dired-directory-face)))
+               '(2 '(face dired-directory-face dired-symlink-filename t))))
    ;;
    ;; Symbolic link to a non-directory.
    (list dired-re-sym
@@ -741,7 +812,7 @@ Subexpression 2 must end right before the \\n.")
                '(dired-move-to-filename)
                nil
                '(1 dired-symlink-face)
-               '(2 'default)))
+               '(2 '(face default dired-symlink-filename t))))
    ;;
    ;; Sockets, pipes, block devices, char devices.
    (list dired-re-special
@@ -775,19 +846,20 @@ of the region if `dired-mark-region' is non-nil.  Otherwise, operate
 on the whole buffer.
 
 Return value is the number of files marked, or nil if none were marked."
-  `(let ((inhibit-read-only t) count
+  `(let ((msg ,msg)
+         (inhibit-read-only t) count
          (use-region-p (dired-mark--region-use-p))
          (beg (dired-mark--region-beginning))
          (end (dired-mark--region-end)))
     (save-excursion
       (setq count 0)
-      (when ,msg
+      (when msg
 	(message "%s %ss%s%s..."
 		 (cond ((eq dired-marker-char ?\s) "Unmarking")
 		       ((eq dired-del-marker dired-marker-char)
 			"Flagging")
 		       (t "Marking"))
-		 ,msg
+		 msg
 		 (if (eq dired-del-marker dired-marker-char)
 		     " for deletion"
 		   "")
@@ -802,9 +874,9 @@ Return value is the number of files marked, or nil if none were marked."
             (insert dired-marker-char)
             (setq count (1+ count))))
         (forward-line 1))
-      (when ,msg (message "%s %s%s %s%s%s"
+      (when msg (message "%s %s%s %s%s%s"
                         count
-                        ,msg
+                        msg
                         (dired-plural-s count)
                         (if (eq dired-marker-char ?\s) "un" "")
                         (if (eq dired-marker-char dired-del-marker)
@@ -1140,7 +1212,8 @@ If DIRNAME is already in a Dired buffer, that buffer is used without refresh."
 	     (modtime (visited-file-modtime)))
 	 (or (eq modtime 0)
 	     (not (eq (file-attribute-type attributes) t))
-	     (equal (file-attribute-modification-time attributes) modtime)))))
+	     (time-equal-p (file-attribute-modification-time attributes)
+			   modtime)))))
 
 (defvar auto-revert-remote-files)
 
@@ -1189,13 +1262,13 @@ The return value is the target column for the file names."
     (dired-goto-next-file)
     ;; Use point difference instead of `current-column', because
     ;; the former works when `dired-hide-details-mode' is enabled.
-    (let* ((first (- (point) (point-at-bol)))
+    (let* ((first (- (point) (line-beginning-position)))
            (target first))
       (while (and (not (eobp))
                   (progn
                     (forward-line)
                     (dired-move-to-filename)))
-        (when-let* ((distance (- (point) (point-at-bol)))
+        (when-let* ((distance (- (point) (line-beginning-position)))
                     (higher (> distance target)))
           (setq target distance)))
       (and (/= first target) target))))
@@ -1211,7 +1284,7 @@ The return value is the target column for the file names."
         (while (dired-move-to-filename)
           ;; Use point difference instead of `current-column', because
           ;; the former works when `dired-hide-details-mode' is enabled.
-          (let ((distance (- target (- (point) (point-at-bol))))
+          (let ((distance (- target (- (point) (line-beginning-position))))
                 (inhibit-read-only t))
             (unless (zerop distance)
               (re-search-backward regexp nil t)
@@ -2964,10 +3037,11 @@ See options: `dired-hide-details-hide-symlink-targets' and
   ;; approximate ("anywhere on the line is fine").
   ;; FIXME: This also removes other invisible properties!
   (save-excursion
-    (remove-list-of-text-properties
-     (progn (goto-char start) (line-end-position))
-     (progn (goto-char end) (line-end-position))
-     '(invisible))))
+    (let ((inhibit-read-only t))
+      (remove-list-of-text-properties
+       (progn (goto-char start) (line-end-position))
+       (progn (goto-char end) (line-end-position))
+       '(invisible)))))
 
 ;;; Functions for finding the file name in a dired buffer line
 
@@ -3672,7 +3746,10 @@ non-empty directories is allowed."
 		      (progress-reporter-update progress-reporter succ)
 		      (dired-fun-in-all-buffers
 		       (file-name-directory fn) (file-name-nondirectory fn)
-		       #'dired-delete-entry fn))
+		       #'dired-delete-entry fn)
+                      ;; For when FN's directory name is different
+                      ;; from the current buffer's dired-directory.
+                      (dired-delete-entry fn))
                   (quit (throw '--delete-cancel (message "OK, canceled")))
 		  (error ;; catch errors from failed deletions
 		   (dired-log "%s: %s\n" (car err) (error-message-string err))
@@ -4845,16 +4922,12 @@ Interactively with prefix argument, read FILE-NAME."
 ;;; Miscellaneous commands
 
 (declare-function Man-getpage-in-background "man" (topic))
-(declare-function dired-guess-shell-command "dired-x" (prompt files))
 (defvar manual-program) ; from man.el
 
 (defun dired-do-man ()
   "In Dired, run `man' on this file."
   (interactive nil dired-mode)
   (require 'man)
-  ;; FIXME: Move `dired-guess-shell-command' to dired.el to remove the
-  ;;        need for requiring `dired-x'.
-  (require 'dired-x)
   (let* ((file (dired-get-file-for-visit))
          (manual-program (string-replace "*" "%s"
                                          (dired-guess-shell-command

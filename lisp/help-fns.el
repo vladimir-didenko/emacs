@@ -229,7 +229,7 @@ interactive command."
                (lambda (f) (if want-command
                           (commandp f)
                         (or (fboundp f) (get f 'function-documentation))))
-               t nil nil
+               'confirm nil nil
                (and fn (symbol-name fn)))))
     (unless (equal val "")
       (setq fn (intern val)))
@@ -266,13 +266,9 @@ handling of autoloaded functions."
              (current-buffer)))
         (help-buffer-under-preparation t))
 
-    (help-setup-xref
-     (list (lambda (function buffer)
-             (let ((describe-function-orig-buffer
-                    (if (buffer-live-p buffer) buffer)))
-               (describe-function function)))
-           function describe-function-orig-buffer)
-     (called-interactively-p 'interactive))
+    (help-setup-xref (list #'describe-function--helper
+                           function describe-function-orig-buffer)
+                     (called-interactively-p 'interactive))
 
     (save-excursion
       (with-help-window (help-buffer)
@@ -519,8 +515,11 @@ the C sources, too."
     (let ((pt2 (with-current-buffer standard-output (point)))
           (remapped (command-remapping function)))
       (unless (memq remapped '(ignore undefined))
-        (let* ((all-keys (where-is-internal
-                          (or remapped function) overriding-local-map nil nil))
+        (let* ((all-keys
+                (with-current-buffer
+                    (or describe-function-orig-buffer (current-buffer))
+                  (where-is-internal
+                   (or remapped function) overriding-local-map nil nil)))
                (seps (seq-group-by
                       (lambda (key)
                         (and (vectorp key)
@@ -803,7 +802,7 @@ the C sources, too."
     ;; different purposes, such as function name, var name, face name,
     ;; property name, ...).
     (concat
-     ;; The main "canonical" occurence of symbols is within '...'.
+     ;; The main "canonical" occurrence of symbols is within '...'.
      "'" quoted "'"
      ;; Commands can also occur as `M-x blabla'.
      "\\|M-x[ \t\n]+" quoted "\\_>"
@@ -1009,9 +1008,9 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
                 (help-fns--analyze-function function))
                (file-name (find-lisp-object-file-name
                            function (if aliased 'defun def)))
-               (beg (if (and (or (byte-code-function-p def)
+               (beg (if (and (or (functionp def)
                                  (keymapp def)
-                                 (memq (car-safe def) '(macro lambda closure)))
+                                 (eq (car-safe def) 'macro))
                              (stringp file-name)
                              (help-fns--autoloaded-p function))
                         (concat
@@ -1030,7 +1029,7 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
 		 (aliased
 		  (format-message "an alias for `%s'" real-def))
                  ((subr-native-elisp-p def)
-                  (concat beg "native compiled Lisp function"))
+                  (concat beg "native-compiled Lisp function"))
 		 ((subrp def)
 		  (concat beg (if (eq 'unevalled (cdr (subr-arity def)))
 		                  "special form"
@@ -1044,12 +1043,12 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
                            (t "Lisp function"))))
 		 ((or (eq (car-safe def) 'macro)
 		      ;; For advised macros, def is a lambda
-		      ;; expression or a byte-code-function-p, so we
+		      ;; expression or a compiled-function-p, so we
 		      ;; need to check macros before functions.
 		      (macrop function))
 		  (concat beg "Lisp macro"))
 		 ((byte-code-function-p def)
-		  (concat beg "compiled Lisp function"))
+		  (concat beg "byte-compiled Lisp function"))
                  ((module-function-p def)
                   (concat beg "module function"))
 		 ((eq (car-safe def) 'lambda)
@@ -1158,6 +1157,17 @@ Returns a list of the form (REAL-FUNCTION DEF ALIASED REAL-DEF)."
 (add-hook 'help-fns-describe-function-functions #'help-fns--interactive-only)
 (add-hook 'help-fns-describe-function-functions #'help-fns--parent-mode)
 (add-hook 'help-fns-describe-function-functions #'help-fns--compiler-macro 100)
+
+(defun help-fns--generalized-variable (function)
+  (when (and (get function 'gv-expander)
+             ;; Don't mention obsolete generalized variables.
+             (not (get function 'byte-obsolete-generalized-variable)))
+    (insert (format-message "  `%s' is also a " function)
+            (buttonize "generalized variable"
+                       (lambda (_) (info "(elisp)Generalized Variables")))
+            ".\n")))
+(add-hook 'help-fns-describe-function-functions
+          #'help-fns--generalized-variable)
 
 
 ;; Variables
@@ -1538,8 +1548,8 @@ This cancels value editing without updating the value."
     (when safe-var
       (princ "  This variable is safe as a file local variable ")
       (princ "if its value\n  satisfies the predicate ")
-      (princ (if (byte-code-function-p safe-var)
-		 "which is a byte-compiled expression.\n"
+      (princ (if (compiled-function-p safe-var)
+		 "which is a compiled expression.\n"
 	       (format-message "`%s'.\n" safe-var))))))
 
 (add-hook 'help-fns-describe-variable-functions #'help-fns--var-risky)
@@ -2172,8 +2182,7 @@ documentation for the major and minor modes of that buffer."
 	;; Document the minor modes fully.
         (insert (buttonize
                  (propertize pretty-minor-mode 'help-minor-mode mode)
-                 (lambda (mode)
-                   (describe-function mode))
+                 #'describe-function
                  mode))
         (let ((indicator
                (format-mode-line (assq mode minor-mode-alist))))
@@ -2182,7 +2191,8 @@ documentation for the major and minor modes of that buffer."
 			      "no indicator"
 			    (format "indicator%s"
 				    indicator)))))
-	(insert (help-split-fundoc (documentation mode) nil 'doc)))))
+	(insert (or (help-split-fundoc (documentation mode) nil 'doc)
+	            "No docstring")))))
   (forward-line -1)
   (fill-paragraph nil)
   (forward-paragraph 1)

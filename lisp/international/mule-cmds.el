@@ -2199,8 +2199,7 @@ See `set-language-info-alist' for use in programs."
 		    first nil))
 	    (dolist (elt l)
 	      (when (or (eq input-method elt)
-			(eq t (compare-strings language-name nil nil
-					       (nth 1 elt) nil nil t)))
+			(string-equal-ignore-case language-name (nth 1 elt)))
 		(when first
 		  (insert "Input methods:\n")
 		  (setq first nil))
@@ -2599,7 +2598,7 @@ Matching is done ignoring case and any hyphens and underscores in the
 names.  E.g. `ISO_8859-1' and `iso88591' both match `iso-8859-1'."
   (setq charset1 (replace-regexp-in-string "[-_]" "" charset1))
   (setq charset2 (replace-regexp-in-string "[-_]" "" charset2))
-  (eq t (compare-strings charset1 nil nil charset2 nil nil t)))
+  (string-equal-ignore-case charset1 charset2))
 
 (defvar locale-charset-alist nil
   "Coding system alist keyed on locale-style charset name.
@@ -3196,7 +3195,7 @@ Defines the sorting order either by character names or their codepoints."
   :group 'mule
   :version "28.1")
 
-(defun read-char-by-name (prompt)
+(defun read-char-by-name (prompt &optional allow-single)
   "Read a character by its Unicode name or hex number string.
 Display PROMPT and read a string that represents a character by its
 Unicode property `name' or `old-name'.
@@ -3217,7 +3216,10 @@ Accept a name like \"CIRCULATION FUNCTION\", a hexadecimal
 number like \"2A10\", or a number in hash notation (e.g.,
 \"#x2a10\" for hex, \"10r10768\" for decimal, or \"#o25020\" for
 octal).  Treat otherwise-ambiguous strings like \"BED\" (U+1F6CF)
-as names, not numbers."
+as names, not numbers.
+
+Optional arg ALLOW-SINGLE non-nil means to additionally allow
+single characters to be treated as standing for themselves."
   (let* ((enable-recursive-minibuffers t)
 	 (completion-ignore-case t)
 	 (completion-tab-width 4)
@@ -3240,6 +3242,9 @@ as names, not numbers."
 	 (char
           (cond
            ((char-from-name input t))
+           ((and allow-single
+                 (string-match-p "\\`.\\'" input)
+                 (ignore-errors (string-to-char input))))
            ((string-match-p "\\`[[:xdigit:]]+\\'" input)
             (ignore-errors (string-to-number input 16)))
            ((string-match-p "\\`#\\([bBoOxX]\\|[0-9]+[rR]\\)[0-9a-zA-Z]+\\'"

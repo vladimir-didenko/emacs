@@ -27,8 +27,8 @@
 ;; to the corresponding source file.
 
 ;; Inspired by Pavel Machek's patch-mode.el (<pavel@@atrey.karlin.mff.cuni.cz>)
-;; Some efforts were spent to have it somewhat compatible with XEmacs's
-;; diff-mode as well as with compilation-minor-mode
+;; Some efforts were spent to have it somewhat compatible with
+;; `compilation-minor-mode'.
 
 ;; Bugs:
 
@@ -146,6 +146,12 @@ and hunk-based syntax highlighting otherwise as a fallback."
                  (const :tag "Hunk-based only" hunk-only)
                  (const :tag "Highlight syntax" t)
                  (const :tag "Allow hunk-based fallback" hunk-also)))
+
+(defcustom diff-whitespace-style '(face trailing)
+  "Specify `whitespace-style' variable for `diff-mode' buffers."
+  :require 'whitespace
+  :type (get 'whitespace-style 'custom-type)
+  :version "29.1")
 
 (defvar diff-vc-backend nil
   "The VC backend that created the current Diff buffer, if any.")
@@ -627,7 +633,7 @@ See https://lists.gnu.org/r/emacs-devel/2007-11/msg01990.html")
         (when (looking-at regexp-hunk) ; Hunk header.
           (throw 'headerp (point)))
         (forward-line -1)
-        (when (re-search-forward regexp-file (point-at-eol 4) t) ; File header.
+        (when (re-search-forward regexp-file (line-end-position 4) t) ; File header.
           (forward-line 0)
           (throw 'headerp (point)))
         (goto-char orig)
@@ -1476,9 +1482,6 @@ See `after-change-functions' for the meaning of BEG, END and LEN."
     ;; Added when diff--font-lock-prettify is non-nil!
     (cl-pushnew 'display font-lock-extra-managed-props)))
 
-(defvar whitespace-style)
-(defvar whitespace-trailing-regexp)
-
 (defvar-local diff-mode-read-only nil
   "Non-nil when read-only diff buffer uses short keys.")
 
@@ -1486,6 +1489,9 @@ See `after-change-functions' for the meaning of BEG, END and LEN."
 (or (assq 'diff-mode-read-only minor-mode-map-alist)
     (nconc minor-mode-map-alist
            (list (cons 'diff-mode-read-only diff-mode-shared-map))))
+
+(defvar whitespace-style)
+(defvar whitespace-trailing-regexp)
 
 ;;;###autoload
 (define-derived-mode diff-mode fundamental-mode "Diff"
@@ -1572,7 +1578,7 @@ a diff with \\[diff-reverse-direction].
 This sets `whitespace-style' and `whitespace-trailing-regexp' so
 that Whitespace mode shows trailing whitespace problems on the
 modified lines of the diff."
-  (setq-local whitespace-style '(face trailing))
+  (setq-local whitespace-style diff-whitespace-style)
   (let ((style (save-excursion
 		 (goto-char (point-min))
                  ;; FIXME: For buffers filled from async processes, this search
@@ -2330,10 +2336,22 @@ Call FUN with two args (BEG and END) for each hunk."
   (let ((inhibit-read-only t))
     (undo arg)))
 
+;;;###autoload
+(defcustom diff-add-log-use-relative-names nil
+  "Use relative file names when generating ChangeLog skeletons.
+The files will be relative to the root directory of the VC
+repository.  This option affects the behaviour of
+`diff-add-log-current-defuns'."
+  :type 'boolean
+  :safe #'booleanp
+  :version "29.1")
+
 (defun diff-add-log-current-defuns ()
   "Return an alist of defun names for the current diff.
 The elements of the alist are of the form (FILE . (DEFUN...)),
-where DEFUN... is a list of function names found in FILE."
+where DEFUN... is a list of function names found in FILE.  If
+`diff-add-log-use-relative-names' is non-nil, file names in the alist
+are relative to the root directory of the VC repository."
   (save-excursion
     (goto-char (point-min))
     (let* ((defuns nil)
@@ -2367,7 +2385,12 @@ where DEFUN... is a list of function names found in FILE."
           ;; hunks (e.g., "diff --git ..." etc).
           (re-search-forward diff-hunk-header-re nil t)
         (setq hunk-end (save-excursion (diff-end-of-hunk)))
-        (pcase-let* ((filename (substring-no-properties (diff-find-file-name)))
+        (pcase-let* ((filename (substring-no-properties
+                                (if diff-add-log-use-relative-names
+                                    (file-relative-name
+                                     (diff-find-file-name)
+                                     (vc-root-dir))
+                                  (diff-find-file-name))))
                      (=lines 0)
                      (+lines 0)
                      (-lines 0)
@@ -2922,6 +2945,15 @@ hunk text is not found in the source file."
         (forward-line 1)))
     (nreverse props)))
 
+;;;###autoload
+(defun diff-vc-deduce-fileset ()
+  (let ((backend (vc-responsible-backend default-directory))
+        files)
+    (save-excursion
+      (goto-char (point-min))
+      (while (progn (diff-file-next) (not (eobp)))
+        (push (diff-find-file-name nil t) files)))
+    (list backend (nreverse files) nil nil 'patch)))
 
 (defun diff--filter-substring (str)
   (when diff-font-lock-prettify
