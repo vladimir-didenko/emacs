@@ -5540,15 +5540,15 @@ On MS Windows, this returns nothing useful.  */)
   switch (DoesBackingStore (dpyinfo->screen))
     {
     case Always:
-      result = intern ("always");
+      result = Qalways;
       break;
 
     case WhenMapped:
-      result = intern ("when-mapped");
+      result = Qwhen_mapped;
       break;
 
     case NotUseful:
-      result = intern ("not-useful");
+      result = Qnot_useful;
       break;
 
     default:
@@ -5577,22 +5577,22 @@ If omitted or nil, that stands for the selected frame's display.
   switch (dpyinfo->visual_info.class)
     {
     case StaticGray:
-      result = intern ("static-gray");
+      result = Qstatic_gray;
       break;
     case GrayScale:
-      result = intern ("gray-scale");
+      result = Qgray_scale;
       break;
     case StaticColor:
-      result = intern ("static-color");
+      result = Qstatic_color;
       break;
     case PseudoColor:
-      result = intern ("pseudo-color");
+      result = Qpseudo_color;
       break;
     case TrueColor:
-      result = intern ("true-color");
+      result = Qtrue_color;
       break;
     case DirectColor:
-      result = intern ("direct-color");
+      result = Qdirect_color;
       break;
     default:
       error ("Display has an unknown visual class");
@@ -6244,8 +6244,8 @@ In addition to the standard attribute keys listed in
 the attributes:
 
  source -- String describing the source from which multi-monitor
-	   information is obtained, one of \"Gdk\", \"XRandr\",
-	   \"Xinerama\", or \"fallback\"
+	   information is obtained, one of \"Gdk\", \"XRandR 1.5\",
+	   \"XRandr\", \"Xinerama\", or \"fallback\"
 
 Internal use only, use `display-monitor-attributes-list' instead.  */)
   (Lisp_Object terminal)
@@ -7250,8 +7250,6 @@ x_display_info_for_name (Lisp_Object name)
   if (dpyinfo == 0)
     error ("Cannot connect to X server %s", SDATA (name));
 
-  XSETFASTINT (Vwindow_system_version, 11);
-
   return dpyinfo;
 }
 
@@ -7295,7 +7293,6 @@ An insecure way to solve the problem may be to use `xhost'.\n",
 	error ("Cannot connect to X server %s", SDATA (display));
     }
 
-  XSETFASTINT (Vwindow_system_version, 11);
   return Qnil;
 }
 
@@ -7714,16 +7711,39 @@ DEFUN ("x-window-property", Fx_window_property, Sx_window_property,
        doc: /* Value is the value of window property PROP on FRAME.
 If FRAME is nil or omitted, use the selected frame.
 
-On X Windows, the following optional arguments are also accepted:
-If TYPE is nil or omitted, get the property as a string.
- Otherwise TYPE is the name of the atom that denotes the expected type.
+On X Windows, the following optional arguments are also accepted: If
+TYPE is nil or omitted, get the property as a string.  Otherwise TYPE
+is the name of the atom that denotes the expected type.
+
+If TYPE is the string "AnyPropertyType", decode and return the data
+regardless of what the type really is.
+
+The format of the data returned is the same as a selection conversion
+to the given type.  For example, if `x-get-selection-internal' returns
+an integer when the selection data is a given type,
+`x-window-property' will do the same for that type.
+
 If WINDOW-ID is non-nil, get the property of that window instead of
- FRAME's X window; the number 0 denotes the root window.  This argument
- is separate from FRAME because window IDs are not unique across X
- displays or screens on the same display, so FRAME provides context
- for the window ID.
+FRAME's X window; the number 0 denotes the root window.  This argument
+is separate from FRAME because window IDs are not unique across X
+displays, so FRAME provides context for the window ID.
+
 If DELETE-P is non-nil, delete the property after retrieving it.
 If VECTOR-RET-P is non-nil, return a vector of values instead of a string.
+
+X allows an arbitrary number of properties to be set on any window.
+However, properties are most often set by the window manager or other
+programs on the root window or FRAME's X window in order to
+communicate information to Emacs and other programs.  Most of these
+properties are specified as part of the Extended Window Manager Hints
+and the Inter-Client Communication Conventions Manual, which are
+located here:
+
+  https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html
+
+and
+
+  https://x.org/releases/X11R7.6/doc/xorg-docs/specs/ICCCM/icccm.html
 
 Return value is nil if FRAME doesn't have a property with name PROP or
 if PROP has no value of TYPE (always a string in the MS Windows case). */)
@@ -8312,9 +8332,9 @@ x_create_tip_frame (struct x_display_info *dpyinfo, Lisp_Object parms)
       disptype = Qmono;
     else if (FRAME_X_VISUAL_INFO (f)->class == GrayScale
              || FRAME_X_VISUAL_INFO (f)->class == StaticGray)
-      disptype = intern ("grayscale");
+      disptype = Qgrayscale;
     else
-      disptype = intern ("color");
+      disptype = Qcolor;
 
     if (NILP (Fframe_parameter (frame, Qdisplay_type)))
       {
@@ -8976,8 +8996,8 @@ Text larger than the specified size is clipped.  */)
 
  start_timer:
   /* Let the tip disappear after timeout seconds.  */
-  tip_timer = call3 (intern ("run-at-time"), timeout, Qnil,
-		     intern ("x-hide-tip"));
+  tip_timer = call3 (Qrun_at_time, timeout, Qnil,
+		     Qx_hide_tip);
 
   return unbind_to (count, Qnil);
 }
@@ -10074,6 +10094,23 @@ eliminated in future versions of Emacs.  */);
 
   /* Tell Emacs about this window system.  */
   Fprovide (Qx, Qnil);
+
+  /* Used by Fx_show_tip.  */
+  DEFSYM (Qrun_at_time, "run-at-time");
+  DEFSYM (Qx_hide_tip, "x-hide-tip");
+
+  /* Used by display class and backing store reporting functions.  */
+  DEFSYM (Qalways, "always");
+  DEFSYM (Qwhen_mapped, "when-mapped");
+  DEFSYM (Qnot_useful, "not-useful");
+  DEFSYM (Qstatic_gray, "static-gray");
+  DEFSYM (Qgray_scale, "gray-scale");
+  DEFSYM (Qstatic_color, "static-color");
+  DEFSYM (Qpseudo_color, "pseudo-color");
+  DEFSYM (Qtrue_color, "true-color");
+  DEFSYM (Qdirect_color, "direct-color");
+  DEFSYM (Qgrayscale, "grayscale");
+  DEFSYM (Qcolor, "color");
 
 #ifdef HAVE_XINPUT2
   DEFSYM (Qxinput2, "xinput2");

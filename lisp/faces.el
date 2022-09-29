@@ -1001,9 +1001,6 @@ Use `set-face-attribute' to \"unspecify\" underlining."
   (interactive (read-face-and-attribute :underline))
   (set-face-attribute face frame :underline underline))
 
-(define-obsolete-function-alias 'set-face-underline-p
-                                'set-face-underline "24.3")
-
 
 (defun set-face-inverse-video (face inverse-video-p &optional frame)
   "Specify whether face FACE is in inverse video.
@@ -2063,7 +2060,7 @@ IF MULTIPLE is non-nil, return a list of faces.
 
 Return nil if there is no face at point.
 
-This function is not meant for handling faces programatically; to
+This function is not meant for handling faces programmatically; to
 do that, use `get-text-property' and `get-char-property'."
   (let (faces)
     (when text
@@ -2551,7 +2548,6 @@ default."
   :version "21.1"
   :group 'basic-faces)
 
-;; Definition stolen from linum.el.
 (defface line-number
   '((t :inherit (shadow default)))
   "Face for displaying line numbers.
@@ -3173,12 +3169,6 @@ also the same size as FACE on FRAME, or fail."
 	      (error "No fonts match `%s'" pattern)))
 	(car fonts))
     (frame-parameter nil 'font)))
-
-(defcustom font-list-limit 100
-  "This variable is obsolete and has no effect."
-  :type 'integer
-  :group 'display)
-(make-obsolete-variable 'font-list-limit nil "24.3")
 
 (define-obsolete-function-alias 'face-background-pixmap #'face-stipple "29.1")
 (define-obsolete-function-alias 'set-face-background-pixmap #'set-face-stipple "29.1")

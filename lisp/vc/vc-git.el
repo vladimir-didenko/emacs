@@ -82,7 +82,7 @@
 ;; - annotate-time ()                              OK
 ;; - annotate-current-time ()                      NOT NEEDED
 ;; - annotate-extract-revision-at-line ()          OK
-;; TAG SYSTEM
+;; TAG/BRANCH SYSTEM
 ;; - create-tag (dir name branchp)                 OK
 ;; - retrieve-tag (dir name update)                OK
 ;; MISCELLANEOUS
@@ -127,6 +127,12 @@ If nil, use the value of `vc-annotate-switches'.  If t, use no switches."
 		 (string :tag "Argument String")
 		 (repeat :tag "Argument List" :value ("") string))
   :version "25.1")
+
+;; Check if local value of `vc-git-annotate-switches' is safe.
+;; Currently only "-w" (ignore whitespace) is considered safe, but
+;; this list might be extended in the future (probably most options
+;; are perfectly safe.)
+;;;###autoload(put 'vc-git-annotate-switches 'safe-local-variable (lambda (switches) (equal switches "-w")))
 
 (defcustom vc-git-log-switches nil
   "String or list of strings specifying switches for Git log under VC."
@@ -618,7 +624,7 @@ or an empty string if none."
 
 ;; Follows vc-git-command (or vc-do-async-command), which uses vc-do-command
 ;; from vc-dispatcher.
-(declare-function vc-exec-after "vc-dispatcher" (code))
+(declare-function vc-exec-after "vc-dispatcher" (code &optional success))
 ;; Follows vc-exec-after.
 (declare-function vc-set-async-update "vc-dispatcher" (process-buffer))
 
@@ -1087,31 +1093,29 @@ It is based on `log-edit-mode', and has Git-specific extensions."
 (defun vc-git--pushpull (command prompt extra-args)
   "Run COMMAND (a string; either push or pull) on the current Git branch.
 If PROMPT is non-nil, prompt for the Git command to run."
+  (require 'vc-dispatcher)
   (let* ((root (vc-git-root default-directory))
 	 (buffer (format "*vc-git : %s*" (expand-file-name root)))
-	 (git-program vc-git-program)
-	 args)
-    ;; If necessary, prompt for the exact command.
-    ;; TODO if pushing, prompt if no default push location - cf bzr.
-    (when prompt
-      (setq args (split-string
-		  (read-shell-command
-                   (format "Git %s command: " command)
-                   (format "%s %s" git-program command)
-                   'vc-git-history)
-		  " " t))
-      (setq git-program (car  args)
-	    command     (cadr args)
-	    args        (cddr args)))
-    (setq args (nconc args extra-args))
-    (require 'vc-dispatcher)
-    (apply #'vc-do-async-command buffer root git-program command args)
+         (git-program vc-git-program)
+         ;; TODO if pushing, prompt if no default push location - cf bzr.
+         (vc-filter-command-function
+          (if prompt
+              (lambda (&rest args)
+                (cl-destructuring-bind (&whole args git _ flags)
+                    (apply #'vc-user-edit-command args)
+                  (setq git-program git
+                        command (car flags)
+                        extra-args (cdr flags))
+                  args))
+            vc-filter-command-function))
+         (proc (apply #'vc-do-async-command
+                      buffer root git-program command extra-args)))
     (with-current-buffer buffer
       (vc-run-delayed
         (vc-compilation-mode 'git)
         (setq-local compile-command
                     (concat git-program " " command " "
-                            (mapconcat #'identity args " ")))
+                            (mapconcat #'identity extra-args " ")))
         (setq-local compilation-directory root)
         ;; Either set `compilation-buffer-name-function' locally to nil
         ;; or use `compilation-arguments' to set `name-function'.
@@ -1120,7 +1124,8 @@ If PROMPT is non-nil, prompt for the Git command to run."
                     (list compile-command nil
                           (lambda (_name-of-mode) buffer)
                           nil))))
-    (vc-set-async-update buffer)))
+    (vc-set-async-update buffer)
+    proc))
 
 (defun vc-git-pull (prompt)
   "Pull changes into the current Git branch.
@@ -1133,6 +1138,25 @@ for the Git command to run."
 Normally, this runs \"git push\".  If PROMPT is non-nil, prompt
 for the Git command to run."
   (vc-git--pushpull "push" prompt nil))
+
+(defun vc-git-pull-and-push (prompt)
+  "Pull changes into the current Git branch, and then push.
+The push will only be performed if the pull was successful.
+
+Normally, this runs \"git pull\".  If PROMPT is non-nil, prompt
+for the Git command to run."
+  (let ((proc (vc-git--pushpull "pull" prompt '("--stat"))))
+    (when (process-buffer proc)
+      (with-current-buffer (process-buffer proc)
+        (if (and (eq (process-status proc) 'exit)
+                 (zerop (process-exit-status proc)))
+            (let ((vc--inhibit-async-window t))
+              (vc-git-push nil))
+          (vc-exec-after
+           (lambda ()
+             (let ((vc--inhibit-async-window t))
+               (vc-git-push nil)))
+           proc))))))
 
 (defun vc-git-merge-branch ()
   "Merge changes into the current Git branch.
@@ -1563,13 +1587,25 @@ This requires git 1.8.4 or later, for the \"-L\" option of \"git log\"."
 		    (expand-file-name fname (vc-git-root default-directory))))
 	  revision)))))
 
-;;; TAG SYSTEM
+;;; TAG/BRANCH SYSTEM
+
+(declare-function vc-read-revision "vc"
+                  (prompt &optional files backend default initial-input))
 
 (defun vc-git-create-tag (dir name branchp)
-  (let ((default-directory dir))
-    (and (vc-git-command nil 0 nil "update-index" "--refresh")
+  (let ((default-directory dir)
+        (start-point (when branchp (vc-read-revision
+                                    (format-prompt "Start point"
+                                                   (car (vc-git-branches)))
+                                    (list dir) 'Git))))
+    (and (or (zerop (vc-git-command nil t nil "update-index" "--refresh"))
+             (y-or-n-p "Modified files exist.  Proceed? ")
+             (user-error (format "Can't create %s with modified files"
+                                 (if branchp "branch" "tag"))))
          (if branchp
-             (vc-git-command nil 0 nil "checkout" "-b" name)
+             (vc-git-command nil 0 nil "checkout" "-b" name
+                             (when (and start-point (not (eq start-point "")))
+                               start-point))
            (vc-git-command nil 0 nil "tag" name)))))
 
 (defun vc-git-retrieve-tag (dir name _update)

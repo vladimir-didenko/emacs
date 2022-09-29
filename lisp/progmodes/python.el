@@ -300,6 +300,7 @@ instead."
     (define-key map [remap backward-sentence] #'python-nav-backward-block)
     (define-key map [remap forward-sentence] #'python-nav-forward-block)
     (define-key map [remap backward-up-list] #'python-nav-backward-up-list)
+    (define-key map [remap up-list] #'python-nav-up-list)
     (define-key map [remap mark-defun] #'python-mark-defun)
     (define-key map "\C-c\C-j" #'imenu)
     ;; Indent specific
@@ -527,16 +528,6 @@ The type returned can be `comment', `string' or `paren'."
   "Return non-nil if char after point is a closing paren."
   (eql (syntax-class (syntax-after (point)))
        (syntax-class (string-to-syntax ")"))))
-
-(define-obsolete-function-alias
-  'python-info-ppss-context #'python-syntax-context "24.3")
-
-(define-obsolete-function-alias
-  'python-info-ppss-context-type #'python-syntax-context-type "24.3")
-
-(define-obsolete-function-alias
-  'python-info-ppss-comment-or-string-p
-  #'python-syntax-comment-or-string-p "24.3")
 
 (defun python-font-lock-syntactic-face-function (state)
   "Return syntactic face given STATE."
@@ -953,16 +944,10 @@ It makes underscores and dots word constituent chars.")
 
 ;;; Indentation
 
-(define-obsolete-variable-alias
-  'python-indent 'python-indent-offset "24.3")
-
 (defcustom python-indent-offset 4
   "Default indentation offset for Python."
   :type 'integer
   :safe 'integerp)
-
-(define-obsolete-variable-alias
-  'python-guess-indent 'python-indent-guess-indent-offset "24.3")
 
 (defcustom python-indent-guess-indent-offset t
   "Non-nil tells Python mode to guess `python-indent-offset' value."
@@ -3102,8 +3087,8 @@ interpreter is run.  Variables
 `python-shell-font-lock-enable',
 `python-shell-completion-setup-code',
 `python-shell-completion-string-code',
-`python-eldoc-setup-code', `python-eldoc-string-code',
-`python-ffap-setup-code' and `python-ffap-string-code' can
+`python-eldoc-setup-code',
+`python-ffap-setup-code' can
 customize this mode for different Python interpreters.
 
 This mode resets `comint-output-filter-functions' locally, so you
@@ -3233,6 +3218,26 @@ process buffer for a list of commands.)"
                   show)))
     (get-buffer-process buffer)))
 
+(defun python-shell-restart (&optional show)
+  "Restart the Python shell.
+Optional argument SHOW (interactively, the prefix argument), if
+non-nil, means also display the Python shell buffer."
+  (interactive "P")
+  (with-current-buffer
+      (or (and (derived-mode-p 'inferior-python-mode)
+               (current-buffer))
+          (seq-some (lambda (dedicated)
+                      (get-buffer (format "*%s*" (python-shell-get-process-name
+                                                  dedicated))))
+                    '(buffer project nil))
+          (user-error "No Python shell"))
+    (when-let ((proc (get-buffer-process (current-buffer))))
+      (kill-process proc)
+      (while (accept-process-output proc)))
+    (python-shell-make-comint (python-shell-calculate-command)
+                              (string-trim (buffer-name) "\\*" "\\*")
+                              show)))
+
 (defun run-python-internal ()
   "Run an inferior Internal Python process.
 Input and output via buffer named after
@@ -3307,16 +3312,10 @@ be asked for their values."
  "Instead call `python-shell-get-process' and create one if returns nil."
  "25.1")
 
-(define-obsolete-variable-alias
-  'python-buffer 'python-shell-internal-buffer "24.3")
-
 (defvar python-shell-internal-buffer nil
   "Current internal shell buffer for the current buffer.
 This is really not necessary at all for the code to work but it's
 there for compatibility with CEDET.")
-
-(define-obsolete-variable-alias
-  'python-preoutput-result 'python-shell-internal-last-output "24.3")
 
 (defvar python-shell-internal-last-output nil
   "Last output captured by the internal shell.
@@ -3329,9 +3328,6 @@ there for compatibility with CEDET.")
     (if (process-live-p proc-name)
         (get-process proc-name)
       (run-python-internal))))
-
-(define-obsolete-function-alias
-  'python-proc #'python-shell-internal-get-or-create-process "24.3")
 
 (defun python-shell--save-temp-file (string)
   (let* ((temporary-file-directory
@@ -3448,12 +3444,6 @@ Returns the output.  See `python-shell-send-string-no-output'."
          ;; python-send-receive. (At least for CEDET).
          (replace-regexp-in-string "_emacs_out +" "" string)
          (python-shell-internal-get-or-create-process))))
-
-(define-obsolete-function-alias
-  'python-send-receive #'python-shell-internal-send-string "24.3")
-
-(define-obsolete-function-alias
-  'python-send-string #'python-shell-internal-send-string "24.3")
 
 (defun python-shell-buffer-substring (start end &optional nomain no-cookie)
   "Send buffer substring from START to END formatted for shell.
@@ -4620,9 +4610,6 @@ JUSTIFY should be used (if applicable) as in `fill-paragraph'."
 
 ;;; Skeletons
 
-(define-obsolete-variable-alias
-  'python-use-skeletons 'python-skeleton-autoinsert "24.3")
-
 (defcustom python-skeleton-autoinsert nil
   "Non-nil means template skeletons will be automagically inserted.
 This happens when pressing \"if<SPACE>\", for example, to prompt for
@@ -5518,11 +5505,11 @@ operator."
   "Check if point is at `beginning-of-defun' using SYNTAX-PPSS.
 When CHECK-STATEMENT is non-nil, the current statement is checked
 instead of the current physical line."
-  (and (not (python-syntax-context-type (or syntax-ppss (syntax-ppss))))
-       (save-excursion
-         (when check-statement
-           (python-nav-beginning-of-statement))
-         (beginning-of-line 1)
+  (save-excursion
+    (when check-statement
+      (python-nav-beginning-of-statement))
+    (beginning-of-line 1)
+    (and (not (python-syntax-context-type (or syntax-ppss (syntax-ppss))))
          (looking-at python-nav-beginning-of-defun-regexp))))
 
 (defun python-info-looking-at-beginning-of-block ()

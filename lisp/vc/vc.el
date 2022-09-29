@@ -449,7 +449,7 @@
 ;;
 ;;   Return the common ancestor between REV1 and REV2 revisions.
 
-;; TAG SYSTEM
+;; TAG/BRANCH SYSTEM
 ;;
 ;; - create-tag (dir name branchp)
 ;;
@@ -464,8 +464,9 @@
 ;; - retrieve-tag (dir name update)
 ;;
 ;;   Retrieve the version tagged by NAME of all registered files at or below DIR.
+;;   If NAME is a branch name, switch to that branch.
 ;;   If UPDATE is non-nil, then update buffers of any files in the
-;;   tag that are currently visited.  The default implementation
+;;   tag/branch that are currently visited.  The default implementation
 ;;   does a sanity check whether there aren't any uncommitted changes at
 ;;   or below DIR, and then performs a tree walk, using the `checkout'
 ;;   function to retrieve the corresponding revisions.
@@ -664,8 +665,6 @@
 ;;   display the branch name in the mode-line.  Replace
 ;;   vc-cvs-sticky-tag with that.
 ;;
-;; - Add a primitives for switching to a branch (creating it if required.
-;;
 ;; - Add the ability to list tags and branches.
 ;;
 ;;;; Unify two different versions of the amend capability
@@ -809,12 +808,12 @@ not specific to any particular backend."
 (defcustom vc-annotate-switches nil
   "A string or list of strings specifying switches for annotate under VC.
 When running annotate under a given BACKEND, VC uses the first
-non-nil value of `vc-BACKEND-annotate-switches', `vc-annotate-switches',
-and `annotate-switches', in that order.  Since nil means to check the
-next variable in the sequence, either of the first two may use
-the value t to mean no switches at all.  `vc-annotate-switches'
-should contain switches that are specific to version control, but
-not specific to any particular backend.
+non-nil value of `vc-BACKEND-annotate-switches' and
+`vc-annotate-switches', in that order.  Since nil means to check
+the next variable in the sequence, setting the first to the value
+t means no switches at all.  `vc-annotate-switches' should
+contain switches that are specific to version control, but not
+specific to any particular backend.
 
 As very few switches (if any) are used across different VC tools,
 please consider using the specific `vc-BACKEND-annotate-switches'
@@ -1015,7 +1014,11 @@ responsible for the given file."
                           (lambda (backend)
                             (when-let ((dir (vc-call-backend
                                              backend 'responsible-p file)))
-                              (cons backend dir)))
+                              ;; We run DIR through `expand-file-name'
+                              ;; so that abbreviated directories, such
+                              ;; as "~/", wouldn't look "less specific"
+                              ;; due to their artificially shorter length.
+                              (cons backend (expand-file-name dir))))
                           vc-handled-backends))))
         ;; Just a single response (or none); use it.
         (if (< (length dirs) 2)
@@ -1050,7 +1053,8 @@ Within directories, only files already under version control are noticed."
 	((derived-mode-p 'log-edit-mode) log-edit-vc-backend)
 	((derived-mode-p 'diff-mode)     diff-vc-backend)
         ;; Maybe we could even use comint-mode rather than shell-mode?
-	((derived-mode-p 'dired-mode 'shell-mode 'compilation-mode)
+	((derived-mode-p
+          'dired-mode 'shell-mode 'eshell-mode 'compilation-mode)
 	 (ignore-errors (vc-responsible-backend default-directory)))
 	(vc-mode (vc-backend buffer-file-name))))
 
@@ -1623,7 +1627,9 @@ Type \\[vc-next-action] to check in changes.")
      (format "I stole the lock on %s, " file-description)
      (current-time-string)
      ".\n")
-    (message "Please explain why you stole the lock.  Type C-c C-c when done.")))
+    (message
+     (substitute-command-keys
+      "Please explain why you stole the lock.  Type \\`C-c C-c' when done"))))
 
 (defun vc-checkin (files backend &optional comment initial-contents rev patch-string)
   "Check in FILES. COMMENT is a comment string; if omitted, a
@@ -1807,7 +1813,8 @@ in the output buffer."
     (setq buffer-read-only t)
     (diff-mode)
     (setq-local diff-vc-backend (vc-responsible-backend default-directory))
-    (setq-local revert-buffer-function (lambda (_ _) (vc-diff-patch-string)))
+    (setq-local revert-buffer-function
+                (lambda (_ _) (vc-diff-patch-string patch-string)))
     (setq-local vc-patch-string patch-string)
     (pop-to-buffer (current-buffer))
     (vc-run-delayed (vc-diff-finish (current-buffer) nil))))
@@ -2431,7 +2438,23 @@ checked out in that new branch."
   (message "Making %s... done" (if branchp "branch" "tag")))
 
 ;;;###autoload
-(defun vc-retrieve-tag (dir name)
+(defun vc-create-branch (dir name)
+  "Descending recursively from DIR, make a branch called NAME.
+After a new branch is made, the files are checked out in that new branch.
+Uses `vc-create-tag' with the non-nil arg `branchp'."
+  (interactive
+   (let ((granularity
+          (vc-call-backend (vc-responsible-backend default-directory)
+                           'revision-granularity)))
+     (list
+      (if (eq granularity 'repository)
+          default-directory
+        (read-directory-name "Directory: " default-directory default-directory t))
+      (read-string "New branch name: " nil 'vc-revision-history))))
+  (vc-create-tag dir name t))
+
+;;;###autoload
+(defun vc-retrieve-tag (dir name &optional branchp)
   "For each file in or below DIR, retrieve their tagged version NAME.
 NAME can name a branch, in which case this command will switch to the
 named branch in the directory DIR.
@@ -2441,6 +2464,8 @@ If NAME is empty, it refers to the latest revisions of the current branch.
 If locking is used for the files in DIR, then there must not be any
 locked files at or below DIR (but if NAME is empty, locked files are
 allowed and simply skipped).
+If the prefix argument BRANCHP is given, switch the branch
+and check out the files in that branch.
 This function runs the hook `vc-retrieve-tag-hook' when finished."
   (interactive
    (let* ((granularity
@@ -2456,15 +2481,21 @@ This function runs the hook `vc-retrieve-tag-hook' when finished."
              (read-directory-name "Directory: " default-directory nil t))))
      (list
       dir
-      (vc-read-revision (format-prompt "Tag name to retrieve" "latest revisions")
+      (vc-read-revision (format-prompt
+                         (if current-prefix-arg
+                             "Switch to branch"
+                           "Tag name to retrieve")
+                         "latest revisions")
                         (list dir)
-                        (vc-responsible-backend dir)))))
+                        (vc-responsible-backend dir))
+      current-prefix-arg)))
   (let* ((backend (vc-responsible-backend dir))
          (update (when (vc-call-backend backend 'update-on-retrieve-tag)
                    (yes-or-no-p "Update any affected buffers? ")))
 	 (msg (if (or (not name) (string= name ""))
 		  (format "Updating %s... " (abbreviate-file-name dir))
-	        (format "Retrieving tag %s into %s... "
+	        (format "Retrieving %s %s into %s... "
+                        (if branchp "branch" "tag")
 		        name (abbreviate-file-name dir)))))
     (message "%s" msg)
     (vc-call-backend backend 'retrieve-tag dir name update)
@@ -2472,6 +2503,25 @@ This function runs the hook `vc-retrieve-tag-hook' when finished."
     (run-hooks 'vc-retrieve-tag-hook)
     (message "%s" (concat msg "done"))))
 
+;;;###autoload
+(defun vc-switch-branch (dir name)
+  "Switch to the branch NAME in the directory DIR.
+If NAME is empty, it refers to the latest revisions of the current branch.
+Uses `vc-retrieve-tag' with the non-nil arg `branchp'."
+  (interactive
+   (let* ((granularity
+           (vc-call-backend (vc-responsible-backend default-directory)
+                            'revision-granularity))
+          (dir
+           (if (eq granularity 'repository)
+               (expand-file-name (vc-root-dir))
+             (read-directory-name "Directory: " default-directory nil t))))
+     (list
+      dir
+      (vc-read-revision (format-prompt "Switch to branch" "latest revisions")
+                        (list dir)
+                        (vc-responsible-backend dir)))))
+  (vc-retrieve-tag dir name t))
 
 ;; Miscellaneous other entry points
 
@@ -2694,15 +2744,28 @@ with its diffs (if the underlying VCS supports that)."
     (setq vc-parent-buffer-name nil)))
 
 ;;;###autoload
-(defun vc-print-branch-log (branch)
-  "Show the change log for BRANCH root in a window."
+(defun vc-print-branch-log (branch &optional arg)
+  "Show the change log for BRANCH root in a window.
+Optional prefix ARG non-nil requests an opportunity for the user
+to edit the VC shell command that will be run to generate the
+log."
+  ;; The original motivation for ARG was to make it possible to
+  ;; produce a log of more than one Git branch without modifying the
+  ;; print-log VC API.  The user can append the other branches to the
+  ;; command line arguments to 'git log'.  See bug#57807.
   (interactive
-   (list
-    (vc-read-revision "Branch to log: ")))
+   (let* ((backend (vc-responsible-backend default-directory))
+          (rootdir (vc-call-backend backend 'root default-directory)))
+     (list
+      (vc-read-revision "Branch to log: " (list rootdir) backend)
+      current-prefix-arg)))
   (when (equal branch "")
     (error "No branch specified"))
   (let* ((backend (vc-responsible-backend default-directory))
-         (rootdir (vc-call-backend backend 'root default-directory)))
+         (rootdir (vc-call-backend backend 'root default-directory))
+         (vc-filter-command-function (if arg
+                                         #'vc-user-edit-command
+                                       vc-filter-command-function)))
     (vc-print-log-internal backend
                            (list rootdir) branch t
                            (when (> vc-log-show-limit 0) vc-log-show-limit))))
@@ -2912,6 +2975,28 @@ It also signals an error in a Bazaar bound branch."
     (if (vc-find-backend-function backend 'push)
         (vc-call-backend backend 'push arg)
       (user-error "VC push is unsupported for `%s'" backend))))
+
+;;;###autoload
+(defun vc-pull-and-push (&optional arg)
+  "First pull, and then push the current branch.
+The push will only be performed if the pull operation was successful.
+
+You must be visiting a version controlled file, or in a `vc-dir' buffer.
+
+On a distributed version control system, this runs a \"pull\"
+operation on the current branch, prompting for the precise
+command if required.  Optional prefix ARG non-nil forces a prompt
+for the VCS command to run.  If this is successful, a \"push\"
+operation will then be done.
+
+On a non-distributed version control system, this signals an error.
+It also signals an error in a Bazaar bound branch."
+  (interactive "P")
+  (let* ((vc-fileset (vc-deduce-fileset t))
+	 (backend (car vc-fileset)))
+    (if (vc-find-backend-function backend 'pull-and-push)
+        (vc-call-backend backend 'pull-and-push arg)
+      (user-error "VC pull-and-push is unsupported for `%s'" backend))))
 
 (defun vc-version-backup-file (file &optional rev)
   "Return name of backup file for revision REV of FILE.
@@ -3273,8 +3358,6 @@ to provide the `find-revision' operation instead."
 
 
 ;; These things should probably be generally available
-(define-obsolete-function-alias 'vc-string-prefix-p 'string-prefix-p "24.3")
-
 (defun vc-file-tree-walk (dirname func &rest args)
   "Walk recursively through DIRNAME.
 Invoke FUNC f ARGS on each VC-managed file f underneath it."

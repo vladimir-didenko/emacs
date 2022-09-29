@@ -6622,24 +6622,6 @@ fourth element is BUFFER."
      window 'quit-restore
      (list 'tab 'tab (selected-window) buffer)))))
 
-(defcustom display-buffer-function nil
-  "If non-nil, function to call to handle `display-buffer'.
-It will receive two args, the buffer and a flag which if non-nil
-means that the currently selected window is not acceptable.  It
-should choose or create a window, display the specified buffer in
-it, and return the window.
-
-The specified function should call `display-buffer-record-window'
-with corresponding arguments to set up the quit-restore parameter
-of the window used."
-  :type '(choice
-	  (const nil)
-	  (function :tag "function"))
-  :group 'windows)
-
-(make-obsolete-variable 'display-buffer-function
-			'display-buffer-alist "24.3")
-
 (defcustom pop-up-frame-alist nil
   "Alist of parameters for automatically generated new frames.
 If non-nil, the value you specify here is used by the default
@@ -7745,38 +7727,34 @@ specified by the ACTION argument."
 	;; Handle the old form of the first argument.
 	(inhibit-same-window (and action (not (listp action)))))
     (unless (listp action) (setq action nil))
-    (if display-buffer-function
-	;; If `display-buffer-function' is defined, let it do the job.
-	(funcall display-buffer-function buffer inhibit-same-window)
-      ;; Otherwise, use the defined actions.
-      (let* ((user-action
-	      (display-buffer-assq-regexp
-	       buffer display-buffer-alist action))
-             (special-action (display-buffer--special-action buffer))
-	     ;; Extra actions from the arguments to this function:
-	     (extra-action
-	      (cons nil (append (if inhibit-same-window
-				    '((inhibit-same-window . t)))
-				(if frame
-				    `((reusable-frames . ,frame))))))
-	     ;; Construct action function list and action alist.
-	     (actions (list display-buffer-overriding-action
-			    user-action special-action action extra-action
-			    display-buffer-base-action
-			    display-buffer-fallback-action))
-	     (functions (apply 'append
-			       (mapcar (lambda (x)
-					 (setq x (car x))
-					 (if (functionp x) (list x) x))
-				       actions)))
-	     (alist (apply 'append (mapcar 'cdr actions)))
-	     window)
-	(unless (buffer-live-p buffer)
-	  (error "Invalid buffer"))
-	(while (and functions (not window))
-	  (setq window (funcall (car functions) buffer alist)
-	  	functions (cdr functions)))
-	(and (windowp window) window)))))
+    (let* ((user-action
+            (display-buffer-assq-regexp
+             buffer display-buffer-alist action))
+           (special-action (display-buffer--special-action buffer))
+           ;; Extra actions from the arguments to this function:
+           (extra-action
+            (cons nil (append (if inhibit-same-window
+                                  '((inhibit-same-window . t)))
+                              (if frame
+                                  `((reusable-frames . ,frame))))))
+           ;; Construct action function list and action alist.
+           (actions (list display-buffer-overriding-action
+                          user-action special-action action extra-action
+                          display-buffer-base-action
+                          display-buffer-fallback-action))
+           (functions (apply 'append
+                             (mapcar (lambda (x)
+                                       (setq x (car x))
+                                       (if (functionp x) (list x) x))
+                                     actions)))
+           (alist (apply 'append (mapcar 'cdr actions)))
+           window)
+      (unless (buffer-live-p buffer)
+        (error "Invalid buffer"))
+      (while (and functions (not window))
+        (setq window (funcall (car functions) buffer alist)
+              functions (cdr functions)))
+      (and (windowp window) window))))
 
 (defun display-buffer-other-frame (buffer)
   "Display buffer BUFFER preferably in another frame.
@@ -10580,8 +10558,6 @@ displaying that processes's buffer."
 (define-key ctl-x-map "{" 'shrink-window-horizontally)
 (define-key ctl-x-map "-" 'shrink-window-if-larger-than-buffer)
 (define-key ctl-x-map "+" 'balance-windows)
-(define-key ctl-x-map "7" 'split-root-window-below)
-(define-key ctl-x-map "9" 'split-root-window-right)
 (define-key ctl-x-4-map "0" 'kill-buffer-and-window)
 (define-key ctl-x-4-map "1" 'same-window-prefix)
 (define-key ctl-x-4-map "4" 'other-window-prefix)
@@ -10611,6 +10587,17 @@ displaying that processes's buffer."
 (put 'enlarge-window-horizontally 'repeat-map 'resize-window-repeat-map)
 (put 'shrink-window-horizontally 'repeat-map 'resize-window-repeat-map)
 (put 'shrink-window 'repeat-map 'resize-window-repeat-map)
+
+(defvar-keymap window-prefix-map
+  :doc "Keymap for subcommands of \\`C-x w'."
+  "2" #'split-root-window-below
+  "3" #'split-root-window-right
+  "s" #'window-toggle-side-windows
+  "^ f" #'tear-off-window
+  "^ t" #'tab-window-detach
+  "-" #'fit-window-to-buffer
+  "0" #'delete-windows-on)
+(define-key ctl-x-map "w" window-prefix-map)
 
 (provide 'window)
 

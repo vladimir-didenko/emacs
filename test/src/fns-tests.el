@@ -614,9 +614,9 @@
   (should (string= (mapconcat #'identity '("Ä" "ø" "☭" "தமிழ்") "_漢字_")
                    "Ä_漢字_ø_漢字_☭_漢字_தமிழ்"))
   ;; vector
-  (should (string= (mapconcat #'identity ["a" "b"] "") "ab"))
+  (should (string= (mapconcat #'identity ["a" "b"]) "ab"))
   ;; bool-vector
-  (should (string= (mapconcat #'identity [nil nil] "") ""))
+  (should (string= (mapconcat #'identity [nil nil]) ""))
   (should-error (mapconcat #'identity [nil nil t])
                 :type 'wrong-type-argument))
 
@@ -1421,5 +1421,32 @@
     (should (equal (ntake (+ most-positive-fixnum 1) list) '(a b c)))
     (should (equal (ntake (- most-negative-fixnum 1) list) nil))
     (should (equal list '(a b c)))))
+
+(ert-deftest fns--copy-alist ()
+  (dolist (orig '(nil
+                  ((a . 1) (b . 2) (a . 3))
+                  (a (b . 3) ((c) (d)))))
+    (ert-info ((prin1-to-string orig) :prefix "orig: ")
+      (let ((copy (copy-alist orig)))
+        (should (equal orig copy))
+        (while orig
+          (should-not (eq orig copy))
+          ;; Check that cons pairs are copied but nothing else.
+          (let ((orig-elt (car orig))
+                (copy-elt (car copy)))
+            (if (atom orig-elt)
+                (should (eq orig-elt copy-elt))
+              (should-not (eq orig-elt copy-elt))
+              (should (eq (car orig-elt) (car copy-elt)))
+              (should (eq (cdr orig-elt) (cdr copy-elt)))))
+          (setq orig (cdr orig))
+          (setq copy (cdr copy))))))
+
+  (should-error (copy-alist 'a)
+                :type 'wrong-type-argument)
+  (should-error (copy-alist [(a . 1) (b . 2) (a . 3)])
+                :type 'wrong-type-argument)
+  (should-error (copy-alist "abc")
+                :type 'wrong-type-argument))
 
 ;;; fns-tests.el ends here

@@ -1880,13 +1880,22 @@ safe_run_hooks_error (Lisp_Object error, ptrdiff_t nargs, Lisp_Object *args)
 static Lisp_Object
 safe_run_hook_funcall (ptrdiff_t nargs, Lisp_Object *args)
 {
-  eassert (nargs >= 2);
   /* We need to swap args[0] and args[1] here or in `safe_run_hooks_1`.
      It's more convenient to do it here.  */
+  eassert (nargs >= 2);
   Lisp_Object fun = args[0], hook = args[1];
-  args[0] = hook, args[1] = fun;
-  internal_condition_case_n (safe_run_hooks_1, nargs, args,
+  /* The `nargs` array cannot be mutated safely here because it is
+     reused by our caller `run_hook_with_args`.
+     We could arguably change it temporarily if we set it back
+     to its original state before returning, but it's too ugly.  */
+  USE_SAFE_ALLOCA;
+  Lisp_Object *newargs;
+  SAFE_ALLOCA_LISP (newargs, nargs);
+  newargs[0] = hook, newargs[1] = fun;
+  memcpy (newargs + 2, args + 2, (nargs - 2) * word_size);
+  internal_condition_case_n (safe_run_hooks_1, nargs, newargs,
                              Qt, safe_run_hooks_error);
+  SAFE_FREE ();
   return Qnil;
 }
 
@@ -11787,6 +11796,9 @@ The `posn-' functions access elements of such lists.  */)
 DEFUN ("posn-at-point", Fposn_at_point, Sposn_at_point, 0, 2, 0,
        doc: /* Return position information for buffer position POS in WINDOW.
 POS defaults to point in WINDOW; WINDOW defaults to the selected window.
+
+If POS is in invisible text or is hidden by `display' properties,
+this function may report on buffer positions before or after POS.
 
 Return nil if POS is not visible in WINDOW.  Otherwise,
 the return value is similar to that returned by `event-start' for

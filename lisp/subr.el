@@ -1562,6 +1562,21 @@ in the current Emacs session, then this function may return nil."
   ;; is this really correct? maybe remove mouse-movement?
   (memq (event-basic-type object) '(mouse-1 mouse-2 mouse-3 mouse-movement)))
 
+(defun event--posn-at-point ()
+  ;; Use `window-point' for the case when the current buffer
+  ;; is temporarily switched to some other buffer (bug#50256)
+  (let* ((pos (window-point))
+         (posn (posn-at-point pos)))
+    (if (null posn) ;; `pos' is "out of sight".
+        (list (selected-window) pos '(0 . 0) 0)
+      ;; If `pos' is inside a chunk of text hidden by an `invisible'
+      ;; or `display' property, `posn-at-point' returns the position
+      ;; that *is* visible, whereas `event--posn-at-point' is used
+      ;; when we have a keyboard event, whose position is `point' even
+      ;; if that position is invisible.
+      (setf (nth 5 posn) pos)
+      posn)))
+
 (defun event-start (event)
   "Return the starting position of EVENT.
 EVENT should be a mouse click, drag, or key press event.  If
@@ -1588,10 +1603,7 @@ nil or (STRING . POSITION)'.
 
 For more information, see Info node `(elisp)Click Events'."
   (or (and (consp event) (nth 1 event))
-      ;; Use `window-point' for the case when the current buffer
-      ;; is temporarily switched to some other buffer (bug#50256)
-      (posn-at-point (window-point))
-      (list (selected-window) (window-point) '(0 . 0) 0)))
+      (event--posn-at-point)))
 
 (defun event-end (event)
   "Return the ending position of EVENT.
@@ -1599,10 +1611,7 @@ EVENT should be a click, drag, or key press event.
 
 See `event-start' for a description of the value returned."
   (or (and (consp event) (nth (if (consp (nth 2 event)) 2 1) event))
-      ;; Use `window-point' for the case when the current buffer
-      ;; is temporarily switched to some other buffer (bug#50256)
-      (posn-at-point (window-point))
-      (list (selected-window) (window-point) '(0 . 0) 0)))
+      (event--posn-at-point)))
 
 (defsubst event-click-count (event)
   "Return the multi-click count of EVENT, a click or drag event.
@@ -1794,8 +1803,6 @@ be a list of the form returned by `event-start' and `event-end'."
 
 ;;;; Obsolescent names for functions.
 
-(make-obsolete 'buffer-has-markers-at nil "24.3")
-
 (make-obsolete 'invocation-directory "use the variable of the same name."
                "27.1")
 (make-obsolete 'invocation-name "use the variable of the same name." "27.1")
@@ -1860,6 +1867,14 @@ be a list of the form returned by `event-start' and `event-end'."
 ;; We can't actually make `values' obsolete, because that will result
 ;; in warnings when using `values' in let-bindings.
 ;;(make-obsolete-variable 'values "no longer used" "28.1")
+
+(defvar max-specpdl-size 2500
+  "Former limit on specbindings, now without effect.
+This variable used to limit the size of the specpdl stack which,
+among other things, holds dynamic variable bindings and `unwind-protect'
+activations.  To prevent runaway recursion, use `max-lisp-eval-depth'
+instead; it will indirectly limit the specpdl stack size as well.")
+(make-obsolete-variable 'max-specpdl-size nil "29.1")
 
 
 ;;;; Alternate names for functions - these are not being phased out.
@@ -2499,7 +2514,20 @@ The variable list SPEC is the same as in `if-let'."
   (declare (indent 1) (debug if-let))
   (list 'if-let spec (macroexp-progn body)))
 
+(defmacro while-let (spec &rest body)
+  "Bind variables according to SPEC and conditionally evaluate BODY.
+Evaluate each binding in turn, stopping if a binding value is nil.
+If all bindings are non-nil, eval BODY and repeat.
 
+The variable list SPEC is the same as in `if-let'."
+  (declare (indent 1) (debug if-let))
+  (let ((done (gensym "done")))
+    `(catch ',done
+       (while t
+         (if-let* ,spec
+             (progn
+               ,@body)
+           (throw ',done nil))))))
 
 ;; PUBLIC: find if the current mode derives from another.
 
@@ -3758,10 +3786,6 @@ This finishes the change group by reverting all of its changes."
 
 ;;;; Display-related functions.
 
-;; For compatibility.
-(define-obsolete-function-alias 'redraw-modeline
-  #'force-mode-line-update "24.3")
-
 (defun momentary-string-display (string pos &optional exit-char message)
   "Momentarily display STRING in the buffer at POS.
 Display remains until next event is input.
@@ -4032,6 +4056,13 @@ system's shell."
 Otherwise, return nil."
   (or (stringp object) (null object)))
 
+(defun list-of-strings-p (object)
+  "Return t if OBJECT is nil or a list of strings."
+  (declare (pure t) (side-effect-free error-free))
+  (while (and (consp object) (stringp (car object)))
+    (setq object (cdr object)))
+  (null object))
+
 (defun booleanp (object)
   "Return t if OBJECT is one of the two canonical boolean values: t or nil.
 Otherwise, return nil."
@@ -4225,15 +4256,17 @@ Comparisons and replacements are done with fixed case."
         (error "End after end of buffer"))
     (setq end (point-max)))
   (save-excursion
-    (let ((matches 0)
-          (case-fold-search nil))
-      (goto-char start)
-      (while (search-forward string end t)
-        (delete-region (match-beginning 0) (match-end 0))
-        (insert replacement)
-        (setq matches (1+ matches)))
-      (and (not (zerop matches))
-           matches))))
+    (goto-char start)
+    (save-restriction
+      (narrow-to-region start end)
+      (let ((matches 0)
+            (case-fold-search nil))
+        (while (search-forward string nil t)
+          (delete-region (match-beginning 0) (match-end 0))
+          (insert replacement)
+          (setq matches (1+ matches)))
+        (and (not (zerop matches))
+             matches)))))
 
 (defun replace-regexp-in-region (regexp replacement &optional start end)
   "Replace REGEXP with REPLACEMENT in the region from START to END.
@@ -4260,14 +4293,16 @@ REPLACEMENT can use the following special elements:
         (error "End after end of buffer"))
     (setq end (point-max)))
   (save-excursion
-    (let ((matches 0)
-          (case-fold-search nil))
-      (goto-char start)
-      (while (re-search-forward regexp end t)
-        (replace-match replacement t)
-        (setq matches (1+ matches)))
-      (and (not (zerop matches))
-           matches))))
+    (goto-char start)
+    (save-restriction
+      (narrow-to-region start end)
+      (let ((matches 0)
+            (case-fold-search nil))
+          (while (re-search-forward regexp nil t)
+          (replace-match replacement t)
+          (setq matches (1+ matches)))
+        (and (not (zerop matches))
+             matches)))))
 
 (defun yank-handle-font-lock-face-property (face start end)
   "If `font-lock-defaults' is nil, apply FACE as a `face' property.
@@ -4825,16 +4860,26 @@ the function `undo--wrap-and-run-primitive-undo'."
       (let ((undo--combining-change-calls t))
 	(if (not inhibit-modification-hooks)
 	    (run-hook-with-args 'before-change-functions beg end))
-	(let (;; (inhibit-modification-hooks t)
-              (before-change-functions
-               ;; Ugly Hack: if the body uses syntax-ppss/syntax-propertize
-               ;; (e.g. via a regexp-search or sexp-movement triggering
-               ;; on-the-fly syntax-propertize), make sure that this gets
-               ;; properly refreshed after subsequent changes.
-               (if (memq #'syntax-ppss-flush-cache before-change-functions)
-                   '(syntax-ppss-flush-cache)))
-              after-change-functions)
-	  (setq result (funcall body)))
+	(let ((bcf before-change-functions)
+	      (acf after-change-functions)
+	      (local-bcf (local-variable-p 'before-change-functions))
+	      (local-acf (local-variable-p 'after-change-functions)))
+	  (unwind-protect
+              ;; FIXME: WIBNI we could just use `inhibit-modification-hooks'?
+              (progn
+                ;; Ugly Hack: if the body uses syntax-ppss/syntax-propertize
+                ;; (e.g. via a regexp-search or sexp-movement triggering
+                ;; on-the-fly syntax-propertize), make sure that this gets
+                ;; properly refreshed after subsequent changes.
+	        (setq-local before-change-functions
+                            (if (memq #'syntax-ppss-flush-cache bcf)
+                                '(syntax-ppss-flush-cache)))
+                (setq-local after-change-functions nil)
+	        (setq result (funcall body)))
+	    (if local-bcf (setq before-change-functions bcf)
+	      (kill-local-variable 'before-change-functions))
+	    (if local-acf (setq after-change-functions acf)
+	      (kill-local-variable 'after-change-functions))))
         (when (not (eq buffer-undo-list t))
           (let ((ap-elt
 		 (list 'apply
@@ -5209,6 +5254,8 @@ Modifies the match data; use `save-match-data' if necessary."
     (funcall push-one)
 
     (nreverse list)))
+
+(defalias 'string-split #'split-string)
 
 (defun combine-and-quote-strings (strings &optional separator)
   "Concatenate the STRINGS, adding the SEPARATOR (default \" \").

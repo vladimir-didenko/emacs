@@ -584,6 +584,18 @@ you instead want the image to be re-rendered at the new size, set
 default size for DocView, customize the variable
 @code{doc-view-resolution}.
 
+@vindex doc-view-imenu-enabled
+@vindex doc-view-imenu-flatten
+@vindex doc-view-imenu-format
+  When the @command{mutool} program is available, DocView will use it
+to generate entries for an outline menu, making it accessible via the
+@code{imenu} facility (@pxref{Imenu}).  To disable this functionality
+even when @command{mutool} can be found on your system, customize the
+variable @code{doc-view-imenu-enabled} to the @code{nil} value.  You
+can further customize how @code{imenu} items are formatted and
+displayed using the variables @code{doc-view-imenu-format} and
+@code{doc-view-flatten}.
+
 @node DocView Searching
 @subsection DocView Searching
 
@@ -2096,7 +2108,7 @@ If there is no response within that time, @command{emacsclient} will
 display a warning and exit.  The default is @samp{0}, which means to
 wait forever.
 
-@item --parent-id @var{id}
+@item --parent-id=@var{id}
 Open an @command{emacsclient} frame as a client frame in the parent X
 window with id @var{id}, via the XEmbed protocol.  Currently, this
 option is mainly useful for developers.

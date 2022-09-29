@@ -37,7 +37,6 @@ GNUstep port and post-20 update by Adrian Robert (arobert@cogsci.ucsd.edu)
 #include <time.h>
 #include <signal.h>
 #include <unistd.h>
-#include <stdbool.h>
 
 #include <c-ctype.h>
 #include <c-strcase.h>
@@ -5607,17 +5606,6 @@ ns_term_init (Lisp_Object display_name)
 
   NSTRACE_MSG ("Versions");
 
-  {
-#ifdef NS_IMPL_GNUSTEP
-    Vwindow_system_version = build_string (gnustep_base_version);
-#else
-    /* PSnextrelease (128, c); */
-    char c[DBL_BUFSIZE_BOUND];
-    int len = dtoastr (c, sizeof c, 0, 0, NSAppKitVersionNumber);
-    Vwindow_system_version = make_unibyte_string (c, len);
-#endif
-  }
-
   delete_keyboard_wait_descriptor (0);
 
   ns_app_name = [[NSProcessInfo processInfo] processName];
@@ -7912,7 +7900,6 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
   NSRect r = [win frame];
   NSArray *screens = [NSScreen screens];
   NSScreen *screen = [screens objectAtIndex: 0];
-  struct input_event ie;
 
   NSTRACE ("[EmacsView windowDidMove:]");
 
@@ -7928,6 +7915,8 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
 
       if (emacs_event)
 	{
+	  struct input_event ie;
+	  EVENT_INIT (ie);
 	  ie.kind = MOVE_FRAME_EVENT;
 	  XSETFRAME (ie.frame_or_window, emacsframe);
 	  XSETINT (ie.x, emacsframe->left_pos);
