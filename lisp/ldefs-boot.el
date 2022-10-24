@@ -897,6 +897,15 @@ variable, and is meant to be used in `compilation-filter-hook'.")
 (register-definition-prefixes "ansi-color" '("ansi-color-"))
 
 
+;;; Generated autoloads from ansi-osc.el
+
+(autoload 'ansi-osc-compilation-filter "ansi-osc" "\
+Maybe collect OSC control sequences.
+This function depends on the variable `ansi-osc-for-compilation-buffer',
+and is meant to be used in `compilation-filter-hook'.")
+(register-definition-prefixes "ansi-osc" '("ansi-osc-"))
+
+
 ;;; Generated autoloads from progmodes/antlr-mode.el
 
 (push (purecopy '(antlr-mode 2 2 3)) package--builtin-versions)
@@ -4693,14 +4702,13 @@ Search happens in `native-comp-eln-load-path'.
 (autoload 'native-compile "comp" "\
 Compile FUNCTION-OR-FILE into native code.
 This is the synchronous entry-point for the Emacs Lisp native
-compiler.
-FUNCTION-OR-FILE is a function symbol, a form, or the filename of
-an Emacs Lisp source file.
-If OUTPUT is non-nil, use it as the filename for the compiled
-object.
-If FUNCTION-OR-FILE is a filename, return the filename of the
-compiled object.  If FUNCTION-OR-FILE is a function symbol or a
-form, return the compiled function.
+compiler.  FUNCTION-OR-FILE is a function symbol, a form, or the
+filename of an Emacs Lisp source file.  If OUTPUT is non-nil, use
+it as the filename for the compiled object.  If FUNCTION-OR-FILE
+is a filename, if the compilation was successful return the
+filename of the compiled object.  If FUNCTION-OR-FILE is a
+function symbol or a form, if the compilation was successful
+return the compiled function.
 
 (fn FUNCTION-OR-FILE &optional OUTPUT)")
 (autoload 'batch-native-compile "comp" "\
@@ -7796,7 +7804,7 @@ Document types are symbols like `dvi', `ps', `pdf', `epub',
 Major mode in DocView buffers.
 
 DocView Mode is an Emacs document viewer.  It displays PDF, PS
-and DVI files (as PNG images) in Emacs buffers.
+and DVI files (as PNG or SVG images) in Emacs buffers.
 
 You can use \\<doc-view-mode-map>\\[doc-view-toggle-display] to
 toggle between displaying the document or editing it as text.
@@ -11705,6 +11713,17 @@ VARIABLES list of the connection profile.  The list is processed
 in order.
 
 (fn PROFILE VARIABLES)")
+(autoload 'connection-local-update-profile-variables "files-x" "\
+Update the variable settings for PROFILE in-place.
+VARIABLES is a list that declares connection-local variables for
+the connection profile.  An element in VARIABLES is an alist
+whose elements are of the form (VAR . VALUE).
+
+Unlike `connection-local-set-profile-variables' (which see), this
+function preserves the values of any existing variable
+definitions that aren't listed in VARIABLES.
+
+(fn PROFILE VARIABLES)")
 (autoload 'hack-connection-local-variables-apply "files-x" "\
 Apply connection-local variables identified by CRITERIA.
 Other local variables, like file-local and dir-local variables,
@@ -11716,11 +11735,38 @@ Apply connection-local variables according to `default-directory'.
 Execute BODY, and unwind connection-local variables.
 
 (fn &rest BODY)" nil t)
+(autoload 'with-connection-local-application-variables "files-x" "\
+Apply connection-local variables for APPLICATION in `default-directory'.
+Execute BODY, and unwind connection-local variables.
+
+(fn APPLICATION &rest BODY)" nil t)
+(function-put 'with-connection-local-application-variables 'lisp-indent-function 1)
 (autoload 'with-connection-local-variables-1 "files-x" "\
 Apply connection-local variables according to `default-directory'.
 Call BODY-FUN with no args, and then unwind connection-local variables.
 
 (fn BODY-FUN)")
+(autoload 'setq-connection-local "files-x" "\
+Set each VARIABLE connection-locally to VALUE.
+
+When `connection-local-profile-name-for-setq' is set, assign each
+variable's value on that connection profile, and set that profile
+for `connection-local-criteria'.  You can use this in combination
+with `with-connection-local-variables', as in
+
+  (with-connection-local-variables
+    (setq-connection-local VARIABLE VALUE))
+
+If there's no connection-local profile to use, just set the
+variables normally, as with `setq'.
+
+The variables are literal symbols and should not be quoted.  The
+second VALUE is not computed until after the first VARIABLE is
+set, and so on; each VALUE can use the new value of variables set
+earlier in the `setq-connection-local'.  The return value of the
+`setq-connection-local' form is the value of the last VALUE.
+
+(fn [VARIABLE VALUE]...)" nil t)
 (autoload 'path-separator "files-x" "\
 The connection-local value of `path-separator'.")
 (autoload 'null-device "files-x" "\
@@ -12542,6 +12588,18 @@ For example, \"%<010b\" means \"substitute into the output the
 value associated with ?b in SPECIFICATION, either padding it with
 leading zeros or truncating leading characters until it's ten
 characters wide\".
+
+the substitution for a specification character can also be a
+function, taking no arguments and returning a string to be used
+for the replacement.  It will only be called if FORMAT uses that
+character.  For example:
+
+  (format-spec \"%n\"
+               \\=`((?n . ,(lambda ()
+                          (read-number \"Number: \")))))
+
+Note that it is best to make sure the function is not quoted,
+like above, so that it is compiled by the byte-compiler.
 
 Any text properties of FORMAT are copied to the result, with any
 text properties of a %-spec itself copied to its substitution.
@@ -15368,7 +15426,7 @@ it is disabled.
 
 ;;; Generated autoloads from progmodes/hideshow.el
 
-(defvar hs-special-modes-alist (mapcar 'purecopy '((c-mode "{" "}" "/[*/]" nil nil) (c++-mode "{" "}" "/[*/]" nil nil) (bibtex-mode ("@\\S(*\\(\\s(\\)" 1)) (java-mode "{" "}" "/[*/]" nil nil) (js-mode "{" "}" "/[*/]" nil) (mhtml-mode "{\\|<[^/>]*?" "}\\|</[^/>]*[^/]>" "<!--" mhtml-forward nil))) "\
+(defvar hs-special-modes-alist (mapcar #'purecopy '((c-mode "{" "}" "/[*/]" nil nil) (c++-mode "{" "}" "/[*/]" nil nil) (bibtex-mode ("@\\S(*\\(\\s(\\)" 1)) (java-mode "{" "}" "/[*/]" nil nil) (js-mode "{" "}" "/[*/]" nil) (mhtml-mode "{\\|<[^/>]*?" "}\\|</[^/>]*[^/]>" "<!--" mhtml-forward nil))) "\
 Alist for initializing the hideshow variables for different modes.
 Each element has the form
   (MODE START END COMMENT-START FORWARD-SEXP-FUNC ADJUST-BEG-FUNC
@@ -16708,8 +16766,9 @@ and that image type is present in `image-type-auto-detectable' with a
 non-nil value.  If that value is non-nil, but not t, then the image type
 must be available.")
 (autoload 'create-image "image" "\
-Create an image.
-FILE-OR-DATA is an image file name or image data.
+Create an image from FILE-OR-DATA.
+FILE-OR-DATA is an image file name or image data.  If it is a relative
+file name, the function will look for it along `image-load-path'.
 
 Optional TYPE is a symbol describing the image type.  If TYPE is omitted
 or nil, try to determine the image type from its first few bytes
@@ -16727,10 +16786,6 @@ automatically scaled up in proportion to the default font.
 Value is the image created, or nil if images of type TYPE are not supported.
 
 Images should not be larger than specified by `max-image-size'.
-
-Image file names that are not absolute are searched for in the
-\"images\" sub-directory of `data-directory' and
-`x-bitmap-file-path' (in that order).
 
 (fn FILE-OR-DATA &optional TYPE DATA-P &rest PROPS)")
 (autoload 'put-image "image" "\
@@ -16898,6 +16953,7 @@ After cropping an image, you can save it by `M-x image-save' or
 ;;; Generated autoloads from image/image-dired.el
 
 (push (purecopy '(image-dired 0 5)) package--builtin-versions)
+(put 'image-dired-thumbnail-storage 'safe-local-variable (lambda (x) (eq x 'per-directory)))
 (autoload 'image-dired-dired-with-window-configuration "image-dired" "\
 Open directory DIR and create a default window configuration.
 
@@ -17243,6 +17299,11 @@ an index alist of the current buffer.  The function is
 called within a `save-excursion'.
 
 See `imenu--index-alist' for the format of the buffer index alist.")
+(defvar-local imenu-submenus-on-top t "\
+Flag specifying whether items with sublists should be kept at top.
+
+For some indexes, such as those describing sections in a document, it
+makes sense to keep their original order even in the menubar.")
 (defvar-local imenu-prev-index-position-function 'beginning-of-defun "\
 Function for finding the next index position.
 
@@ -18687,6 +18748,7 @@ This scans for ;;;###autoload forms and related things.
 The first element on the command line should be the (main)
 loaddefs.el output file, and the rest are the directories to
 use.")
+ (load "theme-loaddefs.el" t)
 (register-definition-prefixes "loaddefs-gen" '("autoload-" "generated-autoload-" "loaddefs-generate--" "no-update-autoloads"))
 
 
@@ -18808,6 +18870,8 @@ done.  Otherwise, this function will use the current buffer.
 Major mode for browsing CVS log output.
 
 (fn)" t)
+(autoload 'log-view-get-marked "log-view" "\
+Return the list of tags for the marked log entries.")
 (register-definition-prefixes "log-view" '("log-view-"))
 
 
@@ -22558,15 +22622,6 @@ The Git version of Org mode.
 Inserted by installing Org or when a release is made.")
 
 
-;;; Generated autoloads from osc.el
-
-(autoload 'osc-compilation-filter "osc" "\
-Maybe collect OSC control sequences.
-This function depends on the variable `osc-for-compilation-buffer',
-and is meant to be used in `compilation-filter-hook'.")
-(register-definition-prefixes "osc" '("osc-"))
-
-
 ;;; Generated autoloads from outline.el
 
 (put 'outline-regexp 'safe-local-variable 'stringp)
@@ -24504,7 +24559,7 @@ Open profile FILENAME.
 
 ;;; Generated autoloads from progmodes/project.el
 
-(push (purecopy '(project 0 8 1)) package--builtin-versions)
+(push (purecopy '(project 0 8 2)) package--builtin-versions)
 (autoload 'project-current "project" "\
 Return the project instance in DIRECTORY, defaulting to `default-directory'.
 
@@ -25894,6 +25949,9 @@ The mode's hook is called both when the mode is enabled and when
 it is disabled.
 
 (fn &optional ARG)" t)
+(autoload 'repeat-exit "repeat" "\
+Exit the repeating sequence.
+This function can be used to force exit of repetition while it's active." t)
 (register-definition-prefixes "repeat" '("describe-repeat-maps" "repeat-"))
 
 
@@ -29404,6 +29462,8 @@ PROMPT will be inserted at the start of the buffer, but won't be
 included in the resulting string.  If PROMPT is nil, no help text
 will be inserted.
 
+Also see `read-string-from-buffer'.
+
 (fn PROMPT STRING SUCCESS-CALLBACK &key ABORT-CALLBACK)")
 (autoload 'read-string-from-buffer "string-edit" "\
 Switch to a new buffer to edit STRING in a recursive edit.
@@ -29412,6 +29472,8 @@ The user finishes editing with \\<string-edit-mode-map>\\[string-edit-done], or 
 PROMPT will be inserted at the start of the buffer, but won't be
 included in the resulting string.  If nil, no prompt will be
 inserted in the buffer.
+
+Also see `string-edit'.
 
 (fn PROMPT STRING)")
 (register-definition-prefixes "string-edit" '("string-edit-"))
@@ -30746,9 +30808,9 @@ such as if there are no commands in the file, the value of `tex-default-mode'
 says which mode to use.
 
 (fn)" t)
-(defalias 'TeX-mode #'tex-mode)
-(defalias 'plain-TeX-mode #'plain-tex-mode)
-(defalias 'LaTeX-mode #'latex-mode)
+ (defalias 'TeX-mode #'tex-mode)
+ (defalias 'plain-TeX-mode #'plain-tex-mode)
+ (defalias 'LaTeX-mode #'latex-mode)
 (autoload 'plain-tex-mode "tex-mode" "\
 Major mode for editing files of input for plain TeX.
 Makes $ and } display the characters they match.
@@ -31968,6 +32030,11 @@ Add archive file name handler to `file-name-handler-alist'." (when (and tramp-ar
 (register-definition-prefixes "tramp-compat" '("tramp-"))
 
 
+;;; Generated autoloads from net/tramp-container.el
+
+(register-definition-prefixes "tramp-container" '("tramp-"))
+
+
 ;;; Generated autoloads from net/tramp-crypt.el
 
 (register-definition-prefixes "tramp-crypt" '("tramp-crypt-"))
@@ -32703,6 +32770,10 @@ if it had been inserted from a file named URL.
 
 
 (fn URL &optional VISIT BEG END REPLACE)")
+(autoload 'url-insert-file-contents-literally "url-handlers" "\
+Insert the data retrieved from URL literally in the current buffer.
+
+(fn URL)")
 (register-definition-prefixes "url-handlers" '("url-"))
 
 
@@ -33398,19 +33469,18 @@ with its diffs (if the underlying VCS supports that).
 (fn &optional LIMIT REVISION)" t)
 (autoload 'vc-print-branch-log "vc" "\
 Show the change log for BRANCH root in a window.
-Optional prefix ARG non-nil requests an opportunity for the user
-to edit the VC shell command that will be run to generate the
-log.
 
-(fn BRANCH &optional ARG)" t)
+(fn BRANCH)" t)
 (autoload 'vc-log-incoming "vc" "\
 Show log of changes that will be received with pull from REMOTE-LOCATION.
 When called interactively with a prefix argument, prompt for REMOTE-LOCATION.
+In some version control systems REMOTE-LOCATION can be a remote branch name.
 
 (fn &optional REMOTE-LOCATION)" t)
 (autoload 'vc-log-outgoing "vc" "\
 Show log of changes that will be sent with a push operation to REMOTE-LOCATION.
 When called interactively with a prefix argument, prompt for REMOTE-LOCATION.
+In some version control systems REMOTE-LOCATION can be a remote branch name.
 
 (fn &optional REMOTE-LOCATION)" t)
 (autoload 'vc-log-search "vc" "\
@@ -33533,6 +33603,22 @@ From a program, any ARGS are assumed to be filenames for which
 log entries should be gathered.
 
 (fn &rest ARGS)" t)
+(autoload 'vc-edit-next-command "vc" "\
+Request editing the next VC shell command before execution.
+This is a prefix command.  It affects only a VC command executed
+immediately after this one." t)
+(autoload 'vc-prepare-patch "vc" "\
+Compose an Email sending patches for REVISIONS to ADDRESSEE.
+If `vc-prepare-patches-separately' is nil, SUBJECT will be used
+as the default subject for the message (and it will be prompted
+for when called interactively).  Otherwise a separate message
+will be composed for each revision, with SUBJECT derived from the
+invidividual commits.
+
+When invoked interactively in a Log View buffer with marked
+revisions, those revisions will be used.
+
+(fn ADDRESSEE SUBJECT REVISIONS)" t)
 (register-definition-prefixes "vc" '("vc-" "with-vc-properties"))
 
 
@@ -33652,9 +33738,6 @@ FILE-OR-LIST is the name of a working file; it may be a list of
 files or be nil (to execute commands that don't expect a file
 name or set of files).  If an optional list of FLAGS is present,
 that is inserted into the command line before the filename.
-
-If `vc-want-edit-command-p' is non-nil, prompt the user to edit
-COMMAND and FLAGS before execution.
 
 Return the return value of the slave command in the synchronous
 case, and the process object in the asynchronous case.
@@ -34530,10 +34613,6 @@ Convert Vietnamese characters of the current buffer to `VIQR' mnemonics." t)
 
 ;;; Generated autoloads from view.el
 
-(defvar view-remove-frame-by-deleting t "\
-Determine how View mode removes a frame no longer needed.
-If nil, make an icon of the frame.  If non-nil, delete the frame.")
-(custom-autoload 'view-remove-frame-by-deleting "view" t)
 (defvar-local view-mode nil "\
 Non-nil if View mode is enabled.
 Don't change this variable directly, you must change it by one of the
@@ -34832,6 +34911,7 @@ Turn on Viper emulation of Vi in Emacs.  See Info node `(viper)Top'." t)
 
 ;;; Generated autoloads from image/wallpaper.el
 
+(put 'wallpaper-setter-create 'lisp-indent-function 1)
 (autoload 'wallpaper-set "wallpaper" "\
 Set the desktop background to FILE in a graphical environment.
 
@@ -36086,7 +36166,13 @@ Extract file name from an yenc header.")
 ;;; Generated autoloads from play/zone.el
 
 (autoload 'zone "zone" "\
-Zone out, completely." t)
+Zone out, completely.
+With a prefix argument the user is prompted for a program to run.
+When called from Lisp the optional argument PGM can be used to
+run a specific program.  The program must be a member of
+`zone-programs'.
+
+(fn &optional PGM)" t)
 (register-definition-prefixes "zone" '("zone-"))
 
 ;;; End of scraped data

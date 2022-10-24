@@ -2479,7 +2479,7 @@ get_keysym_name (int keysym)
 {
   static char value[16];
   NSTRACE ("get_keysym_name");
-  sprintf (value, "%d", keysym);
+  snprintf (value, 16, "%d", keysym);
   return value;
 }
 
@@ -3995,6 +3995,7 @@ static void
 ns_draw_stretch_glyph_string (struct glyph_string *s)
 {
   struct face *face;
+  NSColor *fg_color;
 
   if (s->hl == DRAW_CURSOR
       && !x_stretch_cursor_p)
@@ -4091,8 +4092,20 @@ ns_draw_stretch_glyph_string (struct glyph_string *s)
 	  NSRectFill (NSMakeRect (x, s->y, background_width, s->height));
 	}
     }
-}
 
+  /* Draw overlining, etc. on the stretch glyph (or the part of the
+     stretch glyph after the cursor).  If the glyph has a box, then
+     decorations will be drawn after drawing the box in
+     ns_draw_glyph_string, in order to prevent them from being
+     overwritten by the box.  */
+  if (s->face->box == FACE_NO_BOX)
+    {
+      fg_color = [NSColor colorWithUnsignedLong:
+			    NS_FACE_FOREGROUND (s->face)];
+      ns_draw_text_decoration (s, s->face, fg_color,
+			       s->background_width, s->x);
+    }
+}
 
 static void
 ns_draw_glyph_string_foreground (struct glyph_string *s)
@@ -4250,7 +4263,7 @@ ns_draw_glyphless_glyph_string_foreground (struct glyph_string *s)
 	{
 	  unsigned int ch = glyph->u.glyphless.ch;
 	  eassume (ch <= MAX_CHAR);
-	  sprintf (buf, "%0*X", ch < 0x10000 ? 4 : 6, ch);
+	  snprintf (buf, 7, "%0*X", ch < 0x10000 ? 4 : 6, ch);
 	  str = buf;
 	}
 
@@ -4410,7 +4423,8 @@ ns_draw_glyph_string (struct glyph_string *s)
     {
       NSColor *fg_color;
 
-      fg_color = [NSColor colorWithUnsignedLong:NS_FACE_FOREGROUND (s->face)];
+      fg_color = [NSColor colorWithUnsignedLong: NS_FACE_FOREGROUND (s->face)];
+
       ns_draw_text_decoration (s, s->face, fg_color,
 			       s->background_width, s->x);
     }
@@ -6102,17 +6116,20 @@ ns_term_shutdown (int sig)
 
 - (void) terminate: (id)sender
 {
+  struct input_event ie;
+  struct frame *f;
+
   NSTRACE ("[EmacsApp terminate:]");
 
-  struct frame *emacsframe = SELECTED_FRAME ();
+  f = SELECTED_FRAME ();
+  EVENT_INIT (ie);
 
-  if (!emacs_event)
-    return;
+  ie.kind = NS_NONKEY_EVENT;
+  ie.code = KEY_NS_POWER_OFF;
+  ie.arg = Qt; /* mark as non-key event */
+  XSETFRAME (ie.frame_or_window, f);
 
-  emacs_event->kind = NS_NONKEY_EVENT;
-  emacs_event->code = KEY_NS_POWER_OFF;
-  emacs_event->arg = Qt; /* mark as non-key event */
-  EV_TRAILER ((id)nil);
+  kbd_buffer_store_event (&ie);
 }
 
 static bool
@@ -8579,7 +8596,7 @@ ns_create_font_panel_buttons (id target, SEL select, SEL cancel_action)
   EmacsLayer *layer = (EmacsLayer *)[self layer];
 
   [layer setContentsScale:[[notification object] backingScaleFactor]];
-  [layer setColorSpace:[[[notification object] colorSpace] CGColorSpace]];
+  [layer setColorSpace:[(id) [[notification object] colorSpace] CGColorSpace]];
 
   ns_clear_frame (emacsframe);
   expose_frame (emacsframe, 0, 0, NSWidth (frame), NSHeight (frame));

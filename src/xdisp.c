@@ -6312,7 +6312,10 @@ handle_composition_prop (struct it *it)
       pos_byte = IT_STRING_BYTEPOS (*it);
       string = it->string;
       s = SDATA (string) + pos_byte;
-      it->c = STRING_CHAR (s);
+      if (STRING_MULTIBYTE (string))
+	it->c = STRING_CHAR (s);
+      else
+	it->c = *s;
     }
   else
     {
@@ -10720,11 +10723,6 @@ move_it_vertically_backward (struct it *it, int dy)
   while (nlines-- && IT_CHARPOS (*it) > pos_limit)
     back_to_previous_visible_line_start (it);
 
-  /* Move one line more back, for the (rare) situation where we have
-     bidi-reordered continued lines, and we start from the top-most
-     screen line, which is the last in logical order.  */
-  if (it->bidi_p && dy == 0)
-    back_to_previous_visible_line_start (it);
   /* Reseat the iterator here.  When moving backward, we don't want
      reseat to skip forward over invisible text, set up the iterator
      to deliver from overlay strings at the new position etc.  So,
@@ -10966,7 +10964,7 @@ move_it_by_lines (struct it *it, ptrdiff_t dvpos)
     {
       struct it it2;
       void *it2data = NULL;
-      ptrdiff_t start_charpos, i;
+      ptrdiff_t start_charpos, orig_charpos, i;
       int nchars_per_row
 	= (it->last_visible_x - it->first_visible_x) / FRAME_COLUMN_WIDTH (it->f);
       bool hit_pos_limit = false;
@@ -10976,7 +10974,7 @@ move_it_by_lines (struct it *it, ptrdiff_t dvpos)
 	 position.  This may actually move vertically backwards,
          in case of overlays, so adjust dvpos accordingly.  */
       dvpos += it->vpos;
-      start_charpos = IT_CHARPOS (*it);
+      orig_charpos = IT_CHARPOS (*it);
       move_it_vertically_backward (it, 0);
       dvpos -= it->vpos;
 
@@ -11029,8 +11027,9 @@ move_it_by_lines (struct it *it, ptrdiff_t dvpos)
 	  RESTORE_IT (&it2, &it2, it2data);
 	  SAVE_IT (it2, *it, it2data);
 	  move_it_to (it, -1, -1, -1, it->vpos + delta, MOVE_TO_VPOS);
-	  /* Move back again if we got too far ahead.  */
-	  if (it->vpos - it2.vpos > delta)
+	  /* Move back again if we got too far ahead,
+	     or didn't move at all.  */
+	  if (it->vpos - it2.vpos > delta || IT_CHARPOS (*it) == orig_charpos)
 	    RESTORE_IT (it, &it2, it2data);
 	  else
 	    bidi_unshelve_cache (it2data, true);
@@ -20166,7 +20165,20 @@ redisplay_window (Lisp_Object window, bool just_this_one_p)
 	   from point.  */
 	centering_position = window_box_height (w) / 2;
     }
-  move_it_vertically_backward (&it, centering_position);
+  if (current_buffer->long_line_optimizations_p
+      && it.line_wrap == TRUNCATE)
+    {
+      /* For very long and truncated lines, go back using a simplified
+	 method, which ignored any inaccuracies due to line-height
+	 differences, display properties/overlays, etc.  */
+      int nlines = centering_position / frame_line_height;
+
+      while (nlines-- && IT_CHARPOS (it) > BEGV)
+	back_to_previous_visible_line_start (&it);
+      reseat_1 (&it, it.current.pos, true);
+    }
+  else
+    move_it_vertically_backward (&it, centering_position);
 
   eassert (IT_CHARPOS (it) >= BEGV);
 
@@ -34900,7 +34912,7 @@ note_mouse_highlight (struct frame *f, int x, int y)
   struct buffer *b;
 
   /* When a menu is active, don't highlight because this looks odd.  */
-#if defined (USE_X_TOOLKIT) || (defined (USE_GTK) && !defined (HAVE_PGTK)) || defined (HAVE_NS) || defined (MSDOS)
+#if defined (HAVE_X_WINDOWS) || defined (HAVE_NS) || defined (MSDOS)
   if (popup_activated ())
     return;
 #endif

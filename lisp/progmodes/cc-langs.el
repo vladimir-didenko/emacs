@@ -93,7 +93,7 @@
 ;; definitions (i.e. this file and/or cc-fonts.el) if necessary.
 ;;
 ;; A small example of a derived mode is available at
-;; <http://cc-mode.sourceforge.net/derived-mode-ex.el>.  It also
+;; <https://cc-mode.sourceforge.net/derived-mode-ex.el>.  It also
 ;; contains some useful hints for derived mode developers.
 
 ;;; Using language variables:
@@ -934,6 +934,8 @@ This value is by default merged into `c-operators'."
 			     t)))
       (when ops
 	(c-make-keywords-re 'appendable ops))))
+(c-lang-defvar c-opt-identifier-prefix-key
+	       (c-lang-const c-opt-identifier-prefix-key))
 
 (c-lang-defconst c-after-id-concat-ops
   "Operators that can occur after a binary operator on `c-identifier-ops'
@@ -1328,6 +1330,10 @@ since CC Mode treats every identifier as an expression."
 		  ,@(when (c-major-mode-is 'java-mode)
 		      '(">>>")))
 
+      ;; The C++ "spaceship" operator.
+      ,@(when (c-major-mode-is 'c++-mode)
+	  `((left-assoc "<=>")))
+
       ;; Relational.
       (left-assoc "<" ">" "<=" ">="
 		  ,@(when (c-major-mode-is 'java-mode)
@@ -1441,10 +1447,9 @@ form\".  See also `c-op-identifier-prefix'."
 	 "^" "??'" "xor" "&" "bitand" "|" "??!" "bitor" "~" "??-" "compl"
 	 "!" "=" "<" ">" "+=" "-=" "*=" "/=" "%=" "^="
 	 "??'=" "xor_eq" "&=" "and_eq" "|=" "??!=" "or_eq"
-	 "<<" ">>" ">>=" "<<=" "==" "!=" "not_eq" "<=" ">="
+	 "<<" ">>" ">>=" "<<=" "==" "!=" "not_eq" "<=>" "<=" ">="
 	 "&&" "and" "||" "??!??!" "or" "++" "--" "," "->*" "->"
-	 "()" "[]" "<::>" "??(??)")
-  ;; These work like identifiers in Pike.
+	 "()" "[]" "\"\"" "<::>" "??(??)")
   pike '("`+" "`-" "`&" "`|" "`^" "`<<" "`>>" "`*" "`/" "`%" "`~"
 	 "`==" "`<" "`>" "`!" "`[]" "`[]=" "`->" "`->=" "`()" "``+"
 	 "``-" "``&" "``|" "``^" "``<<" "``>>" "``*" "``/" "``%"
@@ -1563,8 +1568,10 @@ operators."
   "List of all arithmetic operators, including \"+=\", etc."
   ;; Note: in the following, there are too many operators for AWK and IDL.
   t (append (c-lang-const c-assignment-operators)
-	    '("+" "-" "*" "/" "%"
+	    `("+" "-" "*" "/" "%"
 	      "<<" ">>"
+	      ,@(if (c-major-mode-is 'c++-mode)
+		    '("<=>"))
 	      "<" ">" "<=" ">="
 	      "==" "!="
 	      "&" "^" "|"
@@ -2214,7 +2221,7 @@ the appropriate place for that."
 	'("_Bool" "_Complex" "_Imaginary") ; Conditionally defined in C99.
 	(c-lang-const c-primitive-type-kwds))
   c++  (append
-	'("bool" "wchar_t" "char16_t" "char32_t")
+	'("bool" "wchar_t" "char8_t" "char16_t" "char32_t")
 	(c-lang-const c-primitive-type-kwds))
   ;; Objective-C extends C, but probably not the new stuff in C99.
   objc (append
@@ -2287,10 +2294,21 @@ declaration with a type as a default value.  This is used only in
 C++ Mode, e.g. \"<typename X = Y>\"."
   t    nil
   c++  '("class" "typename"))
-
 (c-lang-defconst c-template-typename-key
   t (c-make-keywords-re t (c-lang-const c-template-typename-kwds)))
 (c-lang-defvar c-template-typename-key (c-lang-const c-template-typename-key))
+
+(c-lang-defconst c-self-contained-typename-kwds
+  "Keywords where the following name is a type name which can be
+used in declarations without the keyword."
+  t    nil
+  c++  '("typename"))
+
+(c-lang-defconst c-self-contained-typename-key
+  ;; Adorned regexp matching `c-self-contained-typename-key'.
+  t (c-make-keywords-re t (c-lang-const c-self-contained-typename-kwds)))
+(c-lang-defvar c-self-contained-typename-key
+	       (c-lang-const c-self-contained-typename-key))
 
 (c-lang-defconst c-type-prefix-kwds
   "Keywords where the following name - if any - is a type name, and
@@ -2711,7 +2729,8 @@ one of `c-type-list-kwds', `c-ref-list-kwds',
   (c c++) '(;; GCC extension.
 	    "__attribute__"
 	    ;; MSVC extension.
-	    "__declspec"))
+	    "__declspec")
+  c++ (append (c-lang-const c-decl-hangon-kwds) '("alignas")))
 
 (c-lang-defconst c-decl-hangon-key
   ;; Adorned regexp matching `c-decl-hangon-kwds'.
@@ -2927,6 +2946,15 @@ regexp if `c-colon-type-list-kwds' isn't nil."
 	  "[^][{}();,/#=:]*:")))
 (c-lang-defvar c-colon-type-list-re (c-lang-const c-colon-type-list-re))
 
+(c-lang-defconst c-sub-colon-type-list-re
+  "Regexp matching buffer content that may come between a keyword in
+`c-colon-type-list-kwds' and a putative colon, or nil if there are no
+such keywords.  Exception: it does not match any C++ attributes."
+  t (if (c-lang-const c-colon-type-list-re)
+	(substring (c-lang-const c-colon-type-list-re) 0 -1)))
+(c-lang-defvar c-sub-colon-type-list-re
+  (c-lang-const c-sub-colon-type-list-re))
+
 (c-lang-defconst c-paren-nontype-kwds
   "Keywords that may be followed by a parenthesis expression that doesn't
 contain type identifiers."
@@ -2935,7 +2963,7 @@ contain type identifiers."
 	    "__attribute__"
 	    ;; MSVC extension.
 	    "__declspec")
-  c++ (append (c-lang-const c-paren-nontype-kwds) '("noexcept")))
+  c++ (append (c-lang-const c-paren-nontype-kwds) '("noexcept" "alignas")))
 
 (c-lang-defconst c-paren-nontype-key
   t (c-make-keywords-re t (c-lang-const c-paren-nontype-kwds)))

@@ -66,12 +66,12 @@
 ;; You can get the latest version of CC Mode, including PostScript
 ;; documentation and separate individual files from:
 ;;
-;;     http://cc-mode.sourceforge.net/
+;;     https://cc-mode.sourceforge.net/
 ;;
 ;; You can join a moderated CC Mode announcement-only mailing list by
 ;; visiting
 ;;
-;;    http://lists.sourceforge.net/mailman/listinfo/cc-mode-announce
+;;    https://lists.sourceforge.net/mailman/listinfo/cc-mode-announce
 
 ;; Externally maintained major modes which use CC-mode's engine include:
 ;; - cuda-mode
@@ -172,7 +172,7 @@
 ;; `c-font-lock-init' too to set up CC Mode's font lock support.
 ;;
 ;; See cc-langs.el for further info.  A small example of a derived mode
-;; is also available at <http://cc-mode.sourceforge.net/
+;; is also available at <https://cc-mode.sourceforge.net/
 ;; derived-mode-ex.el>.
 
 (defun c-leave-cc-mode-mode ()
@@ -2080,13 +2080,14 @@ with // and /*, not more generic line and block comments."
 (defun c-update-new-id (end)
   ;; Note the bounds of any identifier that END is in or just after, in
   ;; `c-new-id-start' and `c-new-id-end'.  Otherwise set these variables to
-  ;; nil.
+  ;; nil.  Set `c-new-id-is-type' unconditionally to nil.
   (save-excursion
     (goto-char end)
     (let ((id-beg (c-on-identifier)))
       (setq c-new-id-start id-beg
 	    c-new-id-end (and id-beg
-			      (progn (c-end-of-current-token) (point)))))))
+			      (progn (c-end-of-current-token) (point)))
+	    c-new-id-is-type nil))))
 
 (defun c-post-command ()
   ;; If point was inside of a new identifier and no longer is, record that
@@ -2458,9 +2459,12 @@ with // and /*, not more generic line and block comments."
   (goto-char pos)
   (let ((lit-start (c-literal-start))
 	(lim (c-determine-limit 1000))
-	enclosing-attribute pos1)
+	enclosing-attribute pos1 ml-delim)
     (if lit-start
 	(goto-char lit-start))
+    (when (and lit-start c-ml-string-opener-re
+	       (setq ml-delim (c-ml-string-opener-around-point)))
+      (goto-char (car ml-delim)))
     (c-backward-syntactic-ws lim)
     (when (setq enclosing-attribute (c-enclosing-c++-attribute))
       (goto-char (car enclosing-attribute)) ; Only happens in C++ Mode.
@@ -2471,38 +2475,43 @@ with // and /*, not more generic line and block comments."
       (c-backward-syntactic-ws lim))
     (when (setq pos1 (c-on-identifier))
       (goto-char pos1)
-      (let ((lim (save-excursion
-		   (and (c-beginning-of-macro)
-			(progn (c-end-of-macro) (point))))))
-	(and (c-forward-declarator lim)
-	     (if (and (eq (char-after) ?\()
-		      (c-go-list-forward nil lim))
-		 (and
-		  (progn (c-forward-syntactic-ws lim)
-			 (not (eobp)))
-		  (progn
-		    (if (looking-at c-symbol-char-key)
-			;; Deal with baz (foo((bar)) type var), where
-			;; foo((bar)) is not semantically valid.  The result
-			;; must be after var).
-			(and
-			 (goto-char pos)
-			 (setq pos1 (c-on-identifier))
-			 (goto-char pos1)
-			 (progn
-			   (c-backward-syntactic-ws lim)
-			   (eq (char-before) ?\())
-			 (c-fl-decl-end (1- (point))))
-		      (c-backward-syntactic-ws lim)
-		      (point))))
-	       (if (progn (c-forward-syntactic-ws lim)
-			  (not (eobp)))
-		   (c-forward-over-token)
-		 (let ((lit-start (c-literal-start)))
-		   (when lit-start
-		       (goto-char lit-start))
-		   (c-backward-syntactic-ws)))
-	       (and (>= (point) pos) (point))))))))
+      (let* ((lim1 (save-excursion
+		     (and (c-beginning-of-macro)
+			  (progn (c-end-of-macro) (point)))))
+	     (decl-res (c-forward-declarator)))
+	(if (or (cadr (cddr (cddr decl-res))) ; We scanned an arglist.
+		(and (eq (char-after) ?\()    ; Move over a non arglist (...).
+		     (prog1 (c-go-list-forward)
+		       (c-forward-syntactic-ws))))
+	    (if (looking-at c-symbol-char-key)
+		;; Deal with baz (foo((bar)) type var), where `pos'
+		;; was inside foo, but foo((bar)) is not semantically
+		;; valid.  The result must be after var).
+		(and
+		 (goto-char pos)
+		 (setq pos1 (c-on-identifier))
+		 (goto-char pos1)
+		 (progn
+		   (c-backward-syntactic-ws lim1)
+		   (eq (char-before) ?\())
+		 (c-fl-decl-end (1- (point))))
+	      (c-forward-over-token)
+	      (point))
+	  (if (progn (c-forward-syntactic-ws)
+		     (not (eobp)))
+	      (progn
+		(c-forward-over-token)
+		;; Cope with having POS withing a syntactically invalid
+		;; (...), by moving backward out of the parens and trying
+		;; again.
+		(when (and (eq (char-before) ?\))
+			   (c-go-list-backward (point) lim1))
+		  (c-fl-decl-end (point))))
+	    (let ((lit-start (c-literal-start)))
+	      (when lit-start
+		(goto-char lit-start))
+	      (c-backward-syntactic-ws)))
+	  (and (>= (point) pos) (point)))))))
 
 (defun c-change-expand-fl-region (_beg _end _old-len)
   ;; Expand the region (c-new-BEG c-new-END) to an after-change font-lock
