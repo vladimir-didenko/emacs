@@ -8,12 +8,10 @@
 # On ppc32, we build a 64-bit compiler with default 32-bit mode.
 %define _target_platform ppc64-alt-linux
 %endif
-%define gcc_target_libdir %_libdir/gcc/%_target_platform/%gcc_branch
-
 
 Name: emacs
-Version: 29.0.50
-Release: alt11.giteb3f8d1
+Version: 29.0.60
+Release: alt1.git4dab5f8
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -280,11 +278,6 @@ autoreconf -i -I m4
 	--with-xft --with-dbus --with-rsvg --with-wide-int --with-lcms2 --with-modules \\\
 	--with-native-compilation --without-gconf --without-gsettings
 
-# TODO: Find why it is required. Also without this export emacs binary will not start.
-# Another issue is that alternatives link /usr/bin/emacs will not start even if we
-# explicitly export path below.
-export LIBRARY_PATH=%gcc_target_libdir
-
 pushd build-gtk3
 %configure %_configure_mostly --without-gpm --with-pgtk --with-cairo --with-toolkit-scroll-bars
 popd
@@ -487,6 +480,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_libdir/emacs/%version/native-lisp
 
 %_emacs_datadir/%version/lisp/site-start.el
+%_emacs_datadir/%version/lisp/COPYING
+%_emacs_datadir/%version/lisp/README
+%_emacs_datadir/%version/lisp/term/README
 %_emacs_sitestart_dir/*
 
 %_desktopdir/*.desktop
@@ -513,6 +509,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Tue Nov 29 2022 Vladimir Didenko <cow@altlinux.org> 29.0.60-alt1.git4dab5f8
+- 29.0.60-git4dab5f8
+
 * Mon Oct 24 2022 Vladimir Didenko <cow@altlinux.org> 29.0.50-alt11.giteb3f8d1
 - 29.0.50-giteb3f8d1
 
