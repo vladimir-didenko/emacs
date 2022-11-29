@@ -2491,9 +2491,15 @@ Also see `suggest-key-bindings'."
 
 (defvar execute-extended-command--binding-timer nil)
 
+(defun execute-extended-command--describe-binding-msg (function binding shorter)
+  (format-message "You can run the command `%s' with %s"
+                  function
+                  (propertize (cond (shorter (concat "M-x " shorter))
+                                    ((stringp binding) binding)
+                                    (t (key-description binding)))
+                              'face 'help-key-binding)))
+
 (defun execute-extended-command (prefixarg &optional command-name typed)
-  ;; Based on Fexecute_extended_command in keyboard.c of Emacs.
-  ;; Aaron S. Hawley <aaron.s.hawley(at)gmail.com> 2009-08-24
   "Read a command name, then read the arguments and call the command.
 To pass a prefix argument to the command you are
 invoking, give a prefix argument to `execute-extended-command'."
@@ -2516,7 +2522,7 @@ invoking, give a prefix argument to `execute-extended-command'."
 		       (not executing-kbd-macro)
 		       (where-is-internal function overriding-local-map t)))
          (delay-before-suggest 0)
-         (find-shorter nil))
+         find-shorter shorter)
     (unless (commandp function)
       (error "`%s' is not a valid command name" command-name))
     ;; If we're executing a command that's remapped, we can't actually
@@ -2540,11 +2546,11 @@ invoking, give a prefix argument to `execute-extended-command'."
     ;; flight.
     (when execute-extended-command--binding-timer
       (cancel-timer execute-extended-command--binding-timer))
-    ;; If this command displayed something in the echo area, then
-    ;; postpone the display of our suggestion message a bit.
     (when (and suggest-key-bindings
                (or binding
                    (and extended-command-suggest-shorter typed)))
+      ;; If this command displayed something in the echo area, then
+      ;; postpone the display of our suggestion message a bit.
       (setq delay-before-suggest
             (cond
              ((zerop (length (current-message))) 0)
@@ -2556,7 +2562,7 @@ invoking, give a prefix argument to `execute-extended-command'."
                  (symbolp function)
                  (> (length (symbol-name function)) 2))
         ;; There's no binding for CMD.  Let's try and find the shortest
-        ;; string to use in M-x.
+        ;; string to use in M-x.  But don't actually do anything yet.
         (setq find-shorter t))
       (when (or binding find-shorter)
         (setq execute-extended-command--binding-timer
@@ -2570,15 +2576,12 @@ invoking, give a prefix argument to `execute-extended-command'."
                    (when find-shorter
                      (while-no-input
                        ;; FIXME: Can be slow.  Cache it maybe?
-                       (setq binding (execute-extended-command--shorter
+                       (setq shorter (execute-extended-command--shorter
                                       (symbol-name function) typed))))
-                   (when binding
+                   (when (or binding shorter)
                      (with-temp-message
-                         (format-message "You can run the command `%s' with %s"
-                                         function
-                                         (if (stringp binding)
-                                             (concat "M-x " binding " RET")
-                                           (key-description binding)))
+                         (execute-extended-command--describe-binding-msg
+                          function binding shorter)
                        (sit-for (if (numberp suggest-key-bindings)
                                     suggest-key-bindings
                                   2))))))))))))
@@ -2647,10 +2650,7 @@ function as needed."
       ((or `(lambda ,_args . ,body) `(closure ,_env ,_args . ,body)
            `(autoload ,_file . ,body))
        (let ((doc (car body)))
-	 (when (and (funcall docstring-p doc)
-	            ;; Handle a doc reference--but these never come last
-	            ;; in the function body, so reject them if they are last.
-	            (or (cdr body) (eq 'autoload (car-safe function))))
+	 (when (funcall docstring-p doc)
            doc)))
       (_ (signal 'invalid-function (list function))))))
 
@@ -9184,33 +9184,39 @@ The function should return non-nil if the two tokens do not match.")
   "Return the line string that contains the openparen at POS."
   (save-excursion
     (goto-char pos)
-    ;; Show what precedes the open in its line, if anything.
-    (cond
-     ((save-excursion (skip-chars-backward " \t") (not (bolp)))
-      (buffer-substring (line-beginning-position)
-                        (1+ pos)))
-     ;; Show what follows the open in its line, if anything.
-     ((save-excursion
-        (forward-char 1)
-        (skip-chars-forward " \t")
-        (not (eolp)))
-      (buffer-substring pos
-                        (line-end-position)))
-     ;; Otherwise show the previous nonblank line,
-     ;; if there is one.
-     ((save-excursion (skip-chars-backward "\n \t") (not (bobp)))
-      (concat
-       (buffer-substring (progn
-                           (skip-chars-backward "\n \t")
-                           (line-beginning-position))
-                         (progn (end-of-line)
-                                (skip-chars-backward " \t")
-                                (point)))
-       ;; Replace the newline and other whitespace with `...'.
-       "..."
-       (buffer-substring pos (1+ pos))))
-     ;; There is nothing to show except the char itself.
-     (t (buffer-substring pos (1+ pos))))))
+    ;; Capture the regions in terms of (beg . end) conses whose
+    ;; buffer-substrings we want to show as a context string.  Ensure
+    ;; they are font-locked (bug#59527).
+    (let (regions)
+      ;; Show what precedes the open in its line, if anything.
+      (cond
+       ((save-excursion (skip-chars-backward " \t") (not (bolp)))
+        (setq regions (list (cons (line-beginning-position)
+                                  (1+ pos)))))
+       ;; Show what follows the open in its line, if anything.
+       ((save-excursion
+          (forward-char 1)
+          (skip-chars-forward " \t")
+          (not (eolp)))
+        (setq regions (list (cons pos (line-end-position)))))
+       ;; Otherwise show the previous nonblank line,
+       ;; if there is one.
+       ((save-excursion (skip-chars-backward "\n \t") (not (bobp)))
+        (setq regions (list (cons (progn
+                                    (skip-chars-backward "\n \t")
+                                    (line-beginning-position))
+                                  (progn (end-of-line)
+                                         (skip-chars-backward " \t")
+                                         (point)))
+                            (cons pos (1+ pos)))))
+       ;; There is nothing to show except the char itself.
+       (t (setq regions (list (cons pos (1+ pos))))))
+      ;; Ensure we've font-locked the context region.
+      (font-lock-ensure (caar regions) (cdar (last regions)))
+      (mapconcat (lambda (region)
+                   (buffer-substring (car region) (cdr region)))
+                 regions
+                 "..."))))
 
 (defvar blink-paren-function 'blink-matching-open
   "Function called, if non-nil, whenever a close parenthesis is inserted.
@@ -9572,6 +9578,8 @@ makes it easier to edit it."
     (define-key map "\C-m" 'choose-completion)
     (define-key map "\e\e\e" 'delete-completion-window)
     (define-key map [remap keyboard-quit] #'delete-completion-window)
+    (define-key map [up] 'previous-line-completion)
+    (define-key map [down] 'next-line-completion)
     (define-key map [left] 'previous-completion)
     (define-key map [right] 'next-completion)
     (define-key map [?\t] 'next-completion)
@@ -9631,8 +9639,10 @@ Go to the window from which completion was requested."
 
 (defcustom completion-auto-wrap t
   "Non-nil means to wrap around when selecting completion options.
-This affects the commands `next-completion' and `previous-completion'.
-When `completion-auto-select' is t, it wraps through the minibuffer."
+This affects the commands `next-completion', `previous-completion',
+`next-line-completion' and `previous-line-completion'.
+When `completion-auto-select' is t, it wraps through the minibuffer
+for the commands bound to the TAB key."
   :type 'boolean
   :version "29.1"
   :group 'completion)
@@ -9735,6 +9745,73 @@ Also see the `completion-auto-wrap' variable."
 
     (when (/= 0 n)
       (switch-to-minibuffer))))
+
+(defun previous-line-completion (&optional n)
+  "Move to the item on the previous line in the completion list.
+With prefix argument N, move back N items line-wise (negative N
+means move forward).
+
+Also see the `completion-auto-wrap' variable."
+  (interactive "p")
+  (next-line-completion (- n)))
+
+(defun next-line-completion (&optional n)
+  "Move to the item on the next line in the completion list.
+With prefix argument N, move N items line-wise (negative N
+means move backward).
+
+Also see the `completion-auto-wrap' variable."
+  (interactive "p")
+  (let ((column (current-column))
+        pos)
+    (catch 'bound
+      (while (> n 0)
+        (setq pos nil)
+        (save-excursion
+          (while (and (not pos) (not (eobp)))
+            (forward-line 1)
+            (when (and (not (eobp))
+                       (eq (move-to-column column) column)
+                       (get-text-property (point) 'mouse-face))
+              (setq pos (point)))))
+        (if pos (goto-char pos)
+          (when completion-auto-wrap
+            (save-excursion
+              (goto-char (point-min))
+              (when (and (eq (move-to-column column) column)
+                         (get-text-property (point) 'mouse-face))
+                (setq pos (point)))
+              (while (and (not pos) (not (eobp)))
+                (forward-line 1)
+                (when (and (eq (move-to-column column) column)
+                           (get-text-property (point) 'mouse-face))
+                  (setq pos (point)))))
+            (if pos (goto-char pos))))
+        (setq n (1- n)))
+
+      (while (< n 0)
+        (setq pos nil)
+        (save-excursion
+          (while (and (not pos) (not (bobp)))
+            (forward-line -1)
+            (when (and (not (bobp))
+                       (eq (move-to-column column) column)
+                       (get-text-property (point) 'mouse-face))
+              (setq pos (point)))))
+        (if pos (goto-char pos)
+          (when completion-auto-wrap
+            (save-excursion
+              (goto-char (point-max))
+              (when (and (eq (move-to-column column) column)
+                         (get-text-property (point) 'mouse-face))
+                (setq pos (point)))
+              (while (and (not pos) (not (bobp)))
+                (forward-line -1)
+                (when (and (eq (move-to-column column) column)
+                           (get-text-property (point) 'mouse-face))
+                  (setq pos (point)))))
+            (if pos (goto-char pos))))
+        (setq n (1+ n))))))
 
 (defun choose-completion (&optional event no-exit no-quit)
   "Choose the completion at point.

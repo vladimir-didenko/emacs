@@ -3136,7 +3136,7 @@ a list of file names that match it.
 
 @var{pattern} is, by default, a ``glob''/wildcard string, e.g.,
 @samp{"/tmp/*.png"} or @samp{"/*/*/foo.png"}, but can also be a
-regular expression if the optional @var{regexp} parameter is non-nil.
+regular expression if the optional @var{regexp} parameter is non-@code{nil}.
 In any case, the matches are applied per sub-directory, so a match
 can't span a parent/sub directory.
 
@@ -3383,7 +3383,7 @@ first, before handlers for jobs such as remote file access.
 @code{make-nearby-temp-file},
 @code{make-process},
 @code{make-symbolic-link},@*
-@code{process-attributes}, @code{process-file},
+@code{memory-info}, @code{process-attributes}, @code{process-file},
 @code{rename-file}, @code{set-file-acl}, @code{set-file-modes},
 @code{set-file-selinux-context}, @code{set-file-times},
 @code{set-visited-file-modtime}, @code{shell-command},
@@ -3445,7 +3445,7 @@ first, before handlers for jobs such as remote file access.
 @code{make-nearby-temp-file},
 @code{make-process},
 @code{make-symbolic-link},
-@code{process-attributes}, @code{process-file},
+@code{memory-info}, @code{process-attributes}, @code{process-file},
 @code{rename-file}, @code{set-file-acl}, @code{set-file-modes},
 @code{set-file-selinux-context}, @code{set-file-times},
 @code{set-visited-file-modtime}, @code{shell-command},

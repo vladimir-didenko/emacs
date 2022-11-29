@@ -1362,12 +1362,20 @@ x_set_mouse_color (struct frame *f, Lisp_Object arg, Lisp_Object oldval)
       char *xmessage = alloca (1 + message_length);
       memcpy (xmessage, cursor_data.error_string, message_length);
 
-      x_uncatch_errors ();
+      x_uncatch_errors_after_check ();
+
+      /* XFreeCursor can generate BadCursor errors, because
+	 XCreateFontCursor is not a request that waits for a reply,
+	 and as such can return IDs that will not actually be used by
+	 the server.  */
+      x_ignore_errors_for_next_request (FRAME_DISPLAY_INFO (f));
 
       /* Free any successfully created cursors.  */
       for (i = 0; i < mouse_cursor_max; i++)
 	if (cursor_data.cursor[i] != 0)
 	  XFreeCursor (dpy, cursor_data.cursor[i]);
+
+      x_stop_ignoring_errors (FRAME_DISPLAY_INFO (f));
 
       /* This should only be able to fail if the server's serial
 	 number tracking is broken.  */
@@ -1750,10 +1758,19 @@ x_set_tab_bar_lines (struct frame *f, Lisp_Object value, Lisp_Object oldval)
 void
 x_change_tab_bar_height (struct frame *f, int height)
 {
-  int unit = FRAME_LINE_HEIGHT (f);
-  int old_height = FRAME_TAB_BAR_HEIGHT (f);
-  int lines = (height + unit - 1) / unit;
-  Lisp_Object fullscreen = get_frame_param (f, Qfullscreen);
+  int unit, old_height, lines;
+  Lisp_Object fullscreen;
+
+  unit = FRAME_LINE_HEIGHT (f);
+  old_height = FRAME_TAB_BAR_HEIGHT (f);
+  fullscreen = get_frame_param (f, Qfullscreen);
+
+  /* This differs from the tool bar code in that the tab bar height is
+     not rounded up.  Otherwise, if redisplay_tab_bar decides to grow
+     the tab bar by even 1 pixel, FRAME_TAB_BAR_LINES will be changed,
+     leading to the tab bar height being incorrectly set upon the next
+     call to x_set_font.  (bug#59285) */
+  lines = height / unit;
 
   /* Make sure we redisplay all windows in this frame.  */
   fset_redisplay (f);
@@ -4506,9 +4523,11 @@ x_default_font_parameter (struct frame *f, Lisp_Object parms)
     }
 
   if (NILP (font))
-      font = !NILP (font_param) ? font_param
-      : gui_display_get_arg (dpyinfo, parms, Qfont, "font", "Font",
-                             RES_TYPE_STRING);
+    font = (!NILP (font_param)
+	    ? font_param
+	    : gui_display_get_arg (dpyinfo, parms,
+				   Qfont, "font", "Font",
+				   RES_TYPE_STRING));
 
   if (! FONTP (font) && ! STRINGP (font))
     {
@@ -4539,13 +4558,6 @@ x_default_font_parameter (struct frame *f, Lisp_Object parms)
 	}
       if (NILP (font))
 	error ("No suitable font was found");
-    }
-  else if (!NILP (font_param))
-    {
-      /* Remember the explicit font parameter, so we can re-apply it after
-	 we've applied the `default' face settings.  */
-      AUTO_FRAME_ARG (arg, Qfont_parameter, font_param);
-      gui_set_frame_parameters (f, arg);
     }
 
   /* This call will make X resources override any system font setting.  */
@@ -7913,7 +7925,7 @@ Otherwise, the return value is a vector with the following fields:
 
 DEFUN ("x-translate-coordinates", Fx_translate_coordinates,
        Sx_translate_coordinates,
-       1, 5, 0, doc: /* Translate coordinates from FRAME.
+       1, 6, 0, doc: /* Translate coordinates from FRAME.
 Translate the given coordinates SOURCE-X and SOURCE-Y from
 SOURCE-WINDOW's coordinate space to that of DEST-WINDOW, on FRAME.
 
@@ -7929,16 +7941,21 @@ Return a list of (X Y CHILD) if the given coordinates are on the same
 screen, or nil otherwise, where X and Y are the coordinates in
 DEST-WINDOW's coordinate space, and CHILD is the window ID of any
 mapped child in DEST-WINDOW at those coordinates, or nil if there is
-no such window.  */)
+no such window.  If REQUIRE-CHILD is nil, avoid fetching CHILD if it
+would result in an avoidable request to the X server, thereby
+improving performance when the X connection is over a slow network.
+Otherwise, always obtain the mapped child window from the X
+server.  */)
   (Lisp_Object frame, Lisp_Object source_window,
    Lisp_Object dest_window, Lisp_Object source_x,
-   Lisp_Object source_y)
+   Lisp_Object source_y, Lisp_Object require_child)
 {
   struct x_display_info *dpyinfo;
   struct frame *source_frame;
   int dest_x, dest_y;
   Window child_return, src, dest;
   Bool rc;
+  Lisp_Object temp_result;
 
   dpyinfo = check_x_display_info (frame);
   dest_x = 0;
@@ -7956,12 +7973,25 @@ no such window.  */)
       dest_y = XFIXNUM (source_y);
     }
 
+  source_frame = NULL;
+
   if (!NILP (source_window))
     CONS_TO_INTEGER (source_window, Window, src);
   else
     {
       source_frame = decode_window_system_frame (frame);
       src = FRAME_X_WINDOW (source_frame);
+    }
+
+  /* If require_child is nil, try to avoid an avoidable roundtrip to
+     the X server.  */
+  if (NILP (require_child) && source_frame)
+    {
+      temp_result
+	= x_handle_translate_coordinates (source_frame, dest_window, dest_x,
+					  dest_y);
+      if (!NILP (temp_result))
+	return temp_result;
     }
 
   if (!src)
@@ -8425,10 +8455,10 @@ compute_tip_xy (struct frame *f, Lisp_Object parms, Lisp_Object dx,
   int min_x, min_y, max_x, max_y = -1;
 
   /* User-specified position?  */
-  left = Fcdr (Fassq (Qleft, parms));
-  top  = Fcdr (Fassq (Qtop, parms));
-  right = Fcdr (Fassq (Qright, parms));
-  bottom = Fcdr (Fassq (Qbottom, parms));
+  left = CDR (Fassq (Qleft, parms));
+  top  = CDR (Fassq (Qtop, parms));
+  right = CDR (Fassq (Qright, parms));
+  bottom = CDR (Fassq (Qbottom, parms));
 
   /* Move the tooltip window where the mouse pointer is.  Resize and
      show it.  */
@@ -8794,14 +8824,14 @@ Text larger than the specified size is clipped.  */)
 	  for (tail = parms; CONSP (tail); tail = XCDR (tail))
 	    {
 	      elt = XCAR (tail);
-	      parm = Fcar (elt);
+	      parm = CAR (elt);
 	      /* The left, top, right and bottom parameters are handled
 		 by compute_tip_xy so they can be ignored here.  */
 	      if (!EQ (parm, Qleft) && !EQ (parm, Qtop)
 		  && !EQ (parm, Qright) && !EQ (parm, Qbottom))
 		{
 		  last = Fassq (parm, tip_last_parms);
-		  if (NILP (Fequal (Fcdr (elt), Fcdr (last))))
+		  if (NILP (Fequal (CDR (elt), CDR (last))))
 		    {
 		      /* We lost, delete the old tooltip.  */
 		      delete = true;
@@ -8822,9 +8852,9 @@ Text larger than the specified size is clipped.  */)
 	  for (tail = tip_last_parms; CONSP (tail); tail = XCDR (tail))
 	    {
 	      elt = XCAR (tail);
-	      parm = Fcar (elt);
+	      parm = CAR (elt);
 	      if (!EQ (parm, Qleft) && !EQ (parm, Qtop) && !EQ (parm, Qright)
-		  && !EQ (parm, Qbottom) && !NILP (Fcdr (elt)))
+		  && !EQ (parm, Qbottom) && !NILP (CDR (elt)))
 		{
 		  /* We lost, delete the old tooltip.  */
 		  delete = true;
@@ -8945,8 +8975,8 @@ Text larger than the specified size is clipped.  */)
 				  make_fixnum (w->pixel_height), Qnil,
 				  Qnil);
   /* Add the frame's internal border to calculated size.  */
-  width = XFIXNUM (Fcar (size)) + 2 * FRAME_INTERNAL_BORDER_WIDTH (tip_f);
-  height = XFIXNUM (Fcdr (size)) + 2 * FRAME_INTERNAL_BORDER_WIDTH (tip_f);
+  width = XFIXNUM (CAR (size)) + 2 * FRAME_INTERNAL_BORDER_WIDTH (tip_f);
+  height = XFIXNUM (CDR (size)) + 2 * FRAME_INTERNAL_BORDER_WIDTH (tip_f);
 
   /* Calculate position of tooltip frame.  */
   compute_tip_xy (tip_f, parms, dx, dy, width, height, &root_x, &root_y);
@@ -9698,10 +9728,12 @@ selected frame's display.  */)
   (Lisp_Object time_object, Lisp_Object terminal)
 {
   struct x_display_info *dpyinfo;
-  Time time;
+  uint32_t time;
 
+  /* time should be a 32-bit integer, regardless of what the size of
+     the X type `Time' is on this system.  */
   dpyinfo = check_x_display_info (terminal);
-  CONS_TO_INTEGER (time_object, Time, time);
+  CONS_TO_INTEGER (time_object, uint32_t, time);
 
   x_set_last_user_time_from_lisp (dpyinfo, time);
   return Qnil;

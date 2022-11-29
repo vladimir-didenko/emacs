@@ -1,7 +1,6 @@
 /* Lisp object printing and output streams.
 
-Copyright (C) 1985-1986, 1988, 1993-1995, 1997-2022 Free Software
-Foundation, Inc.
+Copyright (C) 1985-2022  Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -46,6 +45,10 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #ifdef WINDOWSNT
 # include <sys/socket.h> /* for F_DUPFD_CLOEXEC */
+#endif
+
+#ifdef HAVE_TREE_SITTER
+#include "treesit.h"
 #endif
 
 struct terminal;
@@ -594,8 +597,7 @@ temp_output_buffer_setup (const char *bufname)
   bset_read_only (current_buffer, Qnil);
   bset_filename (current_buffer, Qnil);
   bset_undo_list (current_buffer, Qt);
-  eassert (current_buffer->overlays_before == NULL);
-  eassert (current_buffer->overlays_after == NULL);
+  eassert (current_buffer->overlays == NULL);
   bset_enable_multibyte_characters
     (current_buffer, BVAR (&buffer_defaults, enable_multibyte_characters));
   specbind (Qinhibit_read_only, Qt);
@@ -1745,15 +1747,15 @@ print_vectorlike (Lisp_Object obj, Lisp_Object printcharfun, bool escapeflag,
 
     case PVEC_OVERLAY:
       print_c_string ("#<overlay ", printcharfun);
-      if (! XMARKER (OVERLAY_START (obj))->buffer)
+      if (! OVERLAY_BUFFER (obj))
 	print_c_string ("in no buffer", printcharfun);
       else
 	{
 	  int len = sprintf (buf, "from %"pD"d to %"pD"d in ",
-			     marker_position (OVERLAY_START (obj)),
-			     marker_position (OVERLAY_END   (obj)));
+			     OVERLAY_START (obj),
+			     OVERLAY_END   (obj));
 	  strout (buf, len, len, printcharfun);
-	  print_string (BVAR (XMARKER (OVERLAY_START (obj))->buffer, name),
+	  print_string (BVAR (OVERLAY_BUFFER (obj), name),
 			printcharfun);
 	}
       printchar ('>', printcharfun);
@@ -2009,6 +2011,45 @@ print_vectorlike (Lisp_Object obj, Lisp_Object printcharfun, bool escapeflag,
       }
       break;
 #endif
+
+#ifdef HAVE_TREE_SITTER
+    case PVEC_TS_PARSER:
+      print_c_string ("#<treesit-parser for ", printcharfun);
+      Lisp_Object language = XTS_PARSER (obj)->language_symbol;
+      /* No need to print the buffer because it's not that useful: we
+	 usually know which buffer a parser belongs to.  */
+      print_string (Fsymbol_name (language), printcharfun);
+      printchar ('>', printcharfun);
+      break;
+    case PVEC_TS_NODE:
+      /* Prints #<treesit-node (identifier) in 12-15> or
+         #<treesit-node "keyword" in 28-31>. */
+      print_c_string ("#<treesit-node", printcharfun);
+      if (!treesit_node_uptodate_p (obj))
+	{
+	  print_c_string ("-outdated>", printcharfun);
+	  break;
+	}
+      printchar (' ', printcharfun);
+      /* Now the node must be up-to-date, and calling functions like
+	 Ftreesit_node_start will not signal.  */
+      bool named = treesit_named_node_p (XTS_NODE (obj)->node);
+      const char *delim1 = named ? "(" : "\"";
+      const char *delim2 = named ? ")" : "\"";
+      print_c_string (delim1, printcharfun);
+      print_string (Ftreesit_node_type (obj), printcharfun);
+      print_c_string (delim2, printcharfun);
+      print_c_string (" in ", printcharfun);
+      print_object (Ftreesit_node_start (obj), printcharfun, escapeflag);
+      printchar ('-', printcharfun);
+      print_object (Ftreesit_node_end (obj), printcharfun, escapeflag);
+      printchar ('>', printcharfun);
+      break;
+    case PVEC_TS_COMPILED_QUERY:
+      print_c_string ("#<treesit-compiled-query>", printcharfun);
+      break;
+#endif
+
     case PVEC_SQLITE:
       {
 	print_c_string ("#<sqlite ", printcharfun);
@@ -2019,8 +2060,8 @@ print_vectorlike (Lisp_Object obj, Lisp_Object printcharfun, bool escapeflag,
 	    i = sprintf (buf, " stmt=%p", XSQLITE (obj)->stmt);
 	    strout (buf, i, i, printcharfun);
 	  }
-	i = sprintf (buf, " name=%s", XSQLITE (obj)->name);
-	strout (buf, i, i, printcharfun);
+	print_c_string (" name=", printcharfun);
+	print_c_string (XSQLITE (obj)->name, printcharfun);
 	printchar ('>', printcharfun);
       }
       break;

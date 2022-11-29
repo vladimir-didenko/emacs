@@ -289,7 +289,7 @@ inside double-quotes"
     (eshell-command-result-equal "echo \"$#eshell-test-value\""
                                  "1")
     (eshell-command-result-equal "echo \"$#eshell-test-value[foo]\""
-                                 "3"))
+                                 "3")))
 
 (ert-deftest esh-var-test/quoted-interp-lisp ()
   "Interpolate Lisp form evaluation inside double-quotes"
@@ -316,7 +316,7 @@ inside double-quotes"
   (let ((temporary-file-directory
          (file-name-as-directory (make-temp-file "esh-vars-tests" t))))
     (unwind-protect
-        (eshell-command-result-equal "cat \"$<echo hi>\"" "hi"))
+        (eshell-command-result-equal "cat \"$<echo hi>\"" "hi")
       (delete-directory temporary-file-directory t))))
 
 (ert-deftest esh-var-test/quoted-interp-concat-cmd ()
@@ -497,12 +497,13 @@ inside double-quotes"
 
 (ert-deftest esh-var-test/alias/function ()
   "Test using a variable alias defined as a function."
-  (with-temp-eshell
-   (push `("ALIAS" ,(lambda () "value") nil t) eshell-variable-aliases-list)
-   (eshell-match-command-output "echo $ALIAS" "value\n")
-   (eshell-match-command-output "set ALIAS hello"
-                                "Variable `ALIAS' is not settable\n"
-                                nil t)))
+  (let ((text-quoting-style 'grave))
+    (with-temp-eshell
+     (push `("ALIAS" ,(lambda () "value") nil t) eshell-variable-aliases-list)
+     (eshell-match-command-output "echo $ALIAS" "value\n")
+     (eshell-match-command-output "set ALIAS hello"
+                                  "Variable `ALIAS' is not settable\n"
+                                  nil t))))
 
 (ert-deftest esh-var-test/alias/function-pair ()
   "Test using a variable alias defined as a pair of getter/setter functions."
@@ -558,12 +559,13 @@ This should get/set the value bound to the symbol."
 This should get the value bound to the symbol, but fail to set
 it, since the setter is nil."
   (with-temp-eshell
-   (let ((eshell-test-value "value"))
+   (let ((eshell-test-value "value")
+         (text-quoting-style 'grave))
      (push '("ALIAS" (eshell-test-value . nil)) eshell-variable-aliases-list)
      (eshell-match-command-output "echo $ALIAS" "value\n")
      (eshell-match-command-output "set ALIAS hello"
-                                "Variable `ALIAS' is not settable\n"
-                                nil t))))
+                                  "Variable `ALIAS' is not settable\n"
+                                  nil t))))
 
 (ert-deftest esh-var-test/alias/export ()
   "Test that `export' properly sets variable aliases."

@@ -213,20 +213,32 @@ struct color_name_cache_entry
 #ifdef HAVE_XINPUT2
 
 #ifdef HAVE_XINPUT2_1
+
 struct xi_scroll_valuator_t
 {
-  bool invalid_p;
-  bool pending_enter_reset;
-  double current_value;
-  double emacs_value;
-  double increment;
-
+  /* The ID of the valuator.  */
   int number;
-  int horizontal;
+
+  /* Whether or not it represents X axis movement.  */
+  bool_bf horizontal : 1;
+
+  /* Whether or not the value is currently invalid.  */
+  bool_bf invalid_p : 1;
+
+  /* The current value.  */
+  double current_value;
+
+  /* Value used to tally up deltas until a threshold is met.  */
+  double emacs_value;
+
+  /* The scroll increment.  */
+  double increment;
 };
+
 #endif
 
 #ifdef HAVE_XINPUT2_2
+
 struct xi_touch_point_t
 {
   struct xi_touch_point_t *next;
@@ -234,6 +246,7 @@ struct xi_touch_point_t
   int number;
   double x, y;
 };
+
 #endif
 
 struct xi_device_t
@@ -567,7 +580,9 @@ struct x_display_info
   Time last_user_time;
 
   /* Position where the mouse was last time we reported a motion.
-     This is a position on last_mouse_motion_frame.  */
+     This is a position on last_mouse_motion_frame.  It is used in
+     some situations to report the mouse position as well: see
+     XTmouse_position.  */
   int last_mouse_motion_x;
   int last_mouse_motion_y;
 
@@ -1164,6 +1179,10 @@ struct x_output
      frame.  */
   bool_bf waiting_for_frame_p : 1;
 
+  /* Whether or not Emacs just skipped waiting for a frame due to a
+     timeout.  */
+  bool_bf draw_just_hung_p : 1;
+
 #if !defined USE_GTK && defined HAVE_CLOCK_GETTIME
   /* Whether or not Emacs should wait for the compositing manager to
      draw frames before starting a new frame.  */
@@ -1377,6 +1396,8 @@ extern void x_mark_frame_dirty (struct frame *f);
   FRAME_X_OUTPUT (f)->extended_frame_counter
 #define FRAME_X_WAITING_FOR_DRAW(f)		\
   FRAME_X_OUTPUT (f)->waiting_for_frame_p
+#define FRAME_X_DRAW_JUST_HUNG(f)		\
+  FRAME_X_OUTPUT (f)->draw_just_hung_p
 #define FRAME_X_COUNTER_VALUE(f)		\
   FRAME_X_OUTPUT (f)->current_extended_counter_value
 #endif
@@ -1592,22 +1613,15 @@ SELECTION_EVENT_DISPLAY (struct selection_input_event *ev)
 
 extern void x_free_gcs (struct frame *);
 extern void x_relative_mouse_position (struct frame *, int *, int *);
-extern void x_real_pos_and_offsets (struct frame *f,
-                                    int *left_offset_x,
-                                    int *right_offset_x,
-                                    int *top_offset_y,
-                                    int *bottom_offset_y,
-                                    int *x_pixels_diff,
-                                    int *y_pixels_diff,
-                                    int *xptr,
-                                    int *yptr,
-                                    int *outer_border);
-extern void x_default_font_parameter (struct frame* f, Lisp_Object parms);
+extern void x_real_pos_and_offsets (struct frame *, int *, int *, int *,
+                                    int *, int *, int *, int *, int *,
+				    int *);
+extern void x_default_font_parameter (struct frame *, Lisp_Object);
 
 /* From xrdb.c.  */
 
-XrmDatabase x_load_resources (Display *, const char *, const char *,
-			      const char *);
+extern XrmDatabase x_load_resources (Display *, const char *, const char *,
+				     const char *);
 extern const char *x_get_string_resource (void *, const char *, const char *);
 
 /* Defined in xterm.c */
@@ -1695,8 +1709,12 @@ extern void x_xr_apply_ext_clip (struct frame *, GC);
 extern void x_xr_reset_ext_clip (struct frame *);
 #endif
 
+extern void x_translate_coordinates (struct frame *, int, int, int *, int *);
 extern void x_translate_coordinates_to_root (struct frame *, int, int,
 					     int *, int *);
+extern Lisp_Object x_handle_translate_coordinates (struct frame *, Lisp_Object,
+						   int, int);
+
 extern Bool x_query_pointer (Display *, Window, Window *, Window *, int *,
 			     int *, int *, int *, unsigned int *);
 

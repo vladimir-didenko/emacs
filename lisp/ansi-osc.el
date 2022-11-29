@@ -108,7 +108,7 @@ list that is the value of `ansi-osc-handlers'."
   "Update `default-directory' from OSC 7 escape sequences.
 
 This function is intended to be included as an element of the
-the list that is the value of `ansi-osc-handlers'.  You should arrange
+list that is the value of `ansi-osc-handlers'.  You should arrange
 for your shell to print the appropriate escape sequence at each prompt,
 such as with the following command:
 
@@ -141,7 +141,7 @@ and `shell-dirtrack-mode'."
 
 (defun ansi-osc-hyperlink-handler (_ text)
   "Create a hyperlink from an OSC 8 escape sequence.
-This function is intended to be included as an elemnt of the list
+This function is intended to be included as an element of the list
 that is the value of `ansi-osc-handlers'."
   (when ansi-osc-hyperlink--state
     (let ((start (car ansi-osc-hyperlink--state))

@@ -308,7 +308,7 @@ x_own_selection (Lisp_Object selection_name, Lisp_Object selection_value,
 	/* We know it's not the CAR, so it's easy.  */
 	Lisp_Object rest = dpyinfo->terminal->Vselection_alist;
 	for (; CONSP (rest); rest = XCDR (rest))
-	  if (EQ (prev_value, Fcar (XCDR (rest))))
+	  if (EQ (prev_value, CAR (XCDR (rest))))
 	    {
 	      XSETCDR (rest, XCDR (XCDR (rest)));
 	      break;
@@ -369,7 +369,7 @@ x_get_local_selection (Lisp_Object selection_symbol, Lisp_Object target_type,
 	specbind (Qinhibit_quit, Qt);
 
       CHECK_SYMBOL (target_type);
-      handler_fn = Fcdr (Fassq (target_type, Vselection_converter_alist));
+      handler_fn = CDR (Fassq (target_type, Vselection_converter_alist));
 
       if (CONSP (handler_fn))
 	handler_fn = XCDR (handler_fn);
@@ -918,6 +918,13 @@ x_handle_selection_request (struct selection_input_event *event)
 	}
       /* Save conversion results */
       lisp_data_to_selection_data (dpyinfo, multprop, &cs);
+
+      /* If cs.type is ATOM, change it to ATOM_PAIR.  This is because
+	 the parameters to a MULTIPLE are ATOM_PAIRs.  */
+
+      if (cs.type == XA_ATOM)
+	cs.type = dpyinfo->Xatom_ATOM_PAIR;
+
       XChangeProperty (dpyinfo->display, requestor, property,
 		       cs.type, cs.format, PropModeReplace,
 		       cs.data, cs.size);
@@ -960,7 +967,7 @@ x_handle_selection_request (struct selection_input_event *event)
    x_reply_selection_request.  If FOR_MULTIPLE, write out
    the data even if conversion fails, using conversion_fail_tag.
 
-   Return true iff successful.  */
+   Return true if successful.  */
 
 static bool
 x_convert_selection (Lisp_Object selection_symbol,
@@ -1122,14 +1129,14 @@ x_clear_frame_selections (struct frame *f)
   while (CONSP (t->Vselection_alist)
 	 && EQ (frame, XCAR (XCDR (XCDR (XCDR (XCAR (t->Vselection_alist)))))))
     {
-      selection = Fcar (Fcar (t->Vselection_alist));
+      selection = CAR (CAR (t->Vselection_alist));
 
       if (!x_should_preserve_selection (selection))
 	/* Run the `x-lost-selection-functions' abnormal hook.  */
 	CALLN (Frun_hook_with_args, Qx_lost_selection_functions,
 	       selection);
       else
-	lost = Fcons (Fcar (t->Vselection_alist), lost);
+	lost = Fcons (CAR (t->Vselection_alist), lost);
 
       tset_selection_alist (t, XCDR (t->Vselection_alist));
     }
@@ -2787,7 +2794,6 @@ x_handle_dnd_message (struct frame *f, const XClientMessageEvent *event,
   unsigned char *data = (unsigned char *) event->data.b;
   int idata[5];
   ptrdiff_t i;
-  Window child_return;
 
   for (i = 0; i < dpyinfo->x_dnd_atoms_length; ++i)
     if (dpyinfo->x_dnd_atoms[i] == event->message_type) break;
@@ -2822,11 +2828,7 @@ x_handle_dnd_message (struct frame *f, const XClientMessageEvent *event,
   if (!root_window_coords)
     x_relative_mouse_position (f, &x, &y);
   else
-    XTranslateCoordinates (dpyinfo->display,
-			   dpyinfo->root_window,
-			   FRAME_X_WINDOW (f),
-			   root_x, root_y,
-			   &x, &y, &child_return);
+    x_translate_coordinates (f, root_x, root_y, &x, &y);
 
   bufp->kind = DRAG_N_DROP_EVENT;
   bufp->frame_or_window = frame;

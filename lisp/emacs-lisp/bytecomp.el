@@ -1882,6 +1882,9 @@ Files in subdirectories of DIRECTORY are processed also."
   (interactive "DByte force recompile (directory): ")
   (byte-recompile-directory directory nil t))
 
+(defvar byte-compile-ignore-files nil
+  "List of regexps for files to ignore during byte compilation.")
+
 ;;;###autoload
 (defun byte-recompile-directory (directory &optional arg force follow-symlinks)
   "Recompile every `.el' file in DIRECTORY that needs recompilation.
@@ -1938,14 +1941,22 @@ also be compiled."
 		      ;; This file is a subdirectory.  Handle them differently.
 		      (or (null arg) (eq 0 arg)
 			  (y-or-n-p (concat "Check " source "? ")))
-		      (setq directories (nconc directories (list source))))
+                      ;; Directory is requested to be ignored
+                      (not (string-match-p
+                            (regexp-opt byte-compile-ignore-files)
+                            source))
+                      (setq directories (nconc directories (list source))))
                ;; It is an ordinary file.  Decide whether to compile it.
                (if (and (string-match emacs-lisp-file-regexp source)
 			;; The next 2 tests avoid compiling lock files
                         (file-readable-p source)
 			(not (string-match "\\`\\.#" file))
                         (not (auto-save-file-name-p source))
-                        (not (member source (dir-locals--all-files directory))))
+                        (not (member source (dir-locals--all-files directory)))
+                        ;; File is requested to be ignored
+                        (not (string-match-p
+                              (regexp-opt byte-compile-ignore-files)
+                              source)))
                    (progn (cl-incf
                            (pcase (byte-recompile-file source force arg)
                              ('no-byte-compile skip-count)
@@ -2565,7 +2576,7 @@ list that represents a doc string reference.
   ;; macroexpand-all.
   ;; (if (memq byte-optimize '(t source))
   ;;     (setq form (byte-optimize-form form for-effect)))
-  (cconv-closure-convert form))
+  (cconv-closure-convert form byte-compile-bound-variables))
 
 ;; byte-hunk-handlers cannot call this!
 (defun byte-compile-toplevel-file-form (top-level-form)
@@ -3626,7 +3637,7 @@ lambda-expression."
     (byte-compile-out base-op tmp)))
 
 (defun byte-compile-dynamic-variable-bind (var)
-  "Generate code to bind the lexical variable VAR to the top-of-stack value."
+  "Generate code to bind the dynamic variable VAR to the top-of-stack value."
   (byte-compile-check-variable var 'let-bind)
   (push var byte-compile-bound-variables)
   (byte-compile-dynamic-variable-op 'byte-varbind var))
@@ -4663,13 +4674,6 @@ Return the offset in the form (VAR . OFFSET)."
           (byte-compile-form (cadr clause))
         (byte-compile-push-constant nil)))))
 
-(defun byte-compile-not-lexical-var-p (var)
-  (or (not (symbolp var))
-      (special-variable-p var)
-      (memq var byte-compile-bound-variables)
-      (memq var '(nil t))
-      (keywordp var)))
-
 (defun byte-compile-bind (var init-lexenv)
   "Emit byte-codes to bind VAR and update `byte-compile--lexical-environment'.
 INIT-LEXENV should be a lexical-environment alist describing the
@@ -4678,7 +4682,7 @@ Return non-nil if the TOS value was popped."
   ;; The mix of lexical and dynamic bindings mean that we may have to
   ;; juggle things on the stack, to move them to TOS for
   ;; dynamic binding.
-  (if (and lexical-binding (not (byte-compile-not-lexical-var-p var)))
+  (if (not (cconv--not-lexical-var-p var byte-compile-bound-variables))
       ;; VAR is a simple stack-allocated lexical variable.
       (progn (push (assq var init-lexenv)
                    byte-compile--lexical-environment)

@@ -29,9 +29,23 @@
 
 ;;; Code:
 
-(require 'erc)
-
 ;;; Imenu support
+
+(eval-when-compile (require 'cl-lib))
+(require 'erc-common)
+
+(defvar erc-controls-highlight-regexp)
+(defvar erc-controls-remove-regexp)
+(defvar erc-input-marker)
+(defvar erc-insert-marker)
+(defvar erc-server-process)
+(defvar erc-modules)
+(defvar erc-log-p)
+
+(declare-function erc-buffer-list "erc" (&optional predicate proc))
+(declare-function erc-error "erc" (&rest args))
+(declare-function erc-extract-command-from-line "erc" (line))
+(declare-function erc-beg-of-input-line "erc" nil)
 
 (defun erc-imenu-setup ()
   "Setup Imenu support in an ERC buffer."

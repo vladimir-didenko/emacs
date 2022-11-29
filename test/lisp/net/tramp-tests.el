@@ -140,10 +140,11 @@ A resource file is in the resource directory as per
        ((eq system-type 'windows-nt) null-device)
        (t (add-to-list
            'tramp-methods
-           '("mock"
-	     (tramp-login-program	"sh")
+           `("mock"
+	     (tramp-login-program	,tramp-default-remote-shell)
 	     (tramp-login-args		(("-i")))
-	     (tramp-remote-shell	"/bin/sh")
+             (tramp-direct-async	("-c"))
+	     (tramp-remote-shell	,tramp-default-remote-shell)
 	     (tramp-remote-shell-args	("-c"))
 	     (tramp-connection-timeout	10)))
           (add-to-list
@@ -4616,10 +4617,13 @@ This tests also `make-symbolic-link', `file-truename' and `add-name-to-file'."
 	      (load tmp-name 'noerror 'nomessage))
 	    (should-not (featurep 'tramp-test-load))
 	    (write-region "(provide 'tramp-test-load)" nil tmp-name)
-	    ;; `load' in lread.c does not pass `must-suffix'.  Why?
-	    ;;(should-error
-	    ;; (load tmp-name nil 'nomessage 'nosuffix 'must-suffix)
-	    ;; :type 'file-error)
+	    ;; `load' in lread.c passes `must-suffix' since Emacs 29.
+	    ;; In Ange-FTP, `must-suffix' is ignored.
+	    (when (and (tramp--test-emacs29-p)
+                       (not (tramp--test-ange-ftp-p)))
+	      (should-error
+	       (load tmp-name nil 'nomessage 'nosuffix 'must-suffix)
+	       :type 'file-error))
 	    (load tmp-name nil 'nomessage 'nosuffix)
 	    (should (featurep 'tramp-test-load)))
 
@@ -5383,6 +5387,21 @@ If UNSTABLE is non-nil, the test is tagged as `:unstable'."
 
       ;; Cleanup.
       (ignore-errors (delete-process proc)))))
+
+(ert-deftest tramp-test31-memory-info ()
+  "Check `memory-info'."
+  :tags '(:expensive-test)
+  (skip-unless (tramp--test-enabled))
+  (skip-unless (tramp--test-supports-processes-p))
+  ;; `memory-info' is supported since Emacs 29.1.
+  (skip-unless (tramp--test-emacs29-p))
+
+  (when-let ((default-directory ert-remote-temporary-file-directory)
+             (mi (memory-info)))
+    (should (consp mi))
+    (should (= (length mi) 4))
+    (dotimes (i (length mi))
+      (should (natnump (nth i mi))))))
 
 (defun tramp--test-async-shell-command
     (command output-buffer &optional error-buffer input)
@@ -7626,6 +7645,9 @@ Since it unloads Tramp, it shall be the last test to run."
 	  (string-prefix-p "tramp" (symbol-name x))
 	  ;; `tramp-completion-mode' is autoloaded in Emacs < 28.1.
 	  (not (eq 'tramp-completion-mode x))
+	  ;; `tramp-register-archive-file-name-handler' is autoloaded
+	  ;; in Emacs < 29.1.
+	  (not (eq 'tramp-register-archive-file-name-handler x))
 	  (not (string-match-p
 		(rx bol "tramp" (? "-archive") (** 1 2 "-") "test")
 		(symbol-name x)))

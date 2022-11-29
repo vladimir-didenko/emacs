@@ -516,7 +516,7 @@ using the @code{with-suppressed-warnings} macro:
 @defspec with-suppressed-warnings warnings body@dots{}
 In execution, this is equivalent to @code{(progn @var{body}...)}, but
 the compiler does not issue warnings for the specified conditions in
-@var{body}.  @var{warnings} is an associative list of warning symbols
+@var{body}.  @var{warnings} is an association list of warning symbols
 and function/variable symbols they apply to.  For instance, if you
 wish to call an obsolete function called @code{foo}, but want to
 suppress the compilation warning, say:
@@ -1077,7 +1077,7 @@ pristine environment, that may not be true for the subprocess.
 @end defopt
 
 @defopt native-comp-async-query-on-exit
-If this variable's value is non-nil, Emacs will query upon exiting
+If this variable's value is non-@code{nil}, Emacs will query upon exiting
 whether to exit and kill any asynchronous native-compilation
 subprocesses that are still running, thus preventing the corresponding
 @file{.eln} files from being written.  If the value is @code{nil}, the

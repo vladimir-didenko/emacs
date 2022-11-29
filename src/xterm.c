@@ -912,11 +912,6 @@ struct x_selection_request_event
 
 struct x_selection_request_event *pending_selection_requests;
 
-/* Compare two request serials A and B with OP, handling
-   wraparound.  */
-#define X_COMPARE_SERIALS(a, op ,b) \
-  (((long) (a) - (long) (b)) op 0)
-
 struct x_atom_ref
 {
   /* Atom name.  */
@@ -1139,11 +1134,11 @@ static void x_clean_failable_requests (struct x_display_info *);
 static struct frame *x_tooltip_window_to_frame (struct x_display_info *,
 						Window, bool *);
 static Window x_get_window_below (Display *, Window, int, int, int *, int *);
+static void x_set_input_focus (struct x_display_info *, Window, Time);
 
 #ifndef USE_TOOLKIT_SCROLL_BARS
 static void x_scroll_bar_redraw (struct scroll_bar *);
 #endif
-static void x_translate_coordinates (struct frame *, int, int, int *, int *);
 
 /* Global state maintained during a drag-and-drop operation.  */
 
@@ -5246,7 +5241,9 @@ xi_convert_button_state (XIButtonState *in, unsigned int *out)
     }
 }
 
-/* Return the modifier state in XEV as a standard X modifier mask.  */
+/* Return the modifier state in XEV as a standard X modifier mask.
+   This should be used for non-keyboard events, where the group does
+   not matter.  */
 
 #ifdef USE_GTK
 static
@@ -5262,6 +5259,17 @@ xi_convert_event_state (XIDeviceEvent *xev)
   xi_convert_button_state (&xev->buttons, &buttons);
 
   return mods | buttons;
+}
+
+/* Like the above.  However, buttons are not converted, while the
+   group is.  This should be used for key events being passed to the
+   likes of input methods and Xt.  */
+
+static unsigned int
+xi_convert_event_keyboard_state (XIDeviceEvent *xev)
+{
+  return ((xev->mods.effective & ~(1 << 13 | 1 << 14))
+	  | (xev->group.effective << 13));
 }
 
 /* Free all XI2 devices on DPYINFO.  */
@@ -5302,6 +5310,7 @@ x_free_xi_devices (struct x_display_info *dpyinfo)
 }
 
 #ifdef HAVE_XINPUT2_1
+
 struct xi_known_valuator
 {
   /* The current value of this valuator.  */
@@ -5313,20 +5322,60 @@ struct xi_known_valuator
   /* The next valuator whose value we already know.  */
   struct xi_known_valuator *next;
 };
+
+/* Populate the scroll valuator at INDEX in DEVICE with the scroll
+   valuator information provided in INFO.
+
+   The information consists of:
+
+     - whether or not the valuator is horizontal.
+
+     - whether or not the valuator's value is currently unknown,
+       until the next XI_Motion event is received or the valuator's
+       value is restored by the caller upon encountering valuator
+       class data.
+
+     - what the current value of the valuator is.  This is set to
+       DBL_MIN for debugging purposes, but can be any value, as
+       invalid_p is currently true.
+
+     - the increment, which defines the amount of movement equal to a
+       single unit of scrolling.  For example, if the increment is
+       2.0, then a WHEEL_DOWN or WHEEL_UP event will be sent every
+       time the valuator value changes by 2.0, unless
+       mwheel-coalesce-scroll-events is nil.
+
+     - the number used in XI_Motion events and elsewhere to identify
+       the valuator.  */
+
+static void
+xi_populate_scroll_valuator (struct xi_device_t *device,
+			     int index, XIScrollClassInfo *info)
+{
+  struct xi_scroll_valuator_t *valuator;
+
+  valuator = &device->valuators[index];
+  valuator->horizontal
+    = (info->scroll_type == XIScrollTypeHorizontal);
+  valuator->invalid_p = true;
+  valuator->emacs_value = DBL_MIN;
+  valuator->increment = info->increment;
+  valuator->number = info->number;
+}
+
 #endif
 
 static void
-xi_populate_device_from_info (struct xi_device_t *xi_device,
+xi_populate_device_from_info (struct x_display_info *dpyinfo,
+			      struct xi_device_t *xi_device,
 			      XIDeviceInfo *device)
 {
 #ifdef HAVE_XINPUT2_1
-  struct xi_scroll_valuator_t *valuator;
   struct xi_known_valuator *values, *tem;
-  int actual_valuator_count;
+  int actual_valuator_count, c;
   XIScrollClassInfo *info;
-  XIValuatorClassInfo *val_info;
+  XIValuatorClassInfo *valuator_info;
 #endif
-  int c;
 #ifdef HAVE_XINPUT2_2
   XITouchClassInfo *touch_info;
 #endif
@@ -5335,59 +5384,121 @@ xi_populate_device_from_info (struct xi_device_t *xi_device,
   USE_SAFE_ALLOCA;
 #endif
 
+  /* Initialize generic information about the device: its ID, which
+     buttons are currently pressed and thus presumably actively
+     grabbing the device, what kind of device it is (master pointer,
+     master keyboard, slave pointer, slave keyboard, or floating
+     slave), and its attachment.
+
+     Here is a brief description of what device uses and attachments
+     are.  Under XInput 2, user input from individual input devices is
+     multiplexed into specific seats before being delivered, with each
+     seat corresponding to a single on-screen mouse pointer and having
+     its own keyboard focus.  Each seat consists of two virtual
+     devices: the master keyboard and the master pointer, the first of
+     which is used to report all keyboard input, with the other used
+     to report all other input.
+
+     Input from each physical device (mouse, trackpad or keyboard) is
+     then associated with that slave device's paired master device.
+     For example, moving the device "Logitech USB Optical Mouse",
+     enslaved by the master pointer device "Virtual core pointer",
+     will result in movement of the mouse pointer associated with that
+     master device's seat.  If the pointer moves over an Emacs frame,
+     then the frame will receive XI_Enter and XI_Motion events from
+     that master pointer.
+
+     Likewise, keyboard input from the device "AT Translated Set 2
+     keyboard", enslaved by the master keyboard device "Virtual core
+     keyboard", will be reported to its seat's input focus window.
+
+     The device use describes what the device is.  The meanings of
+     MasterPointer, MasterKeyboard, SlavePointer and SlaveKeyboard
+     should be obvious.  FloatingSlave means the device is a slave
+     device that is not associated with any seat, and thus generates
+     no input.
+
+     The device attachment is a device ID whose meaning varies
+     depending on the device use.  If the device is a master device,
+     then the attachment is the device ID of the other device in its
+     seat (the master keyboard for master pointer devices, and vice
+     versa).  Otherwise, it is the ID of the master device the slave
+     device is attached to.  For slave devices not attached to any
+     seat, its value is undefined.  */
+
   xi_device->device_id = device->deviceid;
   xi_device->grab = 0;
-
-#ifdef HAVE_XINPUT2_1
-  actual_valuator_count = 0;
-  xi_device->valuators = xmalloc (sizeof *xi_device->valuators
-				  * device->num_classes);
-  values = NULL;
-#endif
-
   xi_device->use = device->use;
   xi_device->name = build_string (device->name);
   xi_device->attachment = device->attachment;
+
+  /* Clear the list of active touch points on the device, which are
+     individual touches tracked by a touchscreen.  */
 
 #ifdef HAVE_XINPUT2_2
   xi_device->touchpoints = NULL;
   xi_device->direct_p = false;
 #endif
 
+#ifdef HAVE_XINPUT2_1
+  if (!dpyinfo->xi2_version)
+    {
+      /* Skip everything below as there are no classes of interest on
+	 XI 2.0 servers.  */
+      xi_device->valuators = NULL;
+      xi_device->scroll_valuator_count = 0;
+
+      SAFE_FREE ();
+      return;
+    }
+
+  actual_valuator_count = 0;
+  xi_device->valuators = xnmalloc (device->num_classes,
+				   sizeof *xi_device->valuators);
+  values = NULL;
+
+  /* Initialize device info based on a list of "device classes".
+     Device classes are little pieces of information associated with a
+     device.  Emacs is interested in scroll valuator information and
+     touch handling information, which respectively describe the axes
+     (if any) along which the device's scroll wheel rotates, and how
+     the device reports touch input.  */
+
   for (c = 0; c < device->num_classes; ++c)
     {
       switch (device->classes[c]->type)
 	{
-#ifdef HAVE_XINPUT2_1
 	case XIScrollClass:
 	  {
 	    info = (XIScrollClassInfo *) device->classes[c];
-
-	    valuator = &xi_device->valuators[actual_valuator_count++];
-	    valuator->horizontal
-	      = (info->scroll_type == XIScrollTypeHorizontal);
-	    valuator->invalid_p = true;
-	    valuator->emacs_value = DBL_MIN;
-	    valuator->increment = info->increment;
-	    valuator->number = info->number;
-	    valuator->pending_enter_reset = false;
-
+	    xi_populate_scroll_valuator (xi_device, actual_valuator_count++,
+					 info);
 	    break;
 	  }
 
 	case XIValuatorClass:
 	  {
-	    val_info = (XIValuatorClassInfo *) device->classes[c];
+	    valuator_info = (XIValuatorClassInfo *) device->classes[c];
 	    tem = SAFE_ALLOCA (sizeof *tem);
 
+	    /* Avoid restoring bogus values if some driver
+	       accidentally specifies relative values in scroll
+	       valuator classes how the input extension spec says they
+	       should be, but allow restoring values when a value is
+	       set, which is how the input extension actually
+	       behaves.  */
+
+	    if (valuator_info->value == 0.0
+		&& valuator_info->mode != XIModeAbsolute)
+	      continue;
+
 	    tem->next = values;
-	    tem->number = val_info->number;
-	    tem->current_value = val_info->value;
+	    tem->number = valuator_info->number;
+	    tem->current_value = valuator_info->value;
 
 	    values = tem;
 	    break;
 	  }
-#endif
 
 #ifdef HAVE_XINPUT2_2
 	case XITouchClass:
@@ -5401,7 +5512,6 @@ xi_populate_device_from_info (struct xi_device_t *xi_device,
 	}
     }
 
-#ifdef HAVE_XINPUT2_1
   xi_device->scroll_valuator_count = actual_valuator_count;
 
   /* Now look through all the valuators whose values are already known
@@ -5415,8 +5525,9 @@ xi_populate_device_from_info (struct xi_device_t *xi_device,
 	  if (xi_device->valuators[c].number == tem->number)
 	    {
 	      xi_device->valuators[c].invalid_p = false;
-	      xi_device->valuators[c].current_value = tem->current_value;
-	      xi_device->valuators[c].pending_enter_reset = true;
+	      xi_device->valuators[c].current_value
+		= tem->current_value;
+	      xi_device->valuators[c].emacs_value = 0.0;
 	    }
 	}
     }
@@ -5478,7 +5589,8 @@ x_cache_xi_devices (struct x_display_info *dpyinfo)
   for (i = 0; i < ndevices; ++i)
     {
       if (infos[i].enabled)
-	xi_populate_device_from_info (&dpyinfo->devices[actual_devices++],
+	xi_populate_device_from_info (dpyinfo,
+				      &dpyinfo->devices[actual_devices++],
 				      &infos[i]);
     }
 
@@ -5610,11 +5722,14 @@ xi_find_touch_point (struct xi_device_t *device, int detail)
 #ifdef HAVE_XINPUT2_1
 
 static void
-xi_reset_scroll_valuators_for_device_id (struct x_display_info *dpyinfo, int id,
-					 bool pending_only)
+xi_reset_scroll_valuators_for_device_id (struct x_display_info *dpyinfo,
+					 int id)
 {
-  struct xi_device_t *device = xi_device_from_id (dpyinfo, id);
+  struct xi_device_t *device;
   struct xi_scroll_valuator_t *valuator;
+  int i;
+
+  device = xi_device_from_id (dpyinfo, id);
 
   if (!device)
     return;
@@ -5622,14 +5737,9 @@ xi_reset_scroll_valuators_for_device_id (struct x_display_info *dpyinfo, int id,
   if (!device->scroll_valuator_count)
     return;
 
-  for (int i = 0; i < device->scroll_valuator_count; ++i)
+  for (i = 0; i < device->scroll_valuator_count; ++i)
     {
       valuator = &device->valuators[i];
-
-      if (pending_only && !valuator->pending_enter_reset)
-	continue;
-
-      valuator->pending_enter_reset = false;
       valuator->invalid_p = true;
       valuator->emacs_value = 0.0;
     }
@@ -6809,13 +6919,27 @@ x_sync_wait_for_frame_drawn_event (struct frame *f)
 		  x_sync_is_frame_drawn_event, (XPointer) f,
 		  make_timespec (1, 0)))
     {
-      /* TODO: display this warning in the echo area.  */
-      fprintf (stderr, "Warning: compositing manager spent more than 1 second "
-	       "drawing a frame.  Frame synchronization has been disabled\n");
-      FRAME_X_OUTPUT (f)->use_vsync_p = false;
+      /* The first time a draw hangs, treat it as a random fluctuation
+	 on the part of the compositor.  If the next draw continues to
+	 hang, disable frame synchronization.  */
+      if (FRAME_X_DRAW_JUST_HUNG (f))
+	{
+	  fprintf (stderr, "Warning: compositing manager spent more than 1 "
+		   "second drawing a frame.  Frame synchronization has "
+		   "been disabled\n");
+	  FRAME_X_OUTPUT (f)->use_vsync_p = false;
 
-      /* Also change the frame parameter to reflect the new state.  */
-      store_frame_param (f, Quse_frame_synchronization, Qnil);
+	  /* Also change the frame parameter to reflect the new
+	     state.  */
+	  store_frame_param (f, Quse_frame_synchronization, Qnil);
+	}
+      else
+	{
+	  fprintf (stderr, "Warning: compositing manager spent more than 1 "
+		   "second drawing a frame.  Frame synchronization will be "
+		   "disabled if this happens again\n");
+	  FRAME_X_DRAW_JUST_HUNG (f) = true;
+	}
     }
   else
     x_sync_note_frame_times (FRAME_DISPLAY_INFO (f), f, &event);
@@ -7018,8 +7142,26 @@ static void
 x_sync_handle_frame_drawn (struct x_display_info *dpyinfo,
 			   XEvent *message, struct frame *f)
 {
+  XSyncValue value, counter;
+
   if (FRAME_OUTER_WINDOW (f) == message->xclient.window)
-    FRAME_X_WAITING_FOR_DRAW (f) = false;
+    {
+      counter = FRAME_X_COUNTER_VALUE (f);
+
+      /* Check that the counter in the message is the same as the
+	 counter in the frame.  */
+      XSyncIntsToValue (&value,
+			message->xclient.data.l[0] & 0xffffffff,
+			message->xclient.data.l[1] & 0xffffffff);
+
+      if (XSyncValueEqual (value, counter))
+	FRAME_X_WAITING_FOR_DRAW (f) = false;
+
+      /* As long as a _NET_WM_FRAME_DRAWN message arrives, we know
+	 that the compositor is still sending events, so avoid timing
+	 out.  */
+      FRAME_X_DRAW_JUST_HUNG (f) = false;
+    }
 
   x_sync_note_frame_times (dpyinfo, f, message);
 }
@@ -11422,15 +11564,18 @@ x_new_focus_frame (struct x_display_info *dpyinfo, struct frame *frame)
   x_frame_rehighlight (dpyinfo);
 }
 
+#ifdef HAVE_XFIXES
+
 /* True if the display in DPYINFO supports a version of Xfixes
    sufficient for pointer blanking.  */
-#ifdef HAVE_XFIXES
+
 static bool
-x_probe_xfixes_extension (struct x_display_info *dpyinfo)
+x_fixes_pointer_blanking_supported (struct x_display_info *dpyinfo)
 {
   return (dpyinfo->xfixes_supported_p
 	  && dpyinfo->xfixes_major >= 4);
 }
+
 #endif /* HAVE_XFIXES */
 
 /* Toggle mouse pointer visibility on frame F using the XFixes
@@ -11501,7 +11646,7 @@ x_toggle_visible_pointer (struct frame *f, bool invisible)
   /* But if Xfixes is available, try using it instead.  */
   if (dpyinfo->invisible_cursor == None)
     {
-      if (x_probe_xfixes_extension (dpyinfo))
+      if (x_fixes_pointer_blanking_supported (dpyinfo))
 	{
 	  dpyinfo->fixes_pointer_blanking = true;
 	  xfixes_toggle_visible_pointer (f, invisible);
@@ -11529,7 +11674,7 @@ XTtoggle_invisible_pointer (struct frame *f, bool invisible)
   block_input ();
 #ifdef HAVE_XFIXES
   if (FRAME_DISPLAY_INFO (f)->fixes_pointer_blanking
-      && x_probe_xfixes_extension (FRAME_DISPLAY_INFO (f)))
+      && x_fixes_pointer_blanking_supported (FRAME_DISPLAY_INFO (f)))
     xfixes_toggle_visible_pointer (f, invisible);
   else
 #endif
@@ -11537,13 +11682,16 @@ XTtoggle_invisible_pointer (struct frame *f, bool invisible)
   unblock_input ();
 }
 
-/* Handle FocusIn and FocusOut state changes for FRAME.
-   If FRAME has focus and there exists more than one frame, puts
-   a FOCUS_IN_EVENT into *BUFP.  */
+/* Handle FocusIn and FocusOut state changes for FRAME.  If FRAME has
+   focus and there exists more than one frame, puts a FOCUS_IN_EVENT
+   into *BUFP.  Note that this code is not used to handle focus
+   changes on builds that can use the X Input extension for handling
+   input focus when it is available (currently the no toolkit and GTK
+   3 toolkits).  */
 
 static void
-x_focus_changed (int type, int state, struct x_display_info *dpyinfo, struct frame *frame,
-		 struct input_event *bufp)
+x_focus_changed (int type, int state, struct x_display_info *dpyinfo,
+		 struct frame *frame, struct input_event *bufp)
 {
   if (type == FocusIn)
     {
@@ -13025,6 +13173,111 @@ xi_get_scroll_valuator (struct xi_device_t *device, int number)
   return NULL;
 }
 
+/* Check if EVENT, a DeviceChanged event, contains any scroll
+   valuators.  */
+
+static bool
+xi_has_scroll_valuators (XIDeviceChangedEvent *event)
+{
+  int i;
+
+  for (i = 0; i < event->num_classes; ++i)
+    {
+      if (event->classes[i]->type == XIScrollClass)
+	return true;
+    }
+
+  return false;
+}
+
+/* Repopulate the information (touchpoint tracking information, scroll
+   valuators, etc) in DEVICE with the device classes provided in
+   CLASSES.  This is called upon receiving a DeviceChanged event.
+
+   This function is not present on XI 2.0 as there are no worthwhile
+   classes there.  */
+
+static void
+xi_handle_new_classes (struct x_display_info *dpyinfo, struct xi_device_t *device,
+		       XIAnyClassInfo **classes, int num_classes)
+{
+  XIScrollClassInfo *scroll;
+  struct xi_scroll_valuator_t *valuator;
+  XIValuatorClassInfo *valuator_info;
+  int i;
+#ifdef HAVE_XINPUT2_2
+  XITouchClassInfo *touch;
+#endif
+
+  if (dpyinfo->xi2_version < 1)
+    /* Emacs is connected to an XI 2.0 server, which reports no
+       classes of interest.  */
+    return;
+
+  device->valuators = xnmalloc (num_classes,
+				sizeof *device->valuators);
+  device->scroll_valuator_count = 0;
+#ifdef HAVE_XINPUT2_2
+  device->direct_p = false;
+#endif
+
+  for (i = 0; i < num_classes; ++i)
+    {
+      switch (classes[i]->type)
+	{
+	case XIScrollClass:
+	  scroll = (XIScrollClassInfo *) classes[i];
+
+	  xi_populate_scroll_valuator (device,
+				       device->scroll_valuator_count++,
+				       scroll);
+	  break;
+
+#ifdef HAVE_XINPUT2_2
+	case XITouchClass:
+	  touch = (XITouchClassInfo *) classes[i];
+
+	  if (touch->mode == XIDirectTouch)
+	    device->direct_p = true;
+	  break;
+#endif
+	}
+    }
+
+  /* Restore the values of any scroll valuators that we already
+     know about.  */
+
+  for (i = 0; i < num_classes; ++i)
+    {
+      if (classes[i]->type != XIValuatorClass)
+	continue;
+
+      valuator_info = (XIValuatorClassInfo *) classes[i];
+
+      /* Avoid restoring bogus values if some driver accidentally
+	 specifies relative values in scroll valuator classes how the
+	 input extension spec says they should be, but allow restoring
+	 values when a value is set, which is how the input extension
+	 actually behaves.  */
+
+      if (valuator_info->value == 0.0
+	  && valuator_info->mode != XIModeAbsolute)
+	continue;
+
+      valuator = xi_get_scroll_valuator (device,
+					 valuator_info->number);
+
+      if (!valuator)
+	continue;
+
+      valuator->invalid_p = false;
+      valuator->current_value = valuator_info->value;
+      valuator->emacs_value = 0;
+
+      break;
+    }
+}
+
 #endif
 
 /* Handle EVENT, a DeviceChanged event.  Look up the device that
@@ -13036,118 +13289,65 @@ xi_handle_device_changed (struct x_display_info *dpyinfo,
 			  XIDeviceChangedEvent *event)
 {
 #ifdef HAVE_XINPUT2_1
+  int ndevices;
   XIDeviceInfo *info;
-  XIScrollClassInfo *scroll;
-  int i, ndevices;
-  struct xi_scroll_valuator_t *valuator;
-  XIValuatorClassInfo *valuator_info;
 #endif
 #ifdef HAVE_XINPUT2_2
   struct xi_touch_point_t *tem, *last;
-  XITouchClassInfo *touch;
 #endif
 
 #ifdef HAVE_XINPUT2_1
-  /* When a DeviceChange event is received for a master device, we
-     don't get any scroll valuators along with it.  This is possibly
-     an X server bug but I really don't want to dig any further, so
-     fetch the scroll valuators manually.  (bug#57020) */
-
-  x_catch_errors (dpyinfo->display);
-  info = XIQueryDevice (dpyinfo->display, event->deviceid,
-			/* ndevices is always 1 if a deviceid is
-			   specified.  If the request fails, NULL will
-			   be returned.  */
-			&ndevices);
-  x_uncatch_errors ();
-
-  if (info)
+  if (xi_has_scroll_valuators (event))
+    /* Scroll valuators are provided by this event.  Use the values
+       provided in this event to populate the device's new scroll
+       valuator list: if this event is a SlaveSwitch event caused by
+       wheel movement, then querying for the device info will probably
+       return the value after the wheel movement, leading to a delta
+       of 0 being computed upon handling the subsequent XI_Motion
+       event.  (bug#58980) */
+    xi_handle_new_classes (dpyinfo, device, event->classes,
+			   event->num_classes);
+  else
     {
-      device->valuators = xrealloc (device->valuators,
-				    (info->num_classes
-				     * sizeof *device->valuators));
-      device->scroll_valuator_count = 0;
-#ifdef HAVE_XINPUT2_2
-      device->direct_p = false;
+      /* When a DeviceChange event is received for a master device,
+	 the X server sometimes does not send any scroll valuators
+	 along with it.  This is possibly an X server bug but I really
+	 don't want to dig any further, so fetch the scroll valuators
+	 manually.  (bug#57020) */
+
+      x_catch_errors (dpyinfo->display);
+      info = XIQueryDevice (dpyinfo->display, event->deviceid,
+			    /* ndevices is always 1 if a deviceid is
+			       specified.  If the request fails, NULL will
+			       be returned.  */
+			    &ndevices);
+      x_uncatch_errors ();
+
+      if (!info)
+	return;
+
+      /* info contains the classes currently associated with the
+	 event.  Apply them.  */
+      xi_handle_new_classes (dpyinfo, device, info->classes,
+			     info->num_classes);
+    }
 #endif
 
-      for (i = 0; i < info->num_classes; ++i)
-	{
-	  switch (info->classes[i]->type)
-	    {
-	    case XIScrollClass:
-	      scroll = (XIScrollClassInfo *) info->classes[i];
-
-	      valuator = &device->valuators[device->scroll_valuator_count++];
-	      valuator->horizontal = (scroll->scroll_type
-				      == XIScrollTypeHorizontal);
-	      valuator->invalid_p = true;
-	      valuator->emacs_value = DBL_MIN;
-	      valuator->increment = scroll->increment;
-	      valuator->number = scroll->number;
-	      break;
-
 #ifdef HAVE_XINPUT2_2
-	    case XITouchClass:
-	      touch = (XITouchClassInfo *) info->classes[i];
+  /* The device is no longer a DirectTouch device, so remove any
+     touchpoints that we might have recorded.  */
+  if (!device->direct_p)
+    {
+      tem = device->touchpoints;
 
-	      if (touch->mode == XIDirectTouch)
-		device->direct_p = true;
-	      break;
-#endif
-	    }
-	}
-
-      /* Restore the values of any scroll valuators that we already
-	 know about.  */
-
-      for (i = 0; i < info->num_classes; ++i)
+      while (tem)
 	{
-	  switch (info->classes[i]->type)
-	    {
-	    case XIValuatorClass:
-	      valuator_info = (XIValuatorClassInfo *) info->classes[i];
-
-	      valuator = xi_get_scroll_valuator (device,
-						 valuator_info->number);
-	      if (valuator)
-		{
-		  valuator->invalid_p = false;
-		  valuator->current_value = valuator_info->value;
-
-		  /* Make sure that this is reset if the pointer moves
-		     into a window of ours.
-
-		     Otherwise the valuator state could be left
-		     invalid if the DeviceChange event happened with
-		     the pointer outside any Emacs frame. */
-		  valuator->pending_enter_reset = true;
-		}
-
-	      break;
-	    }
+	  last = tem;
+	  tem = tem->next;
+	  xfree (last);
 	}
 
-#ifdef HAVE_XINPUT2_2
-      /* The device is no longer a DirectTouch device, so
-	 remove any touchpoints that we might have
-	 recorded.  */
-      if (!device->direct_p)
-	{
-	  tem = device->touchpoints;
-
-	  while (tem)
-	    {
-	      last = tem;
-	      tem = tem->next;
-	      xfree (last);
-	    }
-
-	  device->touchpoints = NULL;
-	}
-#endif
-
-      XIFreeDeviceInfo (info);
+      device->touchpoints = NULL;
     }
 #endif
 }
@@ -13399,7 +13599,7 @@ x_find_modifier_meanings (struct x_display_info *dpyinfo)
 #ifdef HAVE_XKB
   int i;
   int found_meta_p = false;
-  uint vmodmask;
+  unsigned int vmodmask;
 #endif
 
   dpyinfo->meta_mod_mask = 0;
@@ -13658,7 +13858,7 @@ x_compute_root_window_offset (struct frame *f, int root_x, int root_y,
    many cases while handling events, which would otherwise result in
    slowdowns over slow network connections.  */
 
-static void
+void
 x_translate_coordinates (struct frame *f, int root_x, int root_y,
 			 int *x_out, int *y_out)
 {
@@ -13729,6 +13929,31 @@ x_translate_coordinates_to_root (struct frame *f, int x, int y,
       output->root_x = *x_out - x;
       output->root_y = *y_out - y;
     }
+}
+
+/* Do x-translate-coordinates, but try to avoid a roundtrip to the X
+   server at the cost of not returning `child', which most callers
+   have no reason to use.  */
+
+Lisp_Object
+x_handle_translate_coordinates (struct frame *f, Lisp_Object dest_window,
+				int source_x, int source_y)
+{
+  if (NILP (dest_window))
+    {
+      /* We are translating coordinates from a frame to the root
+	 window.  Avoid a roundtrip if possible by using cached
+	 coordinates.  */
+
+      if (!FRAME_X_OUTPUT (f)->window_offset_certain_p)
+	return Qnil;
+
+      return list3 (make_fixnum (source_x + FRAME_X_OUTPUT (f)->root_x),
+		    make_fixnum (source_y + FRAME_X_OUTPUT (f)->root_y),
+		    Qnil);
+    }
+
+  return Qnil;
 }
 
 /* The same, but for an XIDeviceEvent.  */
@@ -14070,6 +14295,136 @@ x_get_window_below (Display *dpy, Window window,
   return value;
 }
 
+/* Like XTmouse_position, but much faster.  */
+
+static void
+x_fast_mouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
+		       enum scroll_bar_part *part, Lisp_Object *x, Lisp_Object *y,
+		       Time *timestamp)
+{
+  int root_x, root_y, win_x, win_y;
+  unsigned int mask;
+  Window dummy;
+  struct scroll_bar *bar;
+  struct x_display_info *dpyinfo;
+  Lisp_Object tail, frame;
+  struct frame *f1;
+
+  dpyinfo = FRAME_DISPLAY_INFO (*fp);
+
+  if (dpyinfo->last_mouse_scroll_bar && !insist)
+    {
+      bar = dpyinfo->last_mouse_scroll_bar;
+
+      if (bar->horizontal)
+	x_horizontal_scroll_bar_report_motion (fp, bar_window, part,
+					       x, y, timestamp);
+      else
+	x_scroll_bar_report_motion (fp, bar_window, part,
+				    x, y, timestamp);
+
+      return;
+    }
+
+  if (!EQ (Vx_use_fast_mouse_position, Qreally_fast))
+    {
+      /* This means that Emacs should select a frame and report the
+	 mouse position relative to it.  The approach used here avoids
+	 making multiple roundtrips to the X server querying for the
+	 window beneath the pointer, and was borrowed from
+	 haiku_mouse_position in haikuterm.c.  */
+
+      FOR_EACH_FRAME (tail, frame)
+	{
+	  if (FRAME_X_P (XFRAME (frame))
+	      && (FRAME_DISPLAY_INFO (XFRAME (frame))
+		  == dpyinfo))
+	    XFRAME (frame)->mouse_moved = false;
+	}
+
+      if (gui_mouse_grabbed (dpyinfo)
+	  && !EQ (track_mouse, Qdropping)
+	  && !EQ (track_mouse, Qdrag_source))
+	/* Pick the last mouse frame if dropping.  */
+	f1 = dpyinfo->last_mouse_frame;
+      else
+	/* Otherwise, pick the last mouse motion frame.  */
+	f1 = dpyinfo->last_mouse_motion_frame;
+
+      if (!f1 && (FRAME_X_P (SELECTED_FRAME ())
+		  && (FRAME_DISPLAY_INFO (SELECTED_FRAME ())
+		      == dpyinfo)))
+	f1 = SELECTED_FRAME ();
+
+      if (!f1 || (!FRAME_X_P (f1) && (insist > 0)))
+	FOR_EACH_FRAME (tail, frame)
+	  if (FRAME_X_P (XFRAME (frame))
+	      && (FRAME_DISPLAY_INFO (XFRAME (frame))
+		  == dpyinfo)
+	      && !FRAME_TOOLTIP_P (XFRAME (frame)))
+	    f1 = XFRAME (frame);
+
+      if (f1 && FRAME_TOOLTIP_P (f1))
+	f1 = NULL;
+
+      if (f1 && FRAME_X_P (f1) && FRAME_X_WINDOW (f1))
+	{
+	  if (!x_query_pointer (dpyinfo->display, FRAME_X_WINDOW (f1),
+				&dummy, &dummy, &root_x, &root_y,
+				&win_x, &win_y, &mask))
+	    /* The pointer is out of the screen.  */
+	    return;
+
+	  remember_mouse_glyph (f1, win_x, win_y,
+				&dpyinfo->last_mouse_glyph);
+	  dpyinfo->last_mouse_glyph_frame = f1;
+
+	  *bar_window = Qnil;
+	  *part = scroll_bar_nowhere;
+
+	  /* If track-mouse is `drag-source' and the mouse pointer is
+	     certain to not be actually under the chosen frame, return
+	     NULL in FP.  */
+	  if (EQ (track_mouse, Qdrag_source)
+	      && (win_x < 0 || win_y < 0
+		  || win_x >= FRAME_PIXEL_WIDTH (f1)
+		  || win_y >= FRAME_PIXEL_HEIGHT (f1)))
+	    *fp = NULL;
+	  else
+	    *fp = f1;
+
+	  *timestamp = dpyinfo->last_mouse_movement_time;
+	  XSETINT (*x, win_x);
+	  XSETINT (*y, win_y);
+	}
+    }
+  else
+    {
+      /* This means Emacs should only report the coordinates of the
+	 last mouse motion.  */
+
+      if (dpyinfo->last_mouse_motion_frame)
+	{
+	  *fp = dpyinfo->last_mouse_motion_frame;
+	  *timestamp = dpyinfo->last_mouse_movement_time;
+	  *x = make_fixnum (dpyinfo->last_mouse_motion_x);
+	  *y = make_fixnum (dpyinfo->last_mouse_motion_y);
+	  *bar_window = Qnil;
+	  *part = scroll_bar_nowhere;
+
+	  FOR_EACH_FRAME (tail, frame)
+	    {
+	      if (FRAME_X_P (XFRAME (frame))
+		  && (FRAME_DISPLAY_INFO (XFRAME (frame))
+		      == dpyinfo))
+		XFRAME (frame)->mouse_moved = false;
+	    }
+
+	  dpyinfo->last_mouse_motion_frame->mouse_moved = false;
+	}
+    }
+}
+
 /* Return the current position of the mouse.
    *FP should be a frame which indicates which display to ask about.
 
@@ -14096,8 +14451,26 @@ XTmouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
 		  Time *timestamp)
 {
   struct frame *f1, *maybe_tooltip;
-  struct x_display_info *dpyinfo = FRAME_DISPLAY_INFO (*fp);
+  struct x_display_info *dpyinfo;
   bool unrelated_tooltip;
+
+  dpyinfo = FRAME_DISPLAY_INFO (*fp);
+
+  if (!NILP (Vx_use_fast_mouse_position))
+    {
+      /* The user says that Emacs is running over the network, and a
+	 fast approximation of `mouse-position' should be used.
+
+	 Depending on what the value of `x-use-fast-mouse-position'
+	 is, do one of two things: only perform the XQueryPointer to
+	 obtain the coordinates from the last mouse frame, or only
+	 return the last mouse motion frame and the
+	 last_mouse_motion_x and Y.  */
+
+      x_fast_mouse_position (fp, insist, bar_window, part, x,
+			     y, timestamp);
+      return;
+    }
 
   block_input ();
 
@@ -14220,7 +14593,7 @@ XTmouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
 		    break;
 		  }
 #ifdef USE_GTK
-		/* We don't wan't to know the innermost window.  We
+		/* We don't want to know the innermost window.  We
 		   want the edit window.  For non-Gtk+ the innermost
 		   window is the edit window.  For Gtk+ it might not
 		   be.  It might be the tool bar for example.  */
@@ -14251,7 +14624,7 @@ XTmouse_position (struct frame **fp, int insist, Lisp_Object *bar_window,
 	       never use them in that case.)  */
 
 #ifdef USE_GTK
-	    /* We don't wan't to know the innermost window.  We
+	    /* We don't want to know the innermost window.  We
 	       want the edit window.  */
 	    f1 = x_window_to_frame (dpyinfo, win);
 #else
@@ -17844,6 +18217,7 @@ x_coords_from_dnd_message (struct x_display_info *dpyinfo,
 static void
 x_handle_wm_state (struct frame *f, struct input_event *ie)
 {
+  struct x_display_info *dpyinfo;
   Atom type;
   int format;
   unsigned long nitems, bytes_after;
@@ -17851,10 +18225,11 @@ x_handle_wm_state (struct frame *f, struct input_event *ie)
   unsigned long *state;
 
   data = NULL;
+  dpyinfo = FRAME_DISPLAY_INFO (f);
 
   if (XGetWindowProperty (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f),
-			  FRAME_DISPLAY_INFO (f)->Xatom_wm_state, 0, 2,
-			  False, AnyPropertyType, &type, &format, &nitems,
+			  dpyinfo->Xatom_wm_state, 0, 2, False,
+			  AnyPropertyType, &type, &format, &nitems,
 			  &bytes_after, &data) != Success)
     return;
 
@@ -17877,6 +18252,20 @@ x_handle_wm_state (struct frame *f, struct input_event *ie)
       f->output_data.x->has_been_visible = true;
 
       ie->kind = DEICONIFY_EVENT;
+      XSETFRAME (ie->frame_or_window, f);
+    }
+  else if (state[0] == IconicState
+	   /* _NET_WM_STATE_HIDDEN should be used if the window
+	      manager supports that.  */
+	   && !x_wm_supports (f, dpyinfo->Xatom_net_wm_state_hidden))
+    {
+      /* The frame is actually iconified right now.  Mark it as
+	 such.  */
+
+      SET_FRAME_VISIBLE (f, 0);
+      SET_FRAME_ICONIFIED (f, true);
+
+      ie->kind = ICONIFY_EVENT;
       XSETFRAME (ie->frame_or_window, f);
     }
 
@@ -18264,7 +18653,12 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		/* Set the provided time as the user time, which is
 		   required for SetInputFocus to work correctly after
 		   taking the input focus.  */
-		x_display_set_last_user_time (dpyinfo, event->xclient.data.l[1],
+
+		/* Time can be sign extended if retrieved from a client message.
+		   Make sure it is always 32 bits, or systems with 64-bit longs
+		   will crash after 24 days of X server uptime.  (bug#59480) */
+		x_display_set_last_user_time (dpyinfo, (event->xclient.data.l[1]
+							& 0xffffffff),
 					      true, true);
 		goto done;
               }
@@ -18595,7 +18989,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 	/* If drag-and-drop or another modal dialog/menu is in
 	   progress, handle SelectionRequest events immediately, by
-	   pushing it onto the selecction queue.  */
+	   pushing it onto the selection queue.  */
 
 	if (x_use_pending_selection_requests)
 	  {
@@ -18893,8 +19287,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      x_real_positions (f, &f->left_pos, &f->top_pos);
 
 	      /* Perhaps reparented due to a WM restart.  Reset this.  */
-	      FRAME_DISPLAY_INFO (f)->wm_type = X_WMTYPE_UNKNOWN;
-	      FRAME_DISPLAY_INFO (f)->net_supported_window = 0;
+	      dpyinfo->wm_type = X_WMTYPE_UNKNOWN;
+	      dpyinfo->net_supported_window = 0;
 
 #ifndef USE_GTK
 	      /* The window manager could have restarted and the new
@@ -18922,11 +19316,12 @@ handle_one_xevent (struct x_display_info *dpyinfo,
       goto OTHER;
 
     case Expose:
-      f = x_window_to_frame (dpyinfo, event->xexpose.window);
+
 #ifdef HAVE_XWIDGETS
       {
-	struct xwidget_view *xv =
-	  xwidget_view_from_window (event->xexpose.window);
+	struct xwidget_view *xv;
+
+	xv = xwidget_view_from_window (event->xexpose.window);
 
 	if (xv)
 	  {
@@ -18935,6 +19330,8 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	  }
       }
 #endif
+
+      f = x_window_to_frame (dpyinfo, event->xexpose.window);
       if (f)
         {
           if (!FRAME_VISIBLE_P (f))
@@ -19363,7 +19760,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
           *finish = X_EVENT_DROP;
 #endif
 
-          xkey.state |= x_emacs_to_x_modifiers (FRAME_DISPLAY_INFO (f),
+          xkey.state |= x_emacs_to_x_modifiers (dpyinfo,
 						extra_keyboard_modifiers);
           modifiers = xkey.state;
 
@@ -19480,7 +19877,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	  /* Common for all keysym input events.  */
 	  XSETFRAME (inev.ie.frame_or_window, f);
 	  inev.ie.modifiers
-	    = x_x_to_emacs_modifiers (FRAME_DISPLAY_INFO (f), modifiers);
+	    = x_x_to_emacs_modifiers (dpyinfo, modifiers);
 	  inev.ie.timestamp = xkey.time;
 
 	  /* First deal with keysyms which have defined
@@ -19738,7 +20135,35 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
     case EnterNotify:
       x_display_set_last_user_time (dpyinfo, event->xcrossing.time,
-				    event->xcrossing.send_event, false);
+				    event->xcrossing.send_event,
+				    false);
+
+#ifdef HAVE_XWIDGETS
+      {
+	struct xwidget_view *xvw;
+	Mouse_HLInfo *hlinfo;
+
+	xvw = xwidget_view_from_window (event->xcrossing.window);
+
+	if (xvw)
+	  {
+	    xwidget_motion_or_crossing (xvw, event);
+	    hlinfo = MOUSE_HL_INFO (xvw->frame);
+
+	    if (xvw->frame == hlinfo->mouse_face_mouse_frame)
+	      {
+		clear_mouse_face (hlinfo);
+		hlinfo->mouse_face_mouse_frame = 0;
+		x_flush_dirty_back_buffer_on (xvw->frame);
+	      }
+
+	    if (any_help_event_p)
+	      do_help = -1;
+
+	    goto OTHER;
+	  }
+      }
+#endif
 
 #ifdef HAVE_XINPUT2
       /* For whatever reason, the X server continues to deliver
@@ -19754,32 +20179,6 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
       if (x_top_window_to_frame (dpyinfo, event->xcrossing.window))
 	x_detect_focus_change (dpyinfo, any, event, &inev.ie);
-
-#ifdef HAVE_XWIDGETS
-      {
-	struct xwidget_view *xvw = xwidget_view_from_window (event->xcrossing.window);
-	Mouse_HLInfo *hlinfo;
-
-	if (xvw)
-	  {
-	    xwidget_motion_or_crossing (xvw, event);
-	    hlinfo = MOUSE_HL_INFO (xvw->frame);
-
-	    if (xvw->frame == hlinfo->mouse_face_mouse_frame)
-	      {
-		clear_mouse_face (hlinfo);
-		hlinfo->mouse_face_mouse_frame = 0;
-		x_flush_dirty_back_buffer_on (xvw->frame);
-	      }
-
-	    if (any_help_event_p)
-	      {
-		do_help = -1;
-	      }
-	    goto OTHER;
-	  }
-      }
-#endif
 
       f = any;
 
@@ -19891,7 +20290,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 #ifdef HAVE_XWIDGETS
       {
-	struct xwidget_view *xvw = xwidget_view_from_window (event->xcrossing.window);
+	struct xwidget_view *xvw;
+
+	xvw = xwidget_view_from_window (event->xcrossing.window);
 
 	if (xvw)
 	  {
@@ -20251,7 +20652,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
           f = 0;
 #endif
 #ifdef HAVE_XWIDGETS
-	struct xwidget_view *xvw = xwidget_view_from_window (event->xmotion.window);
+	struct xwidget_view *xvw;
+
+	xvw = xwidget_view_from_window (event->xmotion.window);
 
 	if (xvw)
 	  xwidget_motion_or_crossing (xvw, event);
@@ -20702,7 +21105,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 					event->xbutton.send_event, true);
 
 #ifdef HAVE_XWIDGETS
-	struct xwidget_view *xvw = xwidget_view_from_window (event->xbutton.window);
+	struct xwidget_view *xvw;
+
+	xvw = xwidget_view_from_window (event->xbutton.window);
 
 	if (xvw)
 	  {
@@ -20826,7 +21231,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 					      event->xbutton.time);
 		      }
 		    else if (x_dnd_last_seen_window != None
-			&& x_dnd_last_protocol_version != -1)
+			     && x_dnd_last_protocol_version != -1)
 		      {
 			x_dnd_pending_finish_target = x_dnd_last_seen_toplevel;
 			x_dnd_waiting_for_finish_proto = x_dnd_last_protocol_version;
@@ -20944,8 +21349,11 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 	    if (FRAME_PARENT_FRAME (f) || (hf && frame_ancestor_p (f, hf)))
 	      {
+		x_ignore_errors_for_next_request (dpyinfo);
 		XSetInputFocus (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f),
 				RevertToParent, event->xbutton.time);
+	        x_stop_ignoring_errors (dpyinfo);
+
 		if (FRAME_PARENT_FRAME (f))
 		  XRaiseWindow (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f));
 	      }
@@ -21054,7 +21462,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		  if (!NILP (tab_bar_arg))
 		    inev.ie.arg = tab_bar_arg;
                 }
-            if (FRAME_X_EMBEDDED_P (f))
+
+            if (FRAME_X_EMBEDDED_P (f)
+		&& !FRAME_NO_ACCEPT_FOCUS (f))
               xembed_send_message (f, event->xbutton.time,
                                    XEMBED_REQUEST_FOCUS, 0, 0, 0);
           }
@@ -21357,20 +21767,21 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		 related to those grabs arrive.  The only way to
 		 remedy this is to never reset scroll valuators on a
 		 grab-related crossing event.  (bug#57476) */
+
 	      if (enter->mode != XINotifyUngrab
 		  && enter->mode != XINotifyGrab
 		  && enter->mode != XINotifyPassiveGrab
 		  && enter->mode != XINotifyPassiveUngrab)
-		xi_reset_scroll_valuators_for_device_id (dpyinfo, enter->deviceid,
-							 true);
+		xi_reset_scroll_valuators_for_device_id (dpyinfo,
+							 enter->deviceid);
 #endif
 
 	      {
 #ifdef HAVE_XWIDGETS
-		struct xwidget_view *xwidget_view = xwidget_view_from_window (enter->event);
-#endif
+		struct xwidget_view *xwidget_view;
 
-#ifdef HAVE_XWIDGETS
+		xwidget_view = xwidget_view_from_window (enter->event);
+
 		if (xwidget_view)
 		  {
 		    xwidget_motion_or_crossing (xwidget_view, event);
@@ -21475,28 +21886,32 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		 retrieve the value of a valuator outside of each motion
 		 event.
 
-		 As such, to prevent wildly inaccurate results when the
-		 valuators have changed outside Emacs, we reset our
-		 records of each valuator's value whenever the pointer
-		 moves out of a frame (and not into one of its
-		 children, which we know about).  */
+		 As such, to prevent wildly inaccurate results when
+		 the valuators have changed outside Emacs, we reset
+		 our records of each valuator's value whenever the
+		 pointer moves out of a frame.  Ideally, this would
+		 ignore events with a detail of XINotifyInferior, as
+		 the window the pointer moved to would be one known to
+		 Emacs, but the code to keep track of which valuators
+		 had to be reset upon the corresponding XI_Enter event
+		 was very complicated and kept running into server
+		 bugs.  */
 #ifdef HAVE_XINPUT2_1
-	      if (leave->detail != XINotifyInferior && any
-		  /* xfwm4 selects for button events on the frame
-		     window, resulting in passive grabs being
-		     generated along with the delivery of emulated
-		     button events; this then interferes with
-		     scrolling, since device valuators will constantly
-		     be reset as the crossing events related to those
-		     grabs arrive.  The only way to remedy this is to
-		     never reset scroll valuators on a grab-related
-		     crossing event.  (bug#57476) */
-		  && leave->mode != XINotifyUngrab
+	      /* xfwm4 selects for button events on the frame window,
+		 resulting in passive grabs being generated along with
+		 the delivery of emulated button events; this then
+		 interferes with scrolling, since device valuators
+		 will constantly be reset as the crossing events
+		 related to those grabs arrive.  The only way to
+		 remedy this is to never reset scroll valuators on a
+		 grab-related crossing event.  (bug#57476) */
+
+	      if (leave->mode != XINotifyUngrab
 		  && leave->mode != XINotifyGrab
 		  && leave->mode != XINotifyPassiveUngrab
 		  && leave->mode != XINotifyPassiveGrab)
 		xi_reset_scroll_valuators_for_device_id (dpyinfo,
-							 leave->deviceid, false);
+							 leave->deviceid);
 #endif
 
 	      x_display_set_last_user_time (dpyinfo, leave->time,
@@ -21504,8 +21919,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 
 #ifdef HAVE_XWIDGETS
 	      {
-		struct xwidget_view *xvw
-		  = xwidget_view_from_window (leave->event);
+		struct xwidget_view *xvw;
+
+		xvw = xwidget_view_from_window (leave->event);
 
 		if (xvw)
 		  {
@@ -21526,20 +21942,6 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      /* On Xt builds that have XI2, the enter and leave event
 		 masks are set on the frame widget's window.  */
 	      f = x_window_to_frame (dpyinfo, leave->event);
-
-	      /* Also do this again here, since the test for `any'
-		 above may not have found a frame, as that usually
-		 just looks up a top window on Xt builds.  */
-
-#ifdef HAVE_XINPUT2_1
-	      if (leave->detail != XINotifyInferior && f
-		  && leave->mode != XINotifyUngrab
-		  && leave->mode != XINotifyGrab
-		  && leave->mode != XINotifyPassiveUngrab
-		  && leave->mode != XINotifyPassiveGrab)
-		xi_reset_scroll_valuators_for_device_id (dpyinfo,
-							 leave->deviceid, false);
-#endif
 
 	      if (!f)
 		f = x_top_window_to_frame (dpyinfo, leave->event);
@@ -22655,9 +23057,13 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 			}
 #else
 		      /* Non-no toolkit builds without GTK 3 use core
-			 events to handle focus.  */
+			 events to handle focus.  Errors are still
+			 caught here in case the window is not
+			 viewable.  */
+		      x_ignore_errors_for_next_request (dpyinfo);
 		      XSetInputFocus (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f),
 				      RevertToParent, xev->time);
+		      x_stop_ignoring_errors (dpyinfo);
 #endif
 		      if (FRAME_PARENT_FRAME (f))
 			XRaiseWindow (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f));
@@ -22826,7 +23232,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 			if (!NILP (tab_bar_arg))
 			  inev.ie.arg = tab_bar_arg;
 		      }
-		  if (FRAME_X_EMBEDDED_P (f))
+
+		  if (FRAME_X_EMBEDDED_P (f)
+		      && !FRAME_NO_ACCEPT_FOCUS (f))
 		    xembed_send_message (f, xev->time,
 					 XEMBED_REQUEST_FOCUS, 0, 0, 0);
 		}
@@ -22912,7 +23320,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      char *copy_bufptr = copy_buffer;
 	      int copy_bufsiz = sizeof (copy_buffer);
 	      ptrdiff_t i;
-	      uint old_state;
+	      unsigned int old_state;
 	      struct xi_device_t *device, *source;
 
 	      coding = Qlatin_1;
@@ -22938,8 +23346,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		  copy.xkey.root = xev->root;
 		  copy.xkey.subwindow = xev->child;
 		  copy.xkey.time = xev->time;
-		  copy.xkey.state = ((xev->mods.effective & ~(1 << 13 | 1 << 14))
-				     | (xev->group.effective << 13));
+		  copy.xkey.state = xi_convert_event_keyboard_state (xev);
 		  xi_convert_button_state (&xev->buttons, &copy.xkey.state);
 
 		  copy.xkey.x = lrint (xev->event_x);
@@ -22995,8 +23402,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      xkey.root = xev->root;
 	      xkey.subwindow = xev->child;
 	      xkey.time = xev->time;
-	      xkey.state = ((xev->mods.effective & ~(1 << 13 | 1 << 14))
-			    | (xev->group.effective << 13));
+	      xkey.state = xi_convert_event_keyboard_state (xev);
 
 	      xkey.x = lrint (xev->event_x);
 	      xkey.y = lrint (xev->event_y);
@@ -23060,8 +23466,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 #ifdef HAVE_XKB
 	      if (dpyinfo->xkb_desc)
 		{
-		  uint xkb_state = state;
-		  xkb_state &= ~(1 << 13 | 1 << 14);
+		  unsigned int xkb_state;
+
+		  xkb_state = state & ~(1 << 13 | 1 << 14);
 		  xkb_state |= xev->group.effective << 13;
 
 		  if (!XkbTranslateKeyCode (dpyinfo->xkb_desc, keycode,
@@ -23414,8 +23821,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 	      xkey.root = xev->root;
 	      xkey.subwindow = xev->child;
 	      xkey.time = xev->time;
-	      xkey.state = ((xev->mods.effective & ~(1 << 13 | 1 << 14))
-			    | (xev->group.effective << 13));
+	      xkey.state = xi_convert_event_keyboard_state (xev);
 	      xkey.x = lrint (xev->event_x);
 	      xkey.y = lrint (xev->event_y);
 	      xkey.x_root = lrint (xev->root_x);
@@ -23517,7 +23923,7 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 			      memset (dpyinfo->devices + dpyinfo->num_devices - 1,
 				      0, sizeof *dpyinfo->devices);
 			      device = &dpyinfo->devices[dpyinfo->num_devices - 1];
-			      xi_populate_device_from_info (device, info);
+			      xi_populate_device_from_info (dpyinfo, device, info);
 			    }
 
 			  if (info)
@@ -23808,8 +24214,9 @@ handle_one_xevent (struct x_display_info *dpyinfo,
 		    xi_compute_root_window_offset_pinch (any, pev);
 
 		  inev.ie.kind = PINCH_EVENT;
-		  inev.ie.modifiers = x_x_to_emacs_modifiers (FRAME_DISPLAY_INFO (any),
-							      pev->mods.effective);
+		  inev.ie.modifiers
+		    = x_x_to_emacs_modifiers (dpyinfo, pev->mods.effective);
+
 		  XSETINT (inev.ie.x, lrint (pev->event_x));
 		  XSETINT (inev.ie.y, lrint (pev->event_y));
 		  XSETFRAME (inev.ie.frame_or_window, any);
@@ -24897,6 +25304,48 @@ static struct x_error_message_stack *x_error_message;
 /* The amount of items (depth) in that stack.  */
 int x_error_message_count;
 
+/* Compare various request serials while handling wraparound.  Treat a
+   difference of more than X_ULONG_MAX / 2 as wraparound.
+
+   Note that these functions truncate serials to 32 bits before
+   comparison.  */
+
+static bool
+x_is_serial_more_than (unsigned int a, unsigned int b)
+{
+  if (a > b)
+    return true;
+
+  return (b - a > X_ULONG_MAX / 2);
+}
+
+static bool
+x_is_serial_more_than_or_equal_to (unsigned int a, unsigned int b)
+{
+  if (a >= b)
+    return true;
+
+  return (b - a > X_ULONG_MAX / 2);
+}
+
+static bool
+x_is_serial_less_than (unsigned int a, unsigned int b)
+{
+  if (a < b)
+    return true;
+
+  return (a - b > X_ULONG_MAX / 2);
+}
+
+static bool
+x_is_serial_less_than_or_equal_to (unsigned int a, unsigned int b)
+{
+  if (a <= b)
+    return true;
+
+  return (a - b > X_ULONG_MAX / 2);
+}
+
 static struct x_error_message_stack *
 x_find_error_handler (Display *dpy, XErrorEvent *event)
 {
@@ -24906,8 +25355,8 @@ x_find_error_handler (Display *dpy, XErrorEvent *event)
 
   while (stack)
     {
-      if (X_COMPARE_SERIALS (event->serial, >=,
-			     stack->first_request)
+      if (x_is_serial_more_than_or_equal_to (event->serial,
+					     stack->first_request)
 	  && dpy == stack->dpy)
 	return stack;
 
@@ -25010,11 +25459,11 @@ x_request_can_fail (struct x_display_info *dpyinfo,
        failable_requests < dpyinfo->next_failable_request;
        failable_requests++)
     {
-      if (X_COMPARE_SERIALS (request, >=,
-			     failable_requests->start)
+      if (x_is_serial_more_than_or_equal_to (request,
+					     failable_requests->start)
 	  && (!failable_requests->end
-	      || X_COMPARE_SERIALS (request, <=,
-				    failable_requests->end)))
+	      || x_is_serial_less_than_or_equal_to (request,
+						    failable_requests->end)))
 	return failable_requests;
     }
 
@@ -25032,11 +25481,11 @@ x_clean_failable_requests (struct x_display_info *dpyinfo)
 
   for (first = dpyinfo->failable_requests; first < last; first++)
     {
-      if (X_COMPARE_SERIALS (first->start, >,
-			     LastKnownRequestProcessed (dpyinfo->display))
+      if (x_is_serial_more_than (first->start,
+				 LastKnownRequestProcessed (dpyinfo->display))
 	  || !first->end
-	  || X_COMPARE_SERIALS (first->end, >,
-				LastKnownRequestProcessed (dpyinfo->display)))
+	  || x_is_serial_more_than (first->end,
+				    LastKnownRequestProcessed (dpyinfo->display)))
 	break;
     }
 
@@ -25048,6 +25497,17 @@ x_clean_failable_requests (struct x_display_info *dpyinfo)
 				    + (last - first));
 }
 
+/* Protect a section of X requests: ignore errors generated by X
+   requests made from now until `x_stop_ignoring_errors'.  Each call
+   must be paired with a call to `x_stop_ignoring_errors', and
+   recursive calls inside the protected section are not allowed.
+
+   The advantage over x_catch_errors followed by
+   x_uncatch_errors_after_check is that this function does not sync to
+   catch errors if requests were made.  It should be used instead of
+   those two functions for catching errors around requests that do not
+   require a reply.  */
+
 void
 x_ignore_errors_for_next_request (struct x_display_info *dpyinfo)
 {
@@ -25055,7 +25515,13 @@ x_ignore_errors_for_next_request (struct x_display_info *dpyinfo)
   unsigned long next_request;
 #ifdef HAVE_GTK3
   GdkDisplay *gdpy;
+#endif
 
+  /* This code is not reentrant, so be sure nothing calls it
+     recursively in response to input.  */
+  block_input ();
+
+#ifdef HAVE_GTK3
   /* GTK 3 tends to override our own error handler inside certain
      callbacks, which this can be called from.  Instead of trying to
      restore our own, add a trap for the following requests with
@@ -25115,8 +25581,7 @@ x_stop_ignoring_errors (struct x_display_info *dpyinfo)
   /* Abort if no request was made since
      `x_ignore_errors_for_next_request'.  */
 
-  if (X_COMPARE_SERIALS (range->end, <,
-			 range->start))
+  if (x_is_serial_less_than (range->end, range->start))
     emacs_abort ();
 
 #ifdef HAVE_GTK3
@@ -25125,6 +25590,8 @@ x_stop_ignoring_errors (struct x_display_info *dpyinfo)
   if (gdpy)
     gdk_x11_display_error_trap_pop_ignored (gdpy);
 #endif
+
+  unblock_input ();
 }
 
 /* Undo the last x_catch_errors call.
@@ -27110,9 +27577,14 @@ static void
 x_raise_frame (struct frame *f)
 {
   block_input ();
+
   if (FRAME_VISIBLE_P (f))
-    XRaiseWindow (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f));
-  XFlush (FRAME_X_DISPLAY (f));
+    {
+      XRaiseWindow (FRAME_X_DISPLAY (f),
+		    FRAME_OUTER_WINDOW (f));
+      XFlush (FRAME_X_DISPLAY (f));
+    }
+
   unblock_input ();
 }
 
@@ -27160,8 +27632,6 @@ x_lower_frame (struct frame *f)
     XLowerWindow (FRAME_X_DISPLAY (f),
 		  FRAME_OUTER_WINDOW (f));
 
-  XFlush (FRAME_X_DISPLAY (f));
-
 #ifdef HAVE_XWIDGETS
   /* Make sure any X windows owned by xwidget views of the parent
      still display below the lowered frame.  */
@@ -27169,6 +27639,8 @@ x_lower_frame (struct frame *f)
   if (FRAME_PARENT_FRAME (f))
     lower_frame_xwidget_views (FRAME_PARENT_FRAME (f));
 #endif
+
+  XFlush (FRAME_X_DISPLAY (f));
 }
 
 static void
@@ -27305,11 +27777,10 @@ x_ewmh_activate_frame (struct frame *f)
 	    {
 	      time = x_get_server_time (f);
 
-	      x_ignore_errors_for_next_request (dpyinfo);
-	      XSetInputFocus (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f),
-			      RevertToParent, time);
+	      x_set_input_focus (FRAME_DISPLAY_INFO (f),
+				 FRAME_OUTER_WINDOW (f),
+				 time);
 	      XRaiseWindow (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f));
-	      x_stop_ignoring_errors (dpyinfo);
 
 	      return;
 	    }
@@ -27335,6 +27806,76 @@ x_get_focus_frame (struct frame *f)
   return lisp_focus;
 }
 
+/* Return the toplevel parent of F, if it is a child frame.
+   Otherwise, return NULL.  */
+
+static struct frame *
+x_get_toplevel_parent (struct frame *f)
+{
+  struct frame *parent;
+
+  if (!FRAME_PARENT_FRAME (f))
+    return NULL;
+
+  parent = FRAME_PARENT_FRAME (f);
+
+  while (FRAME_PARENT_FRAME (parent))
+    parent = FRAME_PARENT_FRAME (parent);
+
+  return parent;
+}
+
+static void
+x_set_input_focus (struct x_display_info *dpyinfo, Window window,
+		   Time time)
+{
+#ifdef HAVE_XINPUT2
+  struct xi_device_t *device;
+#endif
+
+  /* Do the equivalent of XSetInputFocus with the specified window and
+     time, but use the attachment to the device that Emacs has
+     designated the client pointer on X Input Extension builds.
+     Asynchronously trap errors around the generated XI_SetFocus or
+     SetInputFocus request, in case the device has been destroyed or
+     the window obscured.
+
+     The revert_to will be set to RevertToParent for generated
+     SetInputFocus requests.  */
+
+#ifdef HAVE_XINPUT2
+  if (dpyinfo->supports_xi2
+      && dpyinfo->client_pointer_device != -1)
+    {
+      device = xi_device_from_id (dpyinfo, dpyinfo->client_pointer_device);
+
+      /* The device is a master pointer.  Use its attachment, which
+	 should be the master keyboard.  */
+
+      if (device)
+	{
+	  eassert (device->use == XIMasterPointer);
+
+	  x_ignore_errors_for_next_request (dpyinfo);
+	  XISetFocus (dpyinfo->display, device->attachment,
+		      /* Note that the input extension
+			 only supports RevertToParent-type
+			 behavior.  */
+		      window, time);
+	  x_stop_ignoring_errors (dpyinfo);
+
+	  return;
+	}
+    }
+#endif
+
+  /* Otherwise, use the pointer device that the X server says is the
+     client pointer.  */
+  x_ignore_errors_for_next_request (dpyinfo);
+  XSetInputFocus (dpyinfo->display, window, RevertToParent, time);
+  x_stop_ignoring_errors (dpyinfo);
+}
+
 /* In certain situations, when the window manager follows a
    click-to-focus policy, there seems to be no way around calling
    XSetInputFocus to give another frame the input focus.
@@ -27350,6 +27891,10 @@ x_focus_frame (struct frame *f, bool noactivate)
   struct x_display_info *dpyinfo;
   Time time;
 
+  /* The code below is not reentrant wrt to dpyinfo->x_focus_frame and
+     friends being set.  */
+  block_input ();
+
   dpyinfo = FRAME_DISPLAY_INFO (f);
 
   if (FRAME_X_EMBEDDED_P (f))
@@ -27360,6 +27905,18 @@ x_focus_frame (struct frame *f, bool noactivate)
   else
     {
       if (!noactivate
+	  /* If F is override-redirect, use SetInputFocus instead.
+	     Override-redirect frames are not subject to window
+	     management.  */
+	  && !FRAME_OVERRIDE_REDIRECT (f)
+	  /* If F is a child frame, use SetInputFocus instead.  This
+	     may not work if its parent is not activated.  */
+	  && !FRAME_PARENT_FRAME (f)
+	  /* If the focus is being transferred from a child frame to
+	     its toplevel parent, also use SetInputFocus.  */
+	  && (!dpyinfo->x_focus_frame
+	      || (x_get_toplevel_parent (dpyinfo->x_focus_frame)
+		  != f))
 	  && x_wm_supports (f, dpyinfo->Xatom_net_active_window))
 	{
 	  /* When window manager activation is possible, use it
@@ -27368,11 +27925,9 @@ x_focus_frame (struct frame *f, bool noactivate)
 	     the current workspace, and mapping it, etc, before moving
 	     input focus to the frame.  */
 	  x_ewmh_activate_frame (f);
-	  return;
+	  goto out;
 	}
 
-      /* Ignore any BadMatch error this request might result in.  */
-      x_ignore_errors_for_next_request (dpyinfo);
       if (NILP (Vx_no_window_manager))
 	{
 	  /* Use the last user time.  It is invalid to use CurrentTime
@@ -27390,16 +27945,23 @@ x_focus_frame (struct frame *f, bool noactivate)
 	      && !dpyinfo->x_focus_frame)
 	    time = x_get_server_time (f);
 
-	  XSetInputFocus (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f),
-			  RevertToParent, time);
+	  /* Ignore any BadMatch error this request might result in.
+	     A BadMatch error can occur if the window was obscured
+	     after the time of the last user interaction without
+	     changing the last-focus-change-time.  */
+	  x_set_input_focus (FRAME_DISPLAY_INFO (f), FRAME_OUTER_WINDOW (f),
+			     time);
 	}
       else
-	XSetInputFocus (FRAME_X_DISPLAY (f), FRAME_OUTER_WINDOW (f),
-			/* But when no window manager is in use, we
-			   don't care.  */
-			RevertToParent, CurrentTime);
-      x_stop_ignoring_errors (dpyinfo);
+	x_set_input_focus (FRAME_DISPLAY_INFO (f), FRAME_OUTER_WINDOW (f),
+			   /* But when no window manager is in use,
+			      respecting the ICCCM doesn't really
+			      matter.  */
+			   CurrentTime);
     }
+
+ out:
+  unblock_input ();
 }
 
 
@@ -28870,10 +29432,9 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 #endif
   int i;
 
+#if defined HAVE_XFIXES && defined USE_XCB
   USE_SAFE_ALLOCA;
-
-  /* Avoid warnings when SAFE_ALLOCA is not actually used.  */
-  ((void) SAFE_ALLOCA (0));
+#endif
 
   block_input ();
 
@@ -29027,7 +29588,9 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 
       unblock_input ();
 
+#if defined HAVE_XFIXES && defined USE_XCB
       SAFE_FREE ();
+#endif
       return 0;
     }
 
@@ -29047,7 +29610,9 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 
       unblock_input ();
 
+#if defined HAVE_XFIXES && defined USE_XCB
       SAFE_FREE ();
+#endif
       return 0;
     }
 #endif
@@ -29517,11 +30082,10 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 	  xi_select_hierarchy_events (dpyinfo);
 #endif
 
+	  dpyinfo->xi2_version = minor;
 	  x_cache_xi_devices (dpyinfo);
 	}
     }
-
-  dpyinfo->xi2_version = minor;
  skip_xi_setup:
   ;
 #endif
@@ -29736,21 +30300,30 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
   {
     XrmValue d, fr, to;
     Font font;
+    XFontStruct *query_result;
 
     dpy = dpyinfo->display;
-    d.addr = (XPointer)&dpy;
+    d.addr = (XPointer) &dpy;
     d.size = sizeof (Display *);
     fr.addr = (char *) XtDefaultFont;
     fr.size = sizeof (XtDefaultFont);
     to.size = sizeof (Font *);
-    to.addr = (XPointer)&font;
+    to.addr = (XPointer) &font;
     x_catch_errors (dpy);
     if (!XtCallConverter (dpy, XtCvtStringToFont, &d, 1, &fr, &to, NULL))
       emacs_abort ();
-    if (x_had_errors_p (dpy) || !XQueryFont (dpy, font))
+    query_result = XQueryFont (dpy, font);
+
+    /* Set the dialog font to some fallback (here, 9x15) if the font
+       specified is invalid.  */
+    if (x_had_errors_p (dpy) || !font)
       XrmPutLineResource (&xrdb, "Emacs.dialog.*.font: 9x15");
-    /* Do not free XFontStruct returned by the above call to XQueryFont.
-       This leads to X protocol errors at XtCloseDisplay (Bug#18403).  */
+
+    /* Do not destroy the font struct returned above with XFreeFont;
+       that also destroys the font, leading to X protocol errors at
+       XtCloseDisplay.  Just free the font info structure.
+       (Bug#18403) */
+    XFreeFontInfo (NULL, query_result, 1);
     x_uncatch_errors ();
   }
 #endif
@@ -29924,7 +30497,9 @@ x_term_init (Lisp_Object display_name, char *xrm_option, char *resource_name)
 
   unblock_input ();
 
+#if defined HAVE_XFIXES && defined USE_XCB
   SAFE_FREE ();
+#endif
   return dpyinfo;
 }
 
@@ -30235,11 +30810,6 @@ x_delete_terminal (struct terminal *terminal)
 	 closing all the displays.  */
       XrmDestroyDatabase (dpyinfo->rdb);
 #endif
-
-#ifdef HAVE_XKB
-      if (dpyinfo->xkb_desc)
-	XkbFreeKeyboard (dpyinfo->xkb_desc, XkbAllComponentsMask, True);
-#endif
 #ifdef USE_GTK
       xg_display_close (dpyinfo->display);
 #else
@@ -30249,9 +30819,6 @@ x_delete_terminal (struct terminal *terminal)
       XCloseDisplay (dpyinfo->display);
 #endif
 #endif /* ! USE_GTK */
-
-      if (dpyinfo->modmap)
-	XFreeModifiermap (dpyinfo->modmap);
       /* Do not close the connection here because it's already closed
 	 by X(t)CloseDisplay (Bug#18403).  */
       dpyinfo->display = NULL;
@@ -30263,6 +30830,18 @@ x_delete_terminal (struct terminal *terminal)
      way to continue and avoid Bug#19147.  */
   else if (dpyinfo->connection >= 0)
     emacs_close (dpyinfo->connection);
+
+  /* Free the keyboard and modifier maps here; that is safe to do
+     without a display, and not doing so leads to a lot of data being
+     leaked upon IO error.  */
+
+#ifdef HAVE_XKB
+  if (dpyinfo->xkb_desc)
+    XkbFreeKeyboard (dpyinfo->xkb_desc, XkbAllComponentsMask, True);
+#endif
+
+  if (dpyinfo->modmap)
+    XFreeModifiermap (dpyinfo->modmap);
 
   /* No more input on this descriptor.  */
   delete_keyboard_wait_descriptor (dpyinfo->connection);
@@ -30800,6 +31379,7 @@ With MS Windows, Haiku windowing or Nextstep, the value is t.  */);
   DEFSYM (Qimitate_pager, "imitate-pager");
   DEFSYM (Qnewer_time, "newer-time");
   DEFSYM (Qraise_and_focus, "raise-and-focus");
+  DEFSYM (Qreally_fast, "really-fast");
 
   DEFVAR_LISP ("x-ctrl-keysym", Vx_ctrl_keysym,
     doc: /* Which keys Emacs uses for the ctrl modifier.
@@ -31079,4 +31659,19 @@ not bypass window manager focus stealing prevention):
   - The symbol `raise-and-focus', which means to raise the window and
     focus it manually.  */);
   Vx_allow_focus_stealing = Qnewer_time;
+
+  DEFVAR_LISP ("x-use-fast-mouse-position", Vx_use_fast_mouse_position,
+    doc: /* How to make `mouse-position' faster.
+
+`mouse-position' and `mouse-pixel-position' default to querying the X
+server for the window under the mouse pointer.  This results in
+accurate results, but is also very slow when the X connection has
+moderate to high latency.  Setting this variable to a non-nil value
+makes Emacs query only for the position of the pointer, which is
+usually faster.  Doing so improves the performance of dragging to
+select text over slow X connections.
+
+If that is still too slow, setting this variable to the symbol
+`really-fast' will make Emacs return only cached values.  */);
+  Vx_use_fast_mouse_position = Qnil;
 }

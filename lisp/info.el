@@ -1883,6 +1883,9 @@ See `completing-read' for a description of arguments and usage."
    (t (complete-with-action
        code Info-read-node-completion-table string predicate))))
 
+(defvar Info-minibuf-history nil
+  "History for `Info-read-node-name'.")
+
 ;; Arrange to highlight the proper letters in the completion list buffer.
 (defun Info-read-node-name (prompt &optional default)
   "Read an Info node name with completion, prompting with PROMPT.
@@ -2663,7 +2666,7 @@ new buffer."
 (defconst Info-menu-entry-name-re "\\(?:[^:]\\|:[^:,.;() \t\n]\\)*"
   ;; We allow newline because this is also used in Info-follow-reference,
   ;; where the xref name might be wrapped over two lines.
-  "Regexp that matches a menu entry name upto but not including the colon.
+  "Regexp that matches a menu entry name up to but not including the colon.
 Because of ambiguities, this should be concatenated with something like
 `:' and `Info-following-node-name-re'.")
 
@@ -3326,6 +3329,13 @@ If FILE is nil, check the current Info file."
     (or node (error "No index"))
     (Info-goto-node node)))
 
+(defun info--ensure-not-in-directory-node ()
+  (if (equal (downcase (file-name-nondirectory Info-current-file))
+             "dir")
+      (error (substitute-command-keys
+              (concat "The Info directory node has no index; "
+                      "type \\[Info-menu] to select a manual")))))
+
 ;;;###autoload
 (defun Info-index (topic)
   "Look up a string TOPIC in the index for this manual and go to that entry.
@@ -3339,15 +3349,13 @@ Give an empty topic name to go to the Index node itself."
 	  (Info-complete-menu-buffer (clone-buffer))
 	  (Info-complete-nodes (Info-index-nodes))
 	  (Info-history-list nil))
-      (if (equal Info-current-file "dir")
-	  (error "The Info directory node has no index; use m to select a manual"))
+      (info--ensure-not-in-directory-node)
       (unwind-protect
 	  (with-current-buffer Info-complete-menu-buffer
 	    (Info-goto-index)
 	    (completing-read "Index topic: " #'Info-complete-menu-item))
 	(kill-buffer Info-complete-menu-buffer)))))
-  (if (equal Info-current-file "dir")
-      (error "The Info directory node has no index; use m to select a manual"))
+  (info--ensure-not-in-directory-node)
   ;; Strip leading colon in topic; index format does not allow them.
   (if (and (stringp topic)
 	   (> (length topic) 0)
@@ -3530,8 +3538,7 @@ search results."
 	  (Info-complete-menu-buffer (clone-buffer))
 	  (Info-complete-nodes (Info-index-nodes))
 	  (Info-history-list nil))
-      (if (equal Info-current-file "dir")
-	  (error "The Info directory node has no index; use m to select a manual"))
+      (info--ensure-not-in-directory-node)
       (unwind-protect
 	  (with-current-buffer Info-complete-menu-buffer
 	    (Info-goto-index)

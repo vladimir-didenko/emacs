@@ -588,8 +588,7 @@ within that frame.  @var{frame} should be a live frame; if omitted or
 @defun set-frame-selected-window frame window &optional norecord
 This function makes @var{window} the window selected within the frame
 @var{frame}.  @var{frame} should be a live frame; if @code{nil}, it
-defaults to the selected frame.  @var{window} should be a live window;
-if @code{nil}, it defaults to the selected window.
+defaults to the selected frame.  @var{window} must denote a live window.
 
 If @var{frame} is the selected frame, this makes @var{window} the
 selected window.
@@ -2624,7 +2623,7 @@ default value is an empty display action, i.e., @w{@code{(nil . nil)}}.
 The value of this option is an alist mapping conditions to display
 actions.  Each condition is passed to @code{buffer-match-p}, along
 with the buffer name and the @var{action} argument passed to
-@code{display-buffer}.  If it returns a non-nil value, then
+@code{display-buffer}.  If it returns a non-@code{nil} value, then
 @code{display-buffer} uses the corresponding display action to display
 the buffer.
 @end defopt

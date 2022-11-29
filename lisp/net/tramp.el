@@ -278,8 +278,16 @@ pair of the form (KEY VALUE).  The following KEYs are defined:
 
   * `tramp-direct-async'
     Whether the method supports direct asynchronous processes.
-    Until now, just \"ssh\"-based, \"sshfs\"-based and
-    \"adb\"-based methods do.
+    Until now, just \"ssh\"-based, \"sshfs\"-based, \"adb\"-based
+    and container methods do.  If it is a list of strings, they
+    are used to construct the remote command.
+
+  * `tramp-config-check'
+    A function to be called with one argument, VEC.  It should
+    return a string which is used to check, whether the
+    configuration of the remote host has been changed (which
+    would require to flush the cache data).  This string is kept
+    as connection property \"config-check-data\".
 
   * `tramp-copy-program'
     This specifies the name of the program to use for remotely copying
@@ -2648,7 +2656,7 @@ Must be handled by the callers."
 	      ;; Emacs 27+ only.
 	      exec-path make-process
 	      ;; Emacs 29+ only.
-              list-system-processes process-attributes))
+              list-system-processes memory-info process-attributes))
     default-directory)
    ;; PROC.
    ((member operation '(file-notify-rm-watch file-notify-valid-p))
@@ -3990,6 +3998,17 @@ Let-bind it when necessary.")
   (cond
    ((not (file-exists-p file1)) nil)
    ((not (file-exists-p file2)) t)
+   ;; Tramp reads and writes timestamps on second level.  So we round
+   ;; the timestamps to seconds w/o fractions.
+   ;; `time-convert' has been introduced with Emacs 27.1.
+   ((fboundp 'time-convert)
+    (time-less-p
+     (tramp-compat-funcall
+      'time-convert
+      (file-attribute-modification-time (file-attributes file2)) 'integer)
+     (tramp-compat-funcall
+      'time-convert
+      (file-attribute-modification-time (file-attributes file1)) 'integer)))
    (t (time-less-p
        (file-attribute-modification-time (file-attributes file2))
        (file-attribute-modification-time (file-attributes file1))))))
@@ -4566,14 +4585,9 @@ Do not set it manually, it is used buffer-local in `tramp-get-lock-pid'.")
 	     (setq file (concat file ".elc")))
 	    ((file-exists-p (concat file ".el"))
 	     (setq file (concat file ".el")))))
-    (when must-suffix
-      ;; The first condition is always true for absolute file names.
-      ;; Included for safety's sake.
-      (unless (or (file-name-directory file)
-		  (string-match-p (rx ".el" (? "c") eos) file))
-	(tramp-error
-	 v 'file-error
-	 "File `%s' does not include a `.el' or `.elc' suffix" file)))
+    (when (and must-suffix (not (string-match-p (rx ".el" (? "c") eos) file)))
+      (tramp-error
+       v 'file-error "File `%s' does not include a `.el' or `.elc' suffix" file))
     (unless (or noerror (file-exists-p file))
       (tramp-error v 'file-missing file))
     (if (not (file-exists-p file))
@@ -4791,7 +4805,14 @@ substitution.  SPEC-LIST is a list of char/value pairs used for
 	       (command
 	        (append
 		 `("cd" ,(tramp-shell-quote-argument localname) "&&" "(" "env")
-		 env `(,command ")"))))
+		 env `(,command ")")))
+		;; Add remote shell if needed.
+	       (command
+		(if (consp (tramp-get-method-parameter v 'tramp-direct-async))
+		    (append
+		     (tramp-get-method-parameter v 'tramp-direct-async)
+                     `(,(mapconcat #'identity command " ")))
+		  command)))
 
 	  ;; Check for `tramp-sh-file-name-handler', because something
 	  ;; is different between tramp-sh.el, and tramp-adb.el or
@@ -4862,6 +4883,84 @@ support symbolic links."
   (tramp-error
    (tramp-dissect-file-name (expand-file-name linkname)) 'file-error
    "make-symbolic-link not supported"))
+
+(defun tramp-handle-memory-info ()
+  "Like `memory-info' for Tramp files."
+  (let ((result '(0 0 0 0))
+        process-file-side-effects)
+    (with-temp-buffer
+      (cond
+       ;; GNU/Linux.
+       ((zerop (process-file "cat" nil '(t) nil "/proc/meminfo"))
+        (goto-char (point-min))
+        (when
+            (re-search-forward
+             (rx bol "MemTotal:" (* space) (group (+ digit)) (* space) "kB" eol)
+             nil 'noerror)
+          (setcar (nthcdr 0 result) (string-to-number (match-string 1))))
+        (goto-char (point-min))
+        (when
+            (re-search-forward
+             (rx bol "MemFree:" (* space) (group (+ digit)) (* space) "kB" eol)
+             nil 'noerror)
+          (setcar (nthcdr 1 result) (string-to-number (match-string 1))))
+        (goto-char (point-min))
+        (when
+            (re-search-forward
+             (rx bol "SwapTotal:" (* space) (group (+ digit)) (* space) "kB" eol)
+             nil 'noerror)
+          (setcar (nthcdr 2 result) (string-to-number (match-string 1))))
+        (goto-char (point-min))
+        (when
+            (re-search-forward
+             (rx bol "SwapFree:" (* space) (group (+ digit)) (* space) "kB" eol)
+             nil 'noerror)
+          (setcar (nthcdr 3 result) (string-to-number (match-string 1)))))
+
+       ;; BSD.
+       ;; https://raw.githubusercontent.com/ocochard/myscripts/master/FreeBSD/freebsd-memory.sh
+       ((zerop (process-file "sysctl" nil '(t) nil "-a"))
+        (goto-char (point-min))
+        (when
+            (re-search-forward
+             (rx bol "hw.pagesize:" (* space) (group (+ digit)) eol)
+             nil 'noerror)
+          (let ((pagesize (string-to-number (match-string 1))))
+            (goto-char (point-min))
+            (when
+                (re-search-forward
+                 (rx bol "vm.stats.vm.v_page_count:" (* space)
+                     (group (+ digit)) eol)
+                 nil 'noerror)
+              (setcar
+               (nthcdr 0 result)
+               (/ (* (string-to-number (match-string 1)) pagesize) 1024)))
+            (goto-char (point-min))
+            (when
+                (re-search-forward
+                 (rx bol "vm.stats.vm.v_free_count:" (* space)
+                     (group (+ digit)) eol)
+                 nil 'noerror)
+              (setcar
+               (nthcdr 1 result)
+               (/ (* (string-to-number (match-string 1)) pagesize) 1024)))))
+        (erase-buffer)
+        (when (zerop (process-file "swapctl" nil '(t) nil "-sk"))
+          (goto-char (point-min))
+          (when
+              (re-search-forward
+               (rx bol "Total:" (* space)
+                   (group (+ digit)) (* space) (group (+ digit)) eol)
+               nil 'noerror)
+            (setcar (nthcdr 2 result) (string-to-number (match-string 1)))
+            (setcar
+             (nthcdr 3 result)
+             (- (string-to-number (match-string 1))
+                (string-to-number (match-string 2)))))))))
+
+    ;; Return result.
+    (unless (equal result '(0 0 0 0))
+      result)))
 
 (defun tramp-handle-process-attributes (pid)
   "Like `process-attributes' for Tramp files."

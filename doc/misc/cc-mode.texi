@@ -898,7 +898,7 @@ lines.
 @vindex defun-tactic @r{(c-)}
 
 Move to the beginning or end of the current or next function.  Other
-constructs (such as a structs or classes) which have a brace block
+constructs (such as structs or classes) which have a brace block
 also count as ``functions'' here.  To move over several functions, you
 can give these commands a repeat count.
 
@@ -2191,7 +2191,7 @@ foo& bar
 
 @defvar c-asymmetry-fontification-flag
 @vindex asymmetry-fontification-flag @r{(c-)}
-When @code{c-asymmetry-fontification-flag} is non-nil (which it is by
+When @code{c-asymmetry-fontification-flag} is non-@code{nil} (which it is by
 default), code like the above, with white space either before or after
 the operator, but not both, is fontified as a declaration.  When the
 variable is nil, such a construct gets the default face.

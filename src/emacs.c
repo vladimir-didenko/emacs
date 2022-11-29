@@ -82,6 +82,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 #endif /* HAVE_WINDOW_SYSTEM */
 
 #include "bignum.h"
+#include "itree.h"
 #include "intervals.h"
 #include "character.h"
 #include "buffer.h"
@@ -135,6 +136,10 @@ extern char etext;
 #include <sys/time.h>
 #include <sys/resource.h>
 #endif
+
+/* We don't guard this with HAVE_TREE_SITTER because treesit.o is
+   always compiled (to provide treesit-available-p).  */
+#include "treesit.h"
 
 #include "pdumper.h"
 #include "fingerprint.h"
@@ -290,6 +295,7 @@ Initialization options:\n\
 --no-site-lisp, -nsl        do not add site-lisp directories to load-path\n\
 --no-splash                 do not display a splash screen on startup\n\
 --no-window-system, -nw     do not communicate with X, ignoring $DISPLAY\n\
+--init-directory=DIR        use DIR when looking for the Emacs init files.\n\
 ",
     "\
 --quick, -Q                 equivalent to:\n\
@@ -431,9 +437,9 @@ terminate_due_to_signal (int sig, int backtrace_limit)
           if (sig == SIGTERM || sig == SIGHUP || sig == SIGINT)
 	    {
 	      /* Avoid abort in shut_down_emacs if we were interrupted
-		 by SIGINT in noninteractive usage, as in that case we
-		 don't care about the message stack.  */
-	      if (sig == SIGINT && noninteractive)
+		 in noninteractive usage, as in that case we don't
+		 care about the message stack.  */
+	      if (noninteractive)
 		clear_message_stack ();
 	      Fkill_emacs (make_fixnum (sig), Qnil);
 	    }
@@ -2265,7 +2271,9 @@ Using an Emacs configured with --with-x-toolkit=lucid does not have this problem
 #ifdef HAVE_MODULES
       syms_of_module ();
 #endif
-
+      /* We don't guard this with HAVE_TREE_SITTER because treesit.o
+	 is always compiled (to provide treesit-available-p).  */
+      syms_of_treesit ();
 #ifdef HAVE_SOUND
       syms_of_sound ();
 #endif
@@ -2564,6 +2572,7 @@ static const struct standard_args standard_args[] =
   { "-init-directory", "--init-directory", 30, 1 },
   { "-no-x-resources", "--no-x-resources", 40, 0 },
   { "-no-site-file", "--no-site-file", 40, 0 },
+  { "-no-comp-spawn", "--no-comp-spawn", 60, 0 },
   { "-u", "--user", 30, 1 },
   { "-user", 0, 30, 1 },
   { "-debug-init", "--debug-init", 20, 0 },

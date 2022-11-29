@@ -39,8 +39,32 @@
 
 ;;; Code:
 
-(require 'erc)
 (eval-when-compile (require 'cl-lib))
+(require 'erc-common)
+
+(defvar erc--target)
+(defvar erc-insert-marker)
+(defvar erc-kill-buffer-hook)
+(defvar erc-kill-server-hook)
+(defvar erc-modules)
+(defvar erc-rename-buffers)
+(defvar erc-reuse-buffers)
+(defvar erc-server-announced-name)
+(defvar erc-server-connected)
+(defvar erc-server-parameters)
+(defvar erc-server-process)
+(defvar erc-session-server)
+
+(declare-function erc--default-target "erc" nil)
+(declare-function erc--get-isupport-entry "erc-backend" (key &optional single))
+(declare-function erc-buffer-filter "erc" (predicate &optional proc))
+(declare-function erc-current-nick "erc" nil)
+(declare-function erc-display-error-notice "erc" (parsed string))
+(declare-function erc-error "erc" (&rest args))
+(declare-function erc-get-buffer "erc" (target &optional proc))
+(declare-function erc-server-buffer "erc" nil)
+(declare-function erc-server-process-alive "erc-backend" (&optional buffer))
+(declare-function erc-set-active-buffer "erc" (buffer))
 
 ;; Variables
 
@@ -802,18 +826,17 @@ respectively.  The separator is given by `erc-networks--id-sep'."
 
 ;; For now, please use this instead of `erc-networks--id-fixed-p'.
 (cl-defgeneric erc-networks--id-given (net-id)
-  "Return the preassigned identifier for a network presence, if any.
-This may have originated from an `:id' arg to entry-point commands
-`erc-tls' or `erc'.")
+  "Return the preassigned identifier for a network context, if any.
+When non-nil, assume NET-ID originated from an `:id' argument to
+entry-point commands `erc-tls' or `erc'.")
 
-(cl-defmethod erc-networks--id-given ((_ erc-networks--id))
-  nil)
+(cl-defmethod erc-networks--id-given (_) nil) ; _ may be nil
 
 (cl-defmethod erc-networks--id-given ((nid erc-networks--id-fixed))
   (erc-networks--id-symbol nid))
 
 (cl-generic-define-context-rewriter erc-obsolete-var (var spec)
-  `((with-suppressed-warnings ((obsolete ,var)) ,var) ,spec))
+  `((with-suppressed-warnings ((obsolete ,var) (free-vars ,var)) ,var) ,spec))
 
 ;; As a catch-all, derive the symbol from the unquoted printed repr.
 (cl-defgeneric erc-networks--id-create (id)
@@ -842,22 +865,15 @@ This may have originated from an `:id' arg to entry-point commands
   ((_ symbol) &context (erc-obsolete-var erc-reuse-buffers null))
   (erc-networks--id-fixed-create (intern (buffer-name))))
 
-(cl-defgeneric erc-networks--id-on-connect (net-id)
-  "Update NET-ID `erc-networks--id' after connection params known.
-This is typically during or just after MOTD.")
-
-(cl-defmethod erc-networks--id-on-connect ((_ erc-networks--id))
-  nil)
-
-(cl-defmethod erc-networks--id-on-connect ((id erc-networks--id-qualifying))
-  (erc-networks--id-qualifying-update id (erc-networks--id-qualifying-create)))
-
 (cl-defgeneric erc-networks--id-equal-p (self other)
-  "Return non-nil when two network identities exhibit underlying equality.
-SELF and OTHER are `erc-networks--id' struct instances.  This
-should normally be used only for ID recovery or merging, after
-which no two identities should be `equal' (timestamps aside) that
-aren't also `eq'.")
+  "Return non-nil when two network IDs exhibit underlying equality.
+Expect SELF and OTHER to be `erc-networks--id' struct instances
+and that this will only be called for ID recovery or merging,
+after which no two identities should be `equal' (timestamps
+aside) that aren't also `eq'.")
+
+(cl-defmethod erc-networks--id-equal-p ((_ null) (_ erc-networks--id)) nil)
+(cl-defmethod erc-networks--id-equal-p ((_ erc-networks--id) (_ null)) nil)
 
 (cl-defmethod erc-networks--id-equal-p ((self erc-networks--id)
                                         (other erc-networks--id))
@@ -1232,14 +1248,15 @@ server name and search for a match in `erc-networks-alist'."
 (defconst erc-networks--name-missing-sentinel (gensym "Unknown ")
   "Value to cover rare case of a literal NETWORK=nil.")
 
-(defun erc-networks--determine ()
+(defun erc-networks--determine (&optional server)
   "Return the name of the network as a symbol.
-Search `erc-networks-alist' for a known entity matching
+Search `erc-networks-alist' for a known entity matching SERVER or
 `erc-server-announced-name'.  If that fails, use the display name
 given by the `RPL_ISUPPORT' NETWORK parameter."
   (or (cl-loop for (name matcher) in erc-networks-alist
-               when (and matcher (string-match (concat matcher "\\'")
-                                               erc-server-announced-name))
+               when (and matcher
+                         (string-match (concat matcher "\\'")
+                                       (or server erc-server-announced-name)))
                return name)
       (and-let* ((vanity (erc--get-isupport-entry 'NETWORK 'single))
                  ((intern vanity))))
@@ -1256,7 +1273,7 @@ Signal an error when the network cannot be determined."
       ;; but aren't being proxied through to a real network.  The
       ;; service may send a 422 but no NETWORK param (or *any* 005s).
       (let ((m (concat "Failed to determine network. Please set entry for "
-                       erc-server-announced-name " in `erc-network-alist'.")))
+                       erc-server-announced-name " in `erc-networks-alist'.")))
         (erc-display-error-notice parsed m)
         (erc-error "Failed to determine network"))) ; beep
     (setq erc-network name))
@@ -1357,7 +1374,8 @@ considered as well because server buffers are often killed."
   (let* ((identity erc-networks--id)
          (buffer (current-buffer))
          (f (lambda ()
-              (unless (or (eq (current-buffer) buffer)
+              (unless (or (not erc-networks--id)
+                          (eq (current-buffer) buffer)
                           (eq erc-networks--id identity))
                 (if (erc-networks--id-equal-p identity erc-networks--id)
                     (throw 'buffer erc-networks--id)
@@ -1372,16 +1390,17 @@ considered as well because server buffers are often killed."
 ;; server buffer, whereas `erc-networks--rename-server-buffer' can run
 ;; mid-session, after an identity's core components have changed.
 
-(defun erc-networks--init-identity (_proc _parsed)
+(defun erc-networks--init-identity (proc parsed)
   "Update identity with real network name."
   ;; Initialize identity for real now that we know the network
   (cl-assert erc-network)
-  (unless (erc-networks--id-symbol erc-networks--id) ; unless just reconnected
-    (erc-networks--id-on-connect erc-networks--id))
-  ;; Find duplicate identities or other conflicting ones and act
-  ;; accordingly.
-  (erc-networks--update-server-identity)
-  ;;
+  (if erc-networks--id
+      (erc-networks--id-reload erc-networks--id proc parsed)
+    (setq erc-networks--id (erc-networks--id-create nil))
+    ;; Find duplicate identities or other conflicting ones and act
+    ;; accordingly.
+    (erc-networks--update-server-identity)
+    (erc-networks--rename-server-buffer proc parsed))
   nil)
 
 (defun erc-networks--rename-server-buffer (new-proc &optional _parsed)
@@ -1449,8 +1468,7 @@ This must run before `erc-server-connected' is set."
   ;; For now, retain compatibility with erc-server-NNN-functions.
   (or (erc-networks--ensure-announced proc parsed)
       (erc-networks--set-name proc parsed)
-      (erc-networks--init-identity proc parsed)
-      (erc-networks--rename-server-buffer proc parsed)))
+      (erc-networks--init-identity proc parsed)))
 
 (define-erc-module networks nil
   "Provide data about IRC networks."
