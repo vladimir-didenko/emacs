@@ -1958,7 +1958,7 @@ Optional argument PIXELWISE non-nil means return number of
 pixels by which WINDOW can be enlarged."
   (setq window (window-normalize-window window))
   (if (and (not nodown) (window-size-fixed-p window horizontal ignore))
-      ;; With IGNORE and NOWDON nil return zero if WINDOW has fixed
+      ;; With IGNORE and NODOWN nil return zero if WINDOW has fixed
       ;; size.
       0
     ;; WINDOW has no fixed size.
@@ -4636,7 +4636,7 @@ omitted in calls from `switch-to-next-buffer'."
                     (catch 'found
                       (dolist (regexp switch-to-prev-buffer-skip-regexp)
                         (when (string-match-p regexp (buffer-name buffer))
-                          (throw 'tag t)))))))))
+                          (throw 'found t)))))))))
 
 (defun switch-to-prev-buffer (&optional window bury-or-kill)
   "In WINDOW switch to previous buffer.

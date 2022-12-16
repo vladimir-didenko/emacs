@@ -334,7 +334,9 @@ Letter-case is significant, but text properties are ignored. */)
 DEFUN ("string-equal", Fstring_equal, Sstring_equal, 2, 2, 0,
        doc: /* Return t if two strings have identical contents.
 Case is significant, but text properties are ignored.
-Symbols are also allowed; their print names are used instead.  */)
+Symbols are also allowed; their print names are used instead.
+
+See also `string-equal-ignore-case'.  */)
   (register Lisp_Object s1, Lisp_Object s2)
 {
   if (SYMBOLP (s1))
@@ -3936,7 +3938,7 @@ system.
 If the region can't be decoded, signal an error and don't modify the buffer.
 Optional third argument BASE64URL determines whether to use the URL variant
 of the base 64 encoding, as defined in RFC 4648.
-If optional fourth argument INGORE-INVALID is non-nil invalid characters
+If optional fourth argument IGNORE-INVALID is non-nil invalid characters
 are ignored instead of signaling an error.  */)
      (Lisp_Object beg, Lisp_Object end, Lisp_Object base64url,
       Lisp_Object ignore_invalid)

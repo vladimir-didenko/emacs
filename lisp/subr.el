@@ -3855,7 +3855,7 @@ If MESSAGE is nil, instructions to type EXIT-CHAR are displayed there."
   (let ((o1 (if (overlay-buffer o)
                 (make-overlay (overlay-start o) (overlay-end o)
                               ;; FIXME: there's no easy way to find the
-                              ;; insertion-type of the two markers.
+                              ;; insertion-type of overlay's start and end.
                               (overlay-buffer o))
               (let ((o1 (make-overlay (point-min) (point-min))))
                 (delete-overlay o1)
@@ -5435,9 +5435,11 @@ and replace a sub-expression, e.g.
       (apply #'concat (nreverse matches)))))
 
 (defsubst string-equal-ignore-case (string1 string2)
-  "Like `string-equal', but case-insensitive.
+  "Compare STRING1 and STRING2 case-insensitively.
 Upper-case and lower-case letters are treated as equal.
-Unibyte strings are converted to multibyte for comparison."
+Unibyte strings are converted to multibyte for comparison.
+
+See also `string-equal'."
   (declare (pure t) (side-effect-free t))
   (eq t (compare-strings string1 0 nil string2 0 nil t)))
 

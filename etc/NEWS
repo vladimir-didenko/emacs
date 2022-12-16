@@ -31,6 +31,16 @@ in the Emacs tree should be natively compiled ahead of time.  (This is
 slow on most machines.)
 
 +++
+** Emacs can be built with the 'tree-sitter' parsing library.
+This library, together with grammar libraries, provides incremental
+parsing capabilities for several popular programming languages and
+other formatted files.  Emacs built with this library offers major
+modes, described elsewhere in this file, that are based on the
+'tree-sitter's parsers.  If you have the 'tree-sitter' library
+installed, the configure script will automatically include it in the
+build; use '--without-tree-sitter' at configure time to disable that.
+
++++
 ** Emacs can be built with built-in support for accessing SQLite databases.
 This uses the popular sqlite3 library, and can be disabled by using
 the '--without-sqlite3' option to the 'configure' script.
@@ -106,16 +116,6 @@ frame positioning and various issues with keyboard input of sequences
 such as 'C-;' and 'C-S-u'.
 
 ---
-** The implementation of overlays has changed.
-Emacs now uses an implementation of overlays that is much more
-efficient than the original one, and should speed up all the
-operations that involve overlays, especially when there are lots of
-them in a buffer.  However, no changes in behavior of overlays should
-be visible on the Lisp or user level, with the exception of better
-performance and the order of overlays returned by functions that don't
-promise any particular order.
-
----
 ** The docstrings of preloaded files are not in "etc/DOC" any more.
 Instead, they're fetched as needed from the corresponding ".elc" file,
 as was already the case for all the non-preloaded files.
@@ -141,11 +141,6 @@ Emacs will start without reading any init files (like with '--quick'),
 and then execute the rest of the script file as Emacs Lisp.  When it
 reaches the end of the script, Emacs will exit with an exit code from
 the value of the final form.
-
-+++
-** New function 'substitute-quotes'.
-This function works like 'substitute-command-keys' but only
-substitutes quote characters.
 
 +++
 ** Emacs now supports setting 'user-emacs-directory' via '--init-directory'.
@@ -499,7 +494,7 @@ instead.
 ** The url-dired.el library is now obsolete.
 
 ---
-** The fast-lock.el and lazy-lock.el library have been removed.
+** The fast-lock.el and lazy-lock.el libraries have been removed.
 They have been obsolete since Emacs 22.1.
 
 The variable 'font-lock-support-mode' is occasionally useful for
@@ -1033,6 +1028,9 @@ the default candidate.
 The command pops up a buffer at the bottom of the screen with a few
 helpful commands for various tasks.  You can toggle the display using
 'C-h q'.
+
+** Emacs 29.1 comes with Org v9.6.
+See the file ORG-NEWS for user-visible changes in Org.
 
 ** Outline Mode
 
@@ -1754,10 +1752,9 @@ the second one will switch to the "*Completions*" buffer.
 
 ---
 *** New user option 'completion-auto-wrap'.
-When non-nil, the commands 'next-completion', 'previous-completion',
-'next-line-completion' and 'previous-line-completion' automatically
-wrap around on reaching the beginning or the end of the "*Completions*"
-buffer.
+When non-nil, the commands 'next-completion' and 'previous-completion'
+automatically wrap around on reaching the beginning or the end of
+the "*Completions*" buffer.
 
 +++
 *** New values for the 'completion-auto-help' user option.
@@ -1999,6 +1996,26 @@ It narrows to the current node.
 ** EUDC
 
 +++
+*** Deprecations planned for next release.
+After Emacs 29.1, some aspects of EUDC will be deprecated.  The goal
+of these deprecations is to simplify EUDC server configuration by
+making 'eudc-server-hotlist' the only place to add servers.  There
+will not be a need to set the server using the 'eudc-set-server'
+command.  Instead, the 'eudc-server-hotlist' user option should be
+customized to have an entry for the server.  The plan is to obsolete
+the 'eudc-hotlist' package since Customize is sufficient for changing
+'eudc-server-hotlist'.  How the 'eudc-server' user option works in this
+context is to-be-determined; it can't be removed, because that would
+break compatibility, but it may become synchronized with
+'eudc-server-hotlist' so that 'eudc-server' is always equal to '(car
+eudc-server-hotlist)'.  The first entry in 'eudc-server-hotlist' is the
+first server tried by 'eudc-expand-try-all'.  The hotlist
+simplification will allow 'eudc-query-form' to show a drop down of
+possible servers, instead of requiring a call to 'eudc-set-server'
+like it does in this release.  The default value of
+'eudc-ignore-options-file' will be changed from nil to t.
+
++++
 *** New user option 'eudc-ignore-options-file' that defaults to nil.
 The 'eudc-ignore-options-file' user option can be configured to ignore
 the 'eudc-options-file' (typically "~/.emacs.d/eudc-options").  Most
@@ -2226,11 +2243,13 @@ underlying shell instead of using the normal Emacs bindings.
 also handle ANSI codes for faint, italic and blinking text, displaying
 it with new 'term-{faint,italic,slow-blink,fast-blink}' faces.
 
-** Xref
+** Project
 
 +++
-*** 'project-find-file' and 'project-or-external-find-file' now accept
-a prefix argument which is interpreted to mean "include all files".
+*** 'project-find-file' and 'project-or-external-find-file' can include all.
+The commands 'project-find-file' and 'project-or-external-find-file'
+now accept a prefix argument, which is interpreted to mean "include
+all files".
 
 +++
 *** New command 'project-list-buffers' bound to 'C-x p C-b'.
@@ -2240,6 +2259,15 @@ This command displays a list of buffers from the current project.
 *** 'project-kill-buffers' can display the list of buffers to kill.
 Customize the user option 'project-kill-buffers-display-buffer-list'
 to enable the display of the buffer list.
+
+*** New user option 'project-vc-extra-root-markers'.
+Use it to add detection of nested projects (inside a VCS repository),
+or projects outside of VCS repositories.
+
+As a consequence, the 'VC project backend' is formally renamed to
+'VC-aware project backend'.
+
+** Xref
 
 +++
 *** New command 'xref-go-forward'.
@@ -2801,6 +2829,22 @@ Set it to nil to exclude line numbering from kills and copies.
 argument which allows tree-widget display to be activated and computed
 only when the user expands the node.
 
+** Proced
+
+---
+*** proced.el shows system processes of remote hosts.
+When 'default-directory' is remote, and 'proced' is invoked with a
+negative argument like 'C-u - proced', the system processes of that
+remote host are shown.  Alternatively, the user option
+'proced-show-remote-processes' can be set to non-nil.
+'proced-signal-function' has been marked obsolete.
+
+---
+*** Proced can now optionally show process details in color.
+New user option 'proced-enable-color-flag' enables coloring of Proced
+buffers.  This option is disabled by default; customize it to a
+non-nil value to enable colors.
+
 ** Miscellaneous
 
 ---
@@ -2887,14 +2931,6 @@ also been renamed:
     'unread-bib'       to  'bib-unread'
 
 ---
-*** proced.el shows system processes of remote hosts.
-When 'default-directory' is remote, and 'proced' is invoked with a
-negative argument like 'C-u - proced', the system processes of that
-remote host are shown.  Alternatively, the user option
-'proced-show-remote-processes' can be set to non-nil.
-'proced-signal-function' has been marked obsolete.
-
----
 *** 'outlineify-sticky' command is renamed to 'allout-outlinify-sticky'.
 The old name is still available as an obsolete function alias.
 
@@ -2911,7 +2947,7 @@ The new face 'abbrev-table-name' is used to display the abbrev table
 name.
 
 ---
-*** New key binding 'O' in 'M-x list-buffer'.
+*** New key binding 'O' in 'M-x list-buffers'.
 This key is now bound to 'Buffer-menu-view-other-window', which will
 view this line's buffer in View mode in another window.
 
@@ -2924,6 +2960,13 @@ Emacs now comes with the Eglot package, which enhances various Emacs
 features, such as completion, documentation, error detection, etc.,
 based on data provided by language servers using the Language Server
 Protocol (LSP).
+
++++
+*** use-package: Declarative package configuration.
+use-package is shipped with Emacs.  It provides the 'use-package'
+macro, which allows you to isolate package configuration in your init
+file in a way that is declarative, tidy, and performance-oriented.
+See the new Info manual "(use-package) Top" for more.
 
 +++
 ** New commands 'image-crop' and 'image-cut'.
@@ -2965,55 +3008,128 @@ Emacs buffers, like indentation and the like.  The new ert function
 'ert-test-erts-file' is used to parse these files.
 
 ---
-** New mode 'js-json-mode'.
+** New major mode 'js-json-mode'.
 This is a lightweight variant of 'js-mode' that is used by default
 when visiting JSON files.
 
-** New mode 'typescript-ts-mode'.
-A major mode based on the tree-sitter library for editing programs
-in the TypeScript language.  It includes support for font-locking,
-indentation, and navigation.
-
-** New mode 'c-ts-mode'.
-A major mode based on the tree-sitter library for editing programs
-in the C language.  It includes support for font-locking,
-indentation, Imenu, which-func, and navigation.
-
-** New mode 'c++-ts-mode'.
-A major mode based on the tree-sitter library for editing programs
-in the C++ language.  It includes support for font-locking,
-indentation, Imenu, which-func, and navigation.
-
-** New mode 'java-ts-mode'.
-A major mode based on the tree-sitter library for editing programs
-in the Java language.  It includes support for font-locking,
-indentation, Imenu, which-func, and navigation.
-
-** New mode 'css-ts-mode'.
-A major mode based on the tree-sitter library for editing programs
-in the CSS language.  It includes support for font-locking,
-indentation, Imenu, which-func, and navigation.
-
-** New mode 'json-ts-mode'.
-A major mode based on the tree-sitter library for editing programs
-in the JSON language.  It includes support for font-locking,
-indentation, Imenu, which-func, and navigation.
-
-** New mode 'csharp-ts-mode'.
-A major mode based on the tree-sitter library for editing programs
-in the C# language.  It includes support for font-locking,
-indentation, Imenu, which-func, and navigation.
-
-** New mode 'csharp-mode'.
+** New major mode 'csharp-mode'.
 A major mode based on CC Mode for editing programs in the C# language.
+This mode is auto-enabled for files with the ".cs" extension.
+
+** New major modes based on the tree-sitter library.
+These new major modes are available if Emacs was built with the
+tree-sitter library.  They provide support for font-locking,
+indentation, and navigation by defuns based on parsing the buffer text
+by a tree-sitter parser.  Some major modes also offer support for
+Imenu and 'which-func'.
+
+*** New major mode 'typescript-ts-mode'.
+A major mode based on the tree-sitter library for editing programs
+in the TypeScript language.  This mode is auto-enabled for files with
+the ".ts" extension.
+
+*** New major mode 'tsx-ts-mode'.
+A major mode based on the tree-sitter library for editing programs
+in the TypeScript language, with support for TSX.  This mode is
+auto-enabled for files with the ".tsx" extension.
+
+*** New major mode 'c-ts-mode'.
+An optional major mode based on the tree-sitter library for editing
+programs in the C language.
+
+*** New major mode 'c++-ts-mode'.
+An optional major mode based on the tree-sitter library for editing
+programs in the C++ language.
+
+*** New major mode 'java-ts-mode'.
+An optional major mode based on the tree-sitter library for editing
+programs in the Java language.
+
+*** New major mode 'python-ts-mode'.
+An optional major mode based on the tree-sitter library for editing
+programs in the Python language.
+
+*** New major mode 'css-ts-mode'.
+An optional major mode based on the tree-sitter library for editing
+CSS (Cascading Style Sheets).
+
+*** New major mode 'json-ts-mode'.
+An optional major mode based on the tree-sitter library for editing
+programs in the JSON language.
+
+*** New major mode 'csharp-ts-mode'.
+An optional major mode based on the tree-sitter library for editing
+programs in the C# language.
+
+*** New major mode 'bash-ts-mode'.
+Am optional major mode based on the tree-sitter library for editing
+Bash shell scripts.
+
+*** New major mode 'dockerfile-ts-mode'.
+A major mode based on the tree-sitter library for editing
+Dockerfiles.  This mode is auto-enabled for files which are named
+"Dockerfile", have the "Dockerfile." prefix, or have the ".dockerfile"
+extension.
+
+*** New major mode 'cmake-ts-mode'.
+A major mode based on the tree-sitter library for editing CMake files.
+It is auto-enabled for files whose name is "CMakeLists.txt" or whose
+extension is ".cmake".
+
+*** New major mode 'toml-ts-mode'.
+A major mode based on the tree-sitter library for editing files
+written in TOML, a format for writing configuration files.  It is
+auto-enabled for files with the ".toml" extension.
+
+*** New major mode 'go-ts-mode'.
+A major mode based on the tree-sitter library for editing programs in
+the Go language.  It is auto-enabled for files with the ".go" extension.
+
+*** New major mode 'go-mod-ts-mode'.
+A major mode based on the tree-sitter library for editing "go.mod"
+files.  It is auto-enabled for files which are named "go.mod".
 
 
 * Incompatible Lisp Changes in Emacs 29.1
 
 +++
+** The implementation of overlays has changed.
+Emacs now uses an implementation of overlays that is much more
+efficient than the original one, and should speed up all the
+operations that involve overlays, especially when there are lots of
+them in a buffer.
+
+As result of this, some minor incompatibilities in behavior could be
+observed, as described below.  Except those minor incompatibilities,
+no other changes in behavior of overlays should be visible on the Lisp
+or user level, with the exception of better performance and the order
+of overlays returned by functions that don't promise any particular
+order.
+
+*** The function 'overlay-recenter' is now a no-op.
+This function does nothing, and in particular has no effect on the
+value returned by 'overlay-lists'.  The purpose of 'overlay-recenter'
+was to allow more efficient lookup of overlays around certain buffer
+position; however with the new implementation the lookup of overlays
+is efficient regardless of their position, and there's no longer any
+need to "optimize" the lookup, nor any notion of "center" of the
+overlays.
+
+*** The function 'overlay-lists' returns one unified list of overlays.
+This function used to return a cons of two lists, one with overlays
+before the "center" position, the other after that "center".  It now
+returns a list whose 'car' is the list of all the buffer overlays, and
+whose 'cdr' is always nil.
+
++++
 ** 'format-prompt' now uses 'substitute-command-keys'.
 This means that both the prompt and 'minibuffer-default-prompt-format'
 will have key definitions and single quotes handled specially.
+
++++
+** New function 'substitute-quotes'.
+This function works like 'substitute-command-keys' but only
+substitutes quote characters.
 
 ---
 ** 'find-image' now uses 'create-image'.
@@ -3667,7 +3783,7 @@ If the function returns 'dont-clear-message', then the message is not
 cleared, with the assumption that the function cleared it itself.
 
 +++
-** The local variable section now supports defining fallback modes.
+** The local variables section now supports defining fallback modes.
 This was previously only available when using a property line (i.e.,
 putting the modes on the first line of a file).
 
@@ -3714,8 +3830,7 @@ compliant.
 +++
 ** New macro 'setopt'.
 This is like 'setq', but is meant to be used for user options instead
-of plain variables, and
-uses 'custom-set'/'set-default' to set them.
+of plain variables, and uses 'custom-set'/'set-default' to set them.
 
 +++
 ** New utility predicate 'mode-line-window-selected-p'.
@@ -4349,6 +4464,14 @@ Now 'max-lisp-eval-depth' alone is used for limiting Lisp recursion
 and stack usage.  'max-specpdl-size' is still present as a plain
 variable for compatibility but its limiting powers have been taken away.
 
+** New function 'external-completion-table'.
+This function returns a completion table designed to ease
+communication between Emacs's completion facilities and external tools
+offering completion services, particularly tools whose full working
+set is too big to transfer to Emacs every time a completion is
+needed.  The table uses new 'external' completion style exclusively
+and cannot work with regular styles such as 'basic' or 'flex'.
+
 
 * Changes in Emacs 29.1 on Non-Free Operating Systems
 
@@ -4415,3 +4538,11 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.
+
+
+Local variables:
+coding: utf-8
+mode: outline
+mode: emacs-news
+paragraph-separate: "[	 ]"
+end:

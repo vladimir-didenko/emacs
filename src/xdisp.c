@@ -17264,7 +17264,6 @@ mark_window_display_accurate_1 (struct window *w, bool accurate_p)
 
       BUF_UNCHANGED_MODIFIED (b) = BUF_MODIFF (b);
       BUF_OVERLAY_UNCHANGED_MODIFIED (b) = BUF_OVERLAY_MODIFF (b);
-      BUF_CHARS_UNCHANGED_MODIFIED (b) = BUF_CHARS_MODIFF (b);
       BUF_BEG_UNCHANGED (b) = BUF_GPT (b) - BUF_BEG (b);
       BUF_END_UNCHANGED (b) = BUF_Z (b) - BUF_GPT (b);
 
@@ -19535,7 +19534,8 @@ redisplay_window (Lisp_Object window, bool just_this_one_p)
   /* Check whether the buffer to be displayed contains long lines.  */
   if (!NILP (Vlong_line_threshold)
       && !current_buffer->long_line_optimizations_p
-      && CHARS_MODIFF - CHARS_UNCHANGED_MODIFIED > 8)
+      && (CHARS_MODIFF - UNCHANGED_MODIFIED > 8
+	  || current_buffer->clip_changed))
     {
       ptrdiff_t cur, next, found, max = 0, threshold;
       threshold = XFIXNUM (Vlong_line_threshold);
@@ -22616,7 +22616,8 @@ usage: (trace-to-stderr STRING &rest OBJECTS)  */)
  ***********************************************************************/
 
 /* Return a temporary glyph row holding the glyphs of an overlay arrow.
-   Used for non-window-redisplay windows, and for windows w/o left fringe.  */
+   Used for non-window-redisplay windows, and for windows without left
+   fringe.  */
 
 static struct glyph_row *
 get_overlay_arrow_glyph_row (struct window *w, Lisp_Object overlay_arrow_string)

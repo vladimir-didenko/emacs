@@ -1041,7 +1041,7 @@ It is based on `log-edit-mode', and has Git-specific extensions."
                         (string-replace file-diff "" vc-git-patch-string))
                 (user-error "Index not empty"))
               (setq pos (point))))))
-      (let ((patch-file (make-temp-file "git-patch")))
+      (let ((patch-file (make-nearby-temp-file "git-patch")))
         (with-temp-file patch-file
           (insert vc-git-patch-string))
         (unwind-protect
@@ -1325,7 +1325,7 @@ If LIMIT is a revision string, use it as an end-revision."
                     ,(format "--pretty=tformat:%s"
                              (car vc-git-root-log-format))
                     "--abbrev-commit"))
-                vc-git-log-switches
+                (ensure-list vc-git-log-switches)
                 (when (numberp limit)
                   (list "-n" (format "%s" limit)))
 		(when start-revision

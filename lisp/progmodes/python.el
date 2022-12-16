@@ -454,7 +454,7 @@ This variant of `rx' supports common Python named REGEXPS."
             (close-paren       (or "}" "]" ")"))
             (simple-operator   (any ?+ ?- ?/ ?& ?^ ?~ ?| ?* ?< ?> ?= ?%))
             (not-simple-operator (not (or simple-operator ?\n)))
-            (operator          (or "==" ">=" "is" "not"
+            (operator          (or "==" ">="
                                    "**" "//" "<<" ">>" "<=" "!="
                                    "+" "-" "/" "&" "^" "~" "|" "*" "<" ">"
                                    "=" "%"))
@@ -791,6 +791,7 @@ sign in chained assignment."
                    (? (or ")" "]") (* sp-bsnl))
                    (group assignment-operator)))
      (1 font-lock-variable-name-face)
+     (2 'font-lock-operator-face)
      (,(python-rx grouped-assignment-target)
       (progn
         (goto-char (match-end 1))       ; go back after the first symbol
@@ -806,8 +807,9 @@ sign in chained assignment."
        (python-rx (or line-start ?\;) (* sp-bsnl)
                   grouped-assignment-target (* sp-bsnl)
                   (? ?: (* sp-bsnl) (+ not-simple-operator) (* sp-bsnl))
-                  assignment-operator))
-     (1 font-lock-variable-name-face))
+                  (group assignment-operator)))
+     (1 font-lock-variable-name-face)
+     (2 'font-lock-operator-face))
     ;; special cases
     ;;   (a) = 5
     ;;   [a] = 5,
@@ -817,8 +819,11 @@ sign in chained assignment."
                   (or "[" "(") (* sp-nl)
                   grouped-assignment-target (* sp-nl)
                   (or ")" "]") (* sp-bsnl)
-                  assignment-operator))
-     (1 font-lock-variable-name-face))
+                  (group assignment-operator)))
+     (1 font-lock-variable-name-face)
+     (2 'font-lock-operator-face))
+    ;; Operators.
+    (,(python-rx operator) . 'font-lock-operator-face)
     ;; escape sequences within bytes literals
     ;;   "\\" "\'" "\a" "\b" "\f" "\n" "\r" "\t" "\v"
     ;;   "\ooo" character with octal value ooo
@@ -962,9 +967,9 @@ It makes underscores and dots word constituent chars.")
 ;; merge with `python-font-lock-keywords-level-2'.
 
 (defvar python--treesit-keywords
-  '("as" "assert" "async" "await" "break" "class" "continue" "def"
+  '("as" "assert" "async" "await" "break" "case" "class" "continue" "def"
     "del" "elif" "else" "except" "exec" "finally" "for" "from"
-    "global" "if" "import" "lambda" "nonlocal" "pass" "print"
+    "global" "if" "import" "lambda" "match" "nonlocal" "pass" "print"
     "raise" "return" "try" "while" "with" "yield"
     ;; These are technically operators, but we fontify them as
     ;; keywords.
@@ -988,7 +993,8 @@ It makes underscores and dots word constituent chars.")
 
 (defvar python--treesit-operators
   '("-" "-=" "!=" "*" "**" "**=" "*=" "/" "//" "//=" "/=" "&" "%" "%="
-    "^" "+" "+=" "<" "<<" "<=" "<>" "=" "==" ">" ">=" ">>" "|" "~" "@" "@="))
+    "^" "+" "->" "+=" "<" "<<" "<=" "<>" "=" ":=" "==" ">" ">=" ">>" "|"
+    "~" "@" "@="))
 
 (defvar python--treesit-special-attributes
   '("__annotations__" "__closure__" "__code__"
@@ -1064,7 +1070,7 @@ fontified."
     (when (eq (char-after string-beg) ?f)
       (cl-incf string-beg))
     (treesit-fontify-with-override
-     (max start string-beg) (min end string-end) face override)))
+     string-beg string-end face override start end)))
 
 (defvar python--treesit-settings
   (treesit-font-lock-rules
@@ -1088,6 +1094,14 @@ fontified."
       name: (identifier) @font-lock-function-name-face)
      (class_definition
       name: (identifier) @font-lock-type-face))
+
+   :feature 'function
+   :language 'python
+   '((function_definition
+      name: (identifier) @font-lock-function-name-face)
+     (call function: (identifier) @font-lock-function-name-face)
+     (call function: (attribute
+                      attribute: (identifier) @font-lock-function-name-face)))
 
    :feature 'keyword
    :language 'python
@@ -6558,19 +6572,21 @@ implementations: `python-mode' and `python-ts-mode'."
         (add-function :before-until (local 'eldoc-documentation-function)
                       #'python-eldoc-function))))
 
-  (add-to-list
-   'hs-special-modes-alist
-   `(python-mode
-     ,python-nav-beginning-of-block-regexp
-     ;; Use the empty string as end regexp so it doesn't default to
-     ;; "\\s)".  This way parens at end of defun are properly hidden.
-     ""
-     "#"
-     python-hideshow-forward-sexp-function
-     nil
-     python-nav-beginning-of-block
-     python-hideshow-find-next-block
-     python-info-looking-at-beginning-of-block))
+  ;; TODO: Use tree-sitter to figure out the block in `python-ts-mode'.
+  (dolist (mode '(python-mode python-ts-mode))
+    (add-to-list
+     'hs-special-modes-alist
+     `(,mode
+       ,python-nav-beginning-of-block-regexp
+       ;; Use the empty string as end regexp so it doesn't default to
+       ;; "\\s)".  This way parens at end of defun are properly hidden.
+       ""
+       "#"
+       python-hideshow-forward-sexp-function
+       nil
+       python-nav-beginning-of-block
+       python-hideshow-find-next-block
+       python-info-looking-at-beginning-of-block)))
 
   (setq-local outline-regexp (python-rx (* space) block-start))
   (setq-local outline-level
@@ -6583,9 +6599,6 @@ implementations: `python-mode' and `python-ts-mode'."
   (python-skeleton-add-menu-items)
 
   (make-local-variable 'python-shell-internal-buffer)
-
-  (when python-indent-guess-indent-offset
-    (python-indent-guess-indent-offset))
 
   (add-hook 'flymake-diagnostic-functions #'python-flymake nil t))
 
@@ -6605,13 +6618,18 @@ implementations: `python-mode' and `python-ts-mode'."
               python-syntax-propertize-function)
   (setq-local imenu-create-index-function
               #'python-imenu-create-index)
-  (add-hook 'which-func-functions #'python-info-current-defun nil t))
+
+  (add-hook 'which-func-functions #'python-info-current-defun nil t)
+
+  (when python-indent-guess-indent-offset
+    (python-indent-guess-indent-offset)))
 
 ;;;###autoload
 (define-derived-mode python-ts-mode python-base-mode "Python"
   "Major mode for editing Python files, using tree-sitter library.
 
 \\{python-ts-mode-map}"
+  :syntax-table python-mode-syntax-table
   (when (treesit-ready-p 'python)
     (treesit-parser-create 'python)
     (setq-local treesit-font-lock-feature-list
@@ -6619,13 +6637,16 @@ implementations: `python-mode' and `python-ts-mode'."
                   ( keyword string type)
                   ( assignment builtin constant decorator
                     escape-sequence number property string-interpolation )
-                  ( bracket delimiter operator)))
+                  ( function bracket delimiter operator)))
     (setq-local treesit-font-lock-settings python--treesit-settings)
     (setq-local imenu-create-index-function
                 #'python-imenu-treesit-create-index)
     (setq-local treesit-defun-type-regexp (rx (or "function" "class")
                                               "_definition"))
-    (treesit-major-mode-setup)))
+    (treesit-major-mode-setup)
+
+    (when python-indent-guess-indent-offset
+      (python-indent-guess-indent-offset))))
 
 ;;; Completion predicates for M-x
 ;; Commands that only make sense when editing Python code
