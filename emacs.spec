@@ -1,5 +1,5 @@
 # -*- coding: utf-8; mode: rpm-spec -*-
-%def_enable gtk3		# actually unconditionally
+%def_enable pgtk		# actually unconditionally
 %def_disable athena
 %def_disable nox
 
@@ -11,7 +11,7 @@
 
 Name: emacs
 Version: 29.0.60
-Release: alt1.git4dab5f8
+Release: alt2.gitf04680e
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -62,19 +62,15 @@ BuildRequires: git
 
 %define obsolete_versioned() %(printf 'Provides: emacs26-%{1} = %version-%release\\nObsoletes: emacs26-%{1}\\n')
 
-%package gtk3
-Summary: The GNU Emacs text editor for the X Window System (gtk3)
+%package pgtk
+Summary: The GNU Emacs text editor with pure GTK UI
 Group: Editors
 Requires(pre): alternatives >= 0.2.0
 Requires: emacs-common = %version-%release
 # just can't get enough of it
 Provides: /usr/bin/emacs
 Provides: emacs = %version-%release
-Provides: emacs-X11 = %version-%release
-Provides: emacs-X11-program
 Provides: emacsen
-%obsolete_versioned X11-gtk
-%obsolete_versioned X11-gtk3
 
 %package athena
 Summary: The GNU Emacs text editor for the X Window System (athena)
@@ -175,16 +171,16 @@ need to install the actual Emacs program package (%name-nox or
 %name-X11).  Install %name-nox if you are not going to use the X
 Window System; install %name-X11 if you will be using X.
 
-%description gtk3
-Emacs-gtk3 includes the GNU Emacs text editor program for use with the X
+%description pgtk
+Emacs-pgtk includes the GNU Emacs text editor program for use with the Wayland
 Window System using gtk+ toolkit v.3 (it provides support for the mouse and
-other GUI elements).  Emacs-gtk3 will also run GNU Emacs outside of X, but
-it has a larger memory footprint than the 'non-X' GNU Emacs package
+other GUI elements).  Emacs-gtk3 will also run GNU Emacs outside of Wayland, but
+it has a larger memory footprint than the 'non-GUI' GNU Emacs package
 (%name-nox).
 
-Install %name-gtk3 if you are going to use Emacs with the X Window
-System and you like gtk+ look.  You should also install %name-gtk3 if you
-are going to run GNU Emacs both with and without X (it will work fine both
+Install %name-pgtk if you are going to use Emacs with the X Window
+System and you like gtk+ look.  You should also install %name-pgtk if you
+are going to run GNU Emacs both with and without Wayland (it will work fine both
 ways).
 
 %description athena
@@ -264,21 +260,21 @@ sed -ri 's,(\.\./info/[[:alpha:]-]+),\1.info,g' doc/{emacs,misc}/*.texi
 %Substage 0 "Clear and create the build directories"
 [ -d build-nox ] && rm -rf build-nox; mkdir -p build-nox
 [ -d build-athena ] && rm -rf build-athena; mkdir -p build-athena
-[ -d build-gtk3 ] && rm -rf build-gtk3; mkdir -p build-gtk3
+[ -d build-pgtk ] && rm -rf build-pgtk; mkdir -p build-pgtk
 
 %build
 autoreconf -i -I m4
 
 %Substage 1 "Configure"
 
-%define stage3bin gtk3
+%define stage3bin pgtk
 %define _configure_script ../configure
 %define _configure_mostly --disable-build-details --sharedstatedir=/var \\\
 	--with-pop --with-png --with-jpeg --with-xpm --with-gif --with-tiff \\\
 	--with-xft --with-dbus --with-rsvg --with-wide-int --with-lcms2 --with-modules \\\
 	--with-native-compilation --without-gconf --without-gsettings
 
-pushd build-gtk3
+pushd build-pgtk
 %configure %_configure_mostly --without-gpm --with-pgtk --with-cairo --with-toolkit-scroll-bars
 popd
 
@@ -297,7 +293,7 @@ popd
 %endif
 
 %Substage 2 "Initial make all"
-%make_build -C build-gtk3
+%make_build -C build-pgtk
 %if_enabled athena
 %make_build -C build-athena
 %endif
@@ -341,8 +337,8 @@ popd
 
 %install
 %makeinstall -C build-%stage3bin
-install -pm0755 build-gtk3/src/emacs %buildroot%_bindir/%name-gtk3
-install -pm0644 build-gtk3/src/emacs.pdmp %buildroot%_emacs_archlibdir/%name-gtk3.pdmp
+install -pm0755 build-pgtk/src/emacs %buildroot%_bindir/%name-pgtk
+install -pm0644 build-pgtk/src/emacs.pdmp %buildroot%_emacs_archlibdir/%name-pgtk.pdmp
 %if_enabled athena
 install -pm0755 build-athena/src/emacs %buildroot%_bindir/%name-athena
 install -pm0644 build-athena/src/emacs.pdmp %buildroot%_emacs_archlibdir/%name-athena.pdmp
@@ -381,7 +377,7 @@ sed -i 's,%buildroot,,' %buildroot%_libexecdir/systemd/user/emacs.service
 ########################
 # Alternatives support #
 ########################
-install -pm644 -D .gear/gtk3.alternatives %buildroot%_altdir/%name-gtk3
+install -pm644 -D .gear/gtk3.alternatives %buildroot%_altdir/%name-pgtk
 %if_enabled athena
 install -pm644 -D .gear/athena.alternatives %buildroot%_altdir/%name-athena
 %endif
@@ -394,7 +390,6 @@ install -pm0644 -D .gear/xresources %buildroot%_sysconfdir/X11/app-defaults/Emac
 
 # Substitute emacs-X11.* with emacs-X11 for buildreq
 mkdir -p %buildroot%_sysconfdir/buildreqs/packages/substitute.d
-echo emacs-X11 > %buildroot%_sysconfdir/buildreqs/packages/substitute.d/%name-gtk3
 %if_enabled athena
 echo emacs-X11 > %buildroot%_sysconfdir/buildreqs/packages/substitute.d/%name-athena
 %endif
@@ -434,11 +429,10 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %set_compress_method skip
 
 #---------------------------------------------------------------
-%files gtk3
-%_sysconfdir/buildreqs/packages/substitute.d/%name-gtk3
-%_altdir/%name-gtk3
-%_bindir/%name-gtk3
-%_emacs_archlibdir/%name-gtk3.pdmp
+%files pgtk
+%_altdir/%name-pgtk
+%_bindir/%name-pgtk
+%_emacs_archlibdir/%name-pgtk.pdmp
 
 %if_enabled athena
 %files athena
@@ -460,7 +454,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %config(noreplace) %_sysconfdir/X11/app-defaults/*
 
 %_bindir/*
-%exclude %_bindir/%name-gtk3
+%exclude %_bindir/%name-pgtk
 %if_enabled athena
 %exclude %_bindir/%name-athena
 %endif
@@ -509,6 +503,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Fri Dec 16 2022 Vladimir Didenko <cow@altlinux.org> 29.0.60-alt2.gitf04680e
+- 29.0.60-gitf04680e
+
 * Tue Nov 29 2022 Vladimir Didenko <cow@altlinux.org> 29.0.60-alt1.git4dab5f8
 - 29.0.60-git4dab5f8
 

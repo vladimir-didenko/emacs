@@ -1,10 +1,10 @@
 [Desktop Entry]
 GenericName=Text Editor
 GenericName[ru]=Текстовый редактор
-Name=GNU Emacs 26
+Name=GNU Emacs 29
 MimeType=text/english;text/plain;text/x-makefile;text/x-c++hdr;text/x-c++src;text/x-chdr;text/x-csrc;text/x-java;text/x-moc;text/x-pascal;text/x-tcl;text/x-tex;application/x-shellscript;text/x-c;text/x-c++;
-Exec=emacs-X11 %U
-Icon=emacs26
+Exec=emacs-pgtk %U
+Icon=emacs
 Terminal=false
 Comment=Powerful editor from the GNU project
 Comment[ru]=Мощный текстовый редактор от проекта GNU
