@@ -1,5 +1,5 @@
 /* Compile Emacs Lisp into native code.
-   Copyright (C) 2019-2022 Free Software Foundation, Inc.
+   Copyright (C) 2019-2023 Free Software Foundation, Inc.
 
 Author: Andrea Corallo <akrl@sdf.org>
 
@@ -5912,6 +5912,3 @@ file -> CU.  */);
 
   defsubr (&Snative_comp_available_p);
 }
-/* Local Variables: */
-/* c-file-offsets: ((arglist-intro . +)) */
-/* End: */

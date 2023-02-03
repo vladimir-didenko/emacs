@@ -1,6 +1,6 @@
 ;;; comp.el --- compilation of Lisp code into native code -*- lexical-binding: t -*-
 
-;; Copyright (C) 2019-2022 Free Software Foundation, Inc.
+;; Copyright (C) 2019-2023 Free Software Foundation, Inc.
 
 ;; Author: Andrea Corallo <akrl@sdf.org>
 ;; Keywords: lisp
@@ -3716,7 +3716,7 @@ Prepare every function for final compilation and drive the C back-end."
               (if (zerop
                    (call-process (expand-file-name invocation-name
                                                    invocation-directory)
-				 nil t t "-no-comp-spawn" "--batch" "-l"
+				 nil t t "-no-comp-spawn" "-Q" "--batch" "-l"
                                  temp-file))
                   (progn
                     (delete-file temp-file)
@@ -4005,8 +4005,11 @@ display a message."
                              :command (list
                                        (expand-file-name invocation-name
                                                          invocation-directory)
-                                       "-no-comp-spawn" "--batch" "-l"
-                                       temp-file)
+                                       "-no-comp-spawn" "-Q" "--batch"
+                                       "--eval"
+                                       ;; Suppress Abort dialogs on MS-Windows
+                                       "(setq w32-disable-abort-dialog t)"
+                                       "-l" temp-file)
                              :sentinel
                              (lambda (process _event)
                                (run-hook-with-args
@@ -4109,13 +4112,16 @@ the deferred compilation mechanism."
                 (native-elisp-load data)))
           ;; We may have created a temporary file when we're being
           ;; called with something other than a file as the argument.
-          ;; Delete it.
+          ;; Delete it if we can.
           (when (and (not (stringp function-or-file))
                      (not output)
                      comp-ctxt
                      (comp-ctxt-output comp-ctxt)
                      (file-exists-p (comp-ctxt-output comp-ctxt)))
-            (delete-file (comp-ctxt-output comp-ctxt))))))))
+            (cond ((eq 'windows-nt system-type)
+                   ;; We may still be using the temporary .eln file.
+                   (ignore-errors (delete-file (comp-ctxt-output comp-ctxt))))
+                  (t (delete-file (comp-ctxt-output comp-ctxt))))))))))
 
 (defun native-compile-async-skip-p (file load selector)
   "Return non-nil if FILE's compilation should be skipped.

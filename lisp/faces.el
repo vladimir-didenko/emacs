@@ -1,6 +1,6 @@
 ;;; faces.el --- Lisp faces -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1992-2023 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: internal
@@ -47,7 +47,8 @@ the terminal-initialization file to be loaded."
     ("vt400" . "vt200")
     ("vt420" . "vt200")
     ("alacritty" . "xterm")
-    ("foot" . "xterm"))
+    ("foot" . "xterm")
+    ("contour" . "xterm"))
   "Alist of terminal type aliases.
 Entries are of the form (TYPE . ALIAS), where both elements are strings.
 This means to treat a terminal of type TYPE as if it were of type ALIAS."
@@ -303,7 +304,16 @@ If the optional argument FRAME is given, report on face FACE in that frame.
 If FRAME is t, report on the defaults for face FACE (for new frames).
 If FRAME is omitted or nil, use the selected frame."
   (let ((attrs
-	 (delq :inherit (mapcar 'car face-attribute-name-alist)))
+         ;; The _value_ of :inherit teaches us nothing about how FACE
+         ;; looks compared to the default face.  Instead, we will ask
+         ;; `face-attribute' to take inheritance into account when
+         ;; examining other attributes.
+         (delq :inherit
+               ;; A difference in extension past EOL only matters when
+               ;; relevant attributes (such as :background) also
+               ;; differ from the default; otherwise this difference
+               ;; is a false positive.
+               (delq :extend (mapcar 'car face-attribute-name-alist))))
 	(differs nil))
     (while (and attrs (not differs))
       (let* ((attr (pop attrs))
@@ -688,6 +698,10 @@ default attributes.  To avoid that, i.e. to cause ATTRIBUTE's value
 be reset to `unspecified' when creating new frames, disregarding
 what the FACE's face spec says, call this function with FRAME set to
 t and the ATTRIBUTE's value set to `unspecified'.
+
+Note that the ATTRIBUTE VALUE pairs are evaluated in the order
+they are specified, except that the `:family' and `:foundry'
+attributes are evaluated first.
 
 The following attributes are recognized:
 

@@ -1,6 +1,6 @@
 ;;; org-fold-core.el --- Folding buffer text -*- lexical-binding: t; -*-
 ;;
-;; Copyright (C) 2020-2020 Free Software Foundation, Inc.
+;; Copyright (C) 2020-2023 Free Software Foundation, Inc.
 ;;
 ;; Author: Ihor Radchenko <yantar92 at gmail dot com>
 ;; Keywords: folding, invisible text
@@ -145,7 +145,7 @@
 
 ;; All the folding specs can be specified by symbol representing their
 ;; name.  However, this is not always convenient, especially if the
-;; same spec can be used for fold different syntaxical structures.
+;; same spec can be used for fold different syntactical structures.
 ;; Any folding spec can be additionally referenced by a symbol listed
 ;; in the spec's `:alias' folding spec property.  For example, Org
 ;; mode's `org-fold-outline' folding spec can be referenced as any
@@ -189,9 +189,9 @@
 ;; all the processing related to buffer modifications.
 
 ;; The library also provides a way to unfold the text after some
-;; destructive changes breaking syntaxical structure of the buffer.
+;; destructive changes breaking syntactical structure of the buffer.
 ;; For example, Org mode automatically reveals folded drawers when the
-;; drawer becomes syntaxically incorrect:
+;; drawer becomes syntactically incorrect:
 ;; ------- before modification -------
 ;; :DRAWER:<begin fold>
 ;; Some folded text inside drawer
@@ -321,7 +321,7 @@ following symbols:
   functions relying on this package might not be able to unfold the
   edited text.  For example, removed leading stars from a folded
   headline in Org mode will break visibility cycling since Org mode
-  will not be avare that the following folded text belonged to
+  will not be aware that the following folded text belonged to
   headline.
 
 - `ignore-modification-checks': Do not try to detect insertions in the
@@ -1003,7 +1003,13 @@ If SPEC-OR-ALIAS is omitted and FLAG is nil, unfold everything in the region."
                    (overlay-put o (org-fold-core--property-symbol-get-create spec) spec)
                    (overlay-put o 'invisible spec)
                    (overlay-put o 'isearch-open-invisible #'org-fold-core--isearch-show)
-                   (overlay-put o 'isearch-open-invisible-temporary #'org-fold-core--isearch-show-temporary))
+                   ;; FIXME: Disabling to work around Emacs bug#60399
+                   ;; and https://orgmode.org/list/87zgb6tk6h.fsf@localhost.
+                   ;; The proper fix will require making sure that
+                   ;; `org-fold-core-isearch-open-function' does not
+                   ;; delete the overlays used by isearch.
+                   ;; (overlay-put o 'isearch-open-invisible-temporary #'org-fold-core--isearch-show-temporary)
+                   )
 	       (put-text-property from to (org-fold-core--property-symbol-get-create spec) spec)
 	       (put-text-property from to 'isearch-open-invisible #'org-fold-core--isearch-show)
 	       (put-text-property from to 'isearch-open-invisible-temporary #'org-fold-core--isearch-show-temporary)
@@ -1131,16 +1137,9 @@ This function is intended to be used as `isearch-filter-predicate'."
   "Clear `org-fold-core--isearch-local-regions'."
   (clrhash org-fold-core--isearch-local-regions))
 
-(defun org-fold-core--isearch-show (region)
-  "Reveal text in REGION found by isearch.
-REGION can also be an overlay in current buffer."
-  (when (overlayp region)
-    (setq region (cons (overlay-start region)
-                       (overlay-end region))))
-  (org-with-point-at (car region)
-    (while (< (point) (cdr region))
-      (funcall org-fold-core-isearch-open-function (car region))
-      (goto-char (org-fold-core-next-visibility-change (point) (cdr region) 'ignore-hidden)))))
+(defun org-fold-core--isearch-show (_)
+  "Reveal text at point found by isearch."
+  (funcall org-fold-core-isearch-open-function (point)))
 
 (defun org-fold-core--isearch-show-temporary (region hide-p)
   "Temporarily reveal text in REGION.

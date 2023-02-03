@@ -1,6 +1,6 @@
 ;;; cmake-ts-mode.el --- tree-sitter support for CMake  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2022 Free Software Foundation, Inc.
+;; Copyright (C) 2022-2023 Free Software Foundation, Inc.
 
 ;; Author     : Randy Taylor <dev@rjt.dev>
 ;; Maintainer : Randy Taylor <dev@rjt.dev>
@@ -195,10 +195,6 @@ the subtrees."
       `((,name . ,marker))))))
 
 ;;;###autoload
-(add-to-list 'auto-mode-alist
-             '("\\(?:CMakeLists\\.txt\\|\\.cmake\\)\\'" . cmake-ts-mode))
-
-;;;###autoload
 (define-derived-mode cmake-ts-mode prog-mode "CMake"
   "Major mode for editing CMake files, powered by tree-sitter."
   :group 'cmake
@@ -228,6 +224,10 @@ the subtrees."
                   (bracket error misc-punctuation)))
 
     (treesit-major-mode-setup)))
+
+(if (treesit-ready-p 'cmake)
+    (add-to-list 'auto-mode-alist
+                 '("\\(?:CMakeLists\\.txt\\|\\.cmake\\)\\'" . cmake-ts-mode)))
 
 (provide 'cmake-ts-mode)
 

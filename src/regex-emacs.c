@@ -1,6 +1,6 @@
 /* Emacs regular expression matching and search
 
-   Copyright (C) 1993-2022 Free Software Foundation, Inc.
+   Copyright (C) 1993-2023 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -223,7 +223,7 @@ typedef enum
 	   is followed by a range table:
 	       2 bytes of flags for character sets (low 8 bits, high 8 bits)
 		   See RANGE_TABLE_WORK_BITS below.
-	       2 bytes, the number of pairs that follow (upto 32767)
+	       2 bytes, the number of pairs that follow (up to 32767)
 	       pairs, each 2 multibyte characters,
 		   each multibyte character represented as 3 bytes.  */
   charset,

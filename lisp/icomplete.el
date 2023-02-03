@@ -1,6 +1,6 @@
 ;;; icomplete.el --- minibuffer completion incremental feedback -*- lexical-binding: t -*-
 
-;; Copyright (C) 1992-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1992-2023 Free Software Foundation, Inc.
 
 ;; Author: Ken Manheimer <ken dot manheimer at gmail...>
 ;; Created: Mar 1993 Ken Manheimer, klm@nist.gov - first release to usenet
@@ -252,7 +252,7 @@ the default otherwise."
   "Step forward completions by one entry.
 Second entry becomes the first and can be selected with
 `icomplete-force-complete-and-exit'.
-Return non-nil iff something was stepped."
+Return non-nil if something was stepped."
   (interactive)
   (let* ((beg (icomplete--field-beg))
          (end (icomplete--field-end))
@@ -270,7 +270,7 @@ Return non-nil iff something was stepped."
   "Step backward completions by one entry.
 Last entry becomes the first and can be selected with
 `icomplete-force-complete-and-exit'.
-Return non-nil iff something was stepped."
+Return non-nil if something was stepped."
   (interactive)
   (let* ((beg (icomplete--field-beg))
          (end (icomplete--field-end))

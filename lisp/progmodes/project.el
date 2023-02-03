@@ -1,7 +1,7 @@
 ;;; project.el --- Operations on the current project  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2015-2022 Free Software Foundation, Inc.
-;; Version: 0.9.3
+;; Copyright (C) 2015-2023 Free Software Foundation, Inc.
+;; Version: 0.9.6
 ;; Package-Requires: ((emacs "26.1") (xref "1.4.0"))
 
 ;; This is a GNU ELPA :core package.  Avoid using functionality that
@@ -514,11 +514,14 @@ project backend implementation of `project-external-roots'.")
                 (lambda (b) (assoc-default b backend-markers-alist))
                 vc-handled-backends)))
              (marker-re
-              (mapconcat
-               (lambda (m) (format "\\(%s\\)" (wildcard-to-regexp m)))
-               (append backend-markers
-                       (project--value-in-dir 'project-vc-extra-root-markers dir))
-               "\\|"))
+              (concat
+               "\\`"
+               (mapconcat
+                (lambda (m) (format "\\(%s\\)" (wildcard-to-regexp m)))
+                (append backend-markers
+                        (project--value-in-dir 'project-vc-extra-root-markers dir))
+                "\\|")
+               "\\'"))
              (locate-dominating-stop-dir-regexp
               (or vc-ignore-dir-regexp locate-dominating-stop-dir-regexp))
              last-matches
@@ -527,7 +530,10 @@ project backend implementation of `project-external-roots'.")
                dir
                (lambda (d)
                  ;; Maybe limit count to 100 when we can drop Emacs < 28.
-                 (setq last-matches (directory-files d nil marker-re t)))))
+                 (setq last-matches
+                       (condition-case nil
+                           (directory-files d nil marker-re t)
+                         (file-missing nil))))))
              (backend
               (cl-find-if
                (lambda (b)
@@ -1040,12 +1046,14 @@ by the user at will."
               (setq substrings (cons "./" substrings))))
          (new-collection (project--file-completion-table substrings))
          (abbr-cpd (abbreviate-file-name common-parent-directory))
+         (abbr-cpd-length (length abbr-cpd))
          (relname (cl-letf ((history-add-new-input nil)
                             ((symbol-value hist)
                              (mapcan
                               (lambda (s)
                                 (and (string-prefix-p abbr-cpd s)
-                                     (list (substring s (length abbr-cpd)))))
+                                     (not (eq abbr-cpd-length (length s)))
+                                     (list (substring s abbr-cpd-length))))
                               (symbol-value hist))))
                     (project--completing-read-strict prompt
                                                      new-collection

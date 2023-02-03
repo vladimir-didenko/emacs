@@ -1,6 +1,6 @@
 ;;; subr.el --- basic lisp subroutines for Emacs  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1992, 1994-1995, 1999-2022 Free Software
+;; Copyright (C) 1985-1986, 1992, 1994-1995, 1999-2023 Free Software
 ;; Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
@@ -1576,16 +1576,18 @@ in the current Emacs session, then this function may return nil."
   ;; Use `window-point' for the case when the current buffer
   ;; is temporarily switched to some other buffer (bug#50256)
   (let* ((pos (window-point))
-         (posn (posn-at-point pos)))
-    (if (null posn) ;; `pos' is "out of sight".
-        (list (selected-window) pos '(0 . 0) 0)
-      ;; If `pos' is inside a chunk of text hidden by an `invisible'
-      ;; or `display' property, `posn-at-point' returns the position
-      ;; that *is* visible, whereas `event--posn-at-point' is used
-      ;; when we have a keyboard event, whose position is `point' even
-      ;; if that position is invisible.
-      (setf (nth 5 posn) pos)
-      posn)))
+         (posn (posn-at-point pos (if (minibufferp (current-buffer))
+                                      (minibuffer-window)))))
+    (cond ((null posn) ;; `pos' is "out of sight".
+           (setq posn (list (selected-window) pos '(0 . 0) 0)))
+          ;; If `pos' is inside a chunk of text hidden by an `invisible'
+          ;; or `display' property, `posn-at-point' returns the position
+          ;; that *is* visible, whereas `event--posn-at-point' is used
+          ;; when we have a keyboard event, whose position is `point' even
+          ;; if that position is invisible.
+          ((> (length posn) 5)
+           (setf (nth 5 posn) pos)))
+    posn))
 
 (defun event-start (event)
   "Return the starting position of EVENT.
@@ -2538,11 +2540,13 @@ The variable list SPEC is the same as in `if-let'."
 Evaluate each binding in turn, stopping if a binding value is nil.
 If all bindings are non-nil, eval BODY and repeat.
 
-The variable list SPEC is the same as in `if-let'."
+The variable list SPEC is the same as in `if-let*'."
   (declare (indent 1) (debug if-let))
   (let ((done (gensym "done")))
     `(catch ',done
        (while t
+         ;; This is `if-let*', not `if-let', deliberately, despite the
+         ;; name of this macro.  See bug#60758.
          (if-let* ,spec
              (progn
                ,@body)
@@ -3533,8 +3537,7 @@ character.  This is not possible when using `read-key', but using
 Return t if answer is \"y\" and nil if it is \"n\".
 
 PROMPT is the string to display to ask the question; `y-or-n-p'
-adds \" (y or n) \" to it.  It does not need to end in space, but
-if it does up to one space will be removed.
+adds \"(y or n) \" to it.
 
 If you bind the variable `help-form' to a non-nil value
 while calling this function, then pressing `help-char'
@@ -4945,13 +4948,13 @@ the function `undo--wrap-and-run-primitive-undo'."
 		(progn
 		  (while (and (not (eq (cdr ptr) old-bul))
 			      ;; In case garbage collection has removed OLD-BUL.
-			      (cdr ptr)
-			      ;; Don't include a timestamp entry.
-			      (not (and (consp (cdr ptr))
-					(consp (cadr ptr))
-					(eq (caadr ptr) t)
-					(setq old-bul (cdr ptr)))))
-		    (setq ptr (cdr ptr)))
+			      (cdr ptr))
+		    (if (and (consp (cdr ptr))
+			     (consp (cadr ptr))
+			     (eq (caadr ptr) t))
+			;; Don't include a timestamp entry.
+			(setcdr ptr (cddr ptr))
+		      (setq ptr (cdr ptr))))
 		  (unless (cdr ptr)
 		    (message "combine-change-calls: buffer-undo-list broken"))
 		  (setcdr ptr nil)
@@ -6909,11 +6912,8 @@ sentence (see Info node `(elisp) Documentation Tips')."
 
 (defun json-available-p ()
   "Return non-nil if Emacs has libjansson support."
-  (and (fboundp 'json-serialize)
-       (condition-case nil
-           (json-serialize t)
-         (:success t)
-         (json-unavailable nil))))
+  (and (fboundp 'json--available-p)
+       (json--available-p)))
 
 (defun ensure-list (object)
   "Return OBJECT as a list.
@@ -7047,7 +7047,7 @@ CONDITION is either:
   * `major-mode': the buffer matches if the buffer's major mode
     is eq to the cons-cell's cdr.  Prefer using `derived-mode'
     instead when both can work.
-  * `not': the cdr is interpreted as a negation of a condition.
+  * `not': the cadr is interpreted as a negation of a condition.
   * `and': the cdr is a list of recursive conditions, that all have
     to be met.
   * `or': the cdr is a list of recursive condition, of which at

@@ -1079,10 +1079,11 @@ or a regexp (using some regexp special characters).  If it is a word,
 search for matches for that word as a substring.  If it is a list of words,
 search for matches for any two (or more) of those words.
 
-Note that by default this command only searches in the file specified by
-`internal-doc-file-name'; i.e., the etc/DOC file.  With \\[universal-argument] prefix,
-or if `apropos-do-all' is non-nil, it searches all currently defined
-documentation strings.
+Note that by default this command only searches in the functions predefined
+at Emacs startup, i.e., the primitives implemented in C or preloaded in the
+Emacs dump image.
+With \\[universal-argument] prefix, or if `apropos-do-all' is non-nil, it searches
+all currently defined documentation strings.
 
 Returns list of symbols and documentation found.
 
@@ -2918,23 +2919,65 @@ and corresponding effects.
 (register-definition-prefixes "semantic/bovine/c" '("semantic"))
 
 
+;;; Generated autoloads from progmodes/c-ts-common.el
+
+(register-definition-prefixes "c-ts-common" '("c-ts-"))
+
+
 ;;; Generated autoloads from progmodes/c-ts-mode.el
 
 (autoload 'c-ts-base-mode "c-ts-mode" "\
 Major mode for editing C, powered by tree-sitter.
 
-\\{c-ts-mode-map}
+\\{c-ts-base-mode-map}
 
 (fn)" t)
 (autoload 'c-ts-mode "c-ts-mode" "\
 Major mode for editing C, powered by tree-sitter.
 
+This mode is independent from the classic cc-mode.el based
+`c-mode', so configuration variables of that mode, like
+`c-basic-offset', doesn't affect this mode.
+
+To use tree-sitter C/C++ modes by default, evaluate
+
+    (add-to-list \\='major-mode-remap-alist \\='(c-mode . c-ts-mode))
+    (add-to-list \\='major-mode-remap-alist \\='(c++-mode . c++-ts-mode))
+    (add-to-list \\='major-mode-remap-alist
+                 \\='(c-or-c++-mode . c-or-c++-ts-mode))
+
+in your configuration.
+
 (fn)" t)
 (autoload 'c++-ts-mode "c-ts-mode" "\
 Major mode for editing C++, powered by tree-sitter.
 
+This mode is independent from the classic cc-mode.el based
+`c++-mode', so configuration variables of that mode, like
+`c-basic-offset', don't affect this mode.
+
+To use tree-sitter C/C++ modes by default, evaluate
+
+    (add-to-list \\='major-mode-remap-alist \\='(c-mode . c-ts-mode))
+    (add-to-list \\='major-mode-remap-alist \\='(c++-mode . c++-ts-mode))
+    (add-to-list \\='major-mode-remap-alist
+                 \\='(c-or-c++-mode . c-or-c++-ts-mode))
+
+in your configuration.
+
 (fn)" t)
-(register-definition-prefixes "c-ts-mode" '("c++-ts-mode--syntax-table" "c-ts-mode-"))
+(autoload 'c-or-c++-ts-mode "c-ts-mode" "\
+Analyze buffer and enable either C or C++ mode.
+
+Some people and projects use .h extension for C++ header files
+which is also the one used for C header files.  This makes
+matching on file name insufficient for detecting major mode that
+should be used.
+
+This function attempts to use file contents to determine whether
+the code is C or C++ and based on that chooses whether to enable
+`c-ts-mode' or `c++-ts-mode'." t)
+(register-definition-prefixes "c-ts-mode" '("c-ts-"))
 
 
 ;;; Generated autoloads from calendar/cal-bahai.el
@@ -4114,6 +4157,22 @@ Optional argument LAX (interactively, the prefix argument), if
 non-nil, means also include partially matching ligatures and
 non-canonical equivalences.
 
+Each line of the display shows the equivalences in two different
+ways separated by a colon:
+
+    - as the literal character or sequence
+    - using an ASCII-only escape syntax
+
+For example, for the letter \\='r\\=', the first line is
+
+    r: ?\\N{LATIN SMALL LETTER R}
+
+which is for the requested character itself, and a later line has
+
+    ṟ: ?\\N{LATIN SMALL LETTER R}?\\N{COMBINING MACRON BELOW}
+
+which clearly shows what the constituent characters are.
+
 (fn CHAR &optional LAX)" t)
 (register-definition-prefixes "char-fold" '("char-fold-"))
 
@@ -4631,7 +4690,6 @@ For use inside Lisp programs, see also `c-macro-expansion'.
 
 ;;; Generated autoloads from progmodes/cmake-ts-mode.el
 
-(add-to-list 'auto-mode-alist '("\\(?:CMakeLists\\.txt\\|\\.cmake\\)\\'" . cmake-ts-mode))
 (autoload 'cmake-ts-mode "cmake-ts-mode" "\
 Major mode for editing CMake files, powered by tree-sitter.
 
@@ -5614,7 +5672,6 @@ with empty strings removed.
 
 ;;; Generated autoloads from progmodes/csharp-mode.el
 
-(add-to-list 'auto-mode-alist '("\\.cs\\'" . csharp-mode))
 (add-to-list 'auto-mode-alist '("\\.cs\\'" . csharp-mode))
 (autoload 'csharp-mode "csharp-mode" "\
 Major mode for editing Csharp code.
@@ -7990,7 +8047,6 @@ it is disabled.
 
 ;;; Generated autoloads from progmodes/dockerfile-ts-mode.el
 
-(add-to-list 'auto-mode-alist '("\\(?:Dockerfile\\(?:\\..*\\)?\\|\\.[Dd]ockerfile\\)\\'" . dockerfile-ts-mode))
 (autoload 'dockerfile-ts-mode "dockerfile-ts-mode" "\
 Major mode for editing Dockerfiles, powered by tree-sitter.
 
@@ -8671,9 +8727,9 @@ it is disabled.
 
 (defvar edebug-all-defs nil "\
 If non-nil, evaluating defining forms instruments for Edebug.
-This applies to `eval-defun', `eval-region', `eval-buffer', and
-`eval-current-buffer'.  `eval-region' is also called by
-`eval-last-sexp', and `eval-print-last-sexp'.
+This applies to `eval-defun', `eval-region' and `eval-buffer'.
+`eval-region' is also called by `eval-last-sexp', and
+`eval-print-last-sexp'.
 
 You can use the command `edebug-all-defs' to toggle the value of this
 variable.  You may wish to make it local to each buffer with
@@ -9134,7 +9190,7 @@ Turn on EDT Emulation." t)
 
 ;;; Generated autoloads from progmodes/eglot.el
 
-(push (purecopy '(eglot 1 9)) package--builtin-versions)
+(push (purecopy '(eglot 1 11)) package--builtin-versions)
 (autoload 'eglot "eglot" "\
 Start LSP server in support of PROJECT's buffers under MANAGED-MAJOR-MODE.
 
@@ -9172,7 +9228,7 @@ described in `eglot-server-programs', which see.
 LANGUAGE-ID is the language ID string to send to the server for
 MANAGED-MAJOR-MODE, which matters to a minority of servers.
 
-INTERACTIVE is t if called interactively.
+INTERACTIVE is ignored and provided for backward compatibility.
 
 (fn MANAGED-MAJOR-MODE PROJECT CLASS CONTACT LANGUAGE-ID &optional INTERACTIVE)" t)
 (autoload 'eglot-ensure "eglot" "\
@@ -9392,10 +9448,11 @@ it is disabled.
 (autoload 'elide-head "elide-head" "\
 Hide header material in buffer according to `elide-head-headers-to-hide'.
 
-The header is made invisible with an overlay.  With a prefix arg, show
-an elided material again.
+The header is made invisible with an overlay.  With a prefix
+argument ARG, show an elided material again.
 
-This is suitable as an entry on `find-file-hook' or appropriate mode hooks.
+This is suitable as an entry on `find-file-hook' or appropriate
+mode hooks.
 
 (fn &optional ARG)" t)
 (make-obsolete 'elide-head 'elide-head-mode "29.1")
@@ -10116,9 +10173,7 @@ then the server and full-name will be set to those values,
 whereas `erc-compute-port' and `erc-compute-nick' will be invoked
 for the values of the other parameters.
 
-When present, ID should be an opaque object used to identify the
-connection unequivocally.  This is rarely needed and not available
-interactively.
+See `erc-tls' for the meaning of ID.
 
 (fn &key (SERVER (erc-compute-server)) (PORT (erc-compute-port)) (NICK (erc-compute-nick)) (USER (erc-compute-user)) PASSWORD (FULL-NAME (erc-compute-full-name)) ID)" t)
 (defalias 'erc-select #'erc)
@@ -10133,6 +10188,7 @@ Non-interactively, it takes the keyword arguments
    (server (erc-compute-server))
    (port   (erc-compute-port))
    (nick   (erc-compute-nick))
+   (user   (erc-compute-user))
    password
    (full-name (erc-compute-full-name))
    client-certificate
@@ -10161,11 +10217,11 @@ Example usage:
              \\='(\"/home/bandali/my-cert.key\"
                \"/home/bandali/my-cert.crt\"))
 
-When present, ID should be an opaque object for identifying the
-connection unequivocally.  (In most cases, this would be a string or a
-symbol composed of letters from the Latin alphabet.)  This option is
-generally unneeded, however.  See info node `(erc) Connecting' for use
-cases.  Not available interactively.
+When present, ID should be a symbol or a string to use for naming
+the server buffer and identifying the connection unequivocally.
+See info node `(erc) Network Identifier' for details.  Like USER
+and CLIENT-CERTIFICATE, this parameter cannot be specified
+interactively.
 
 (fn &key (SERVER (erc-compute-server)) (PORT (erc-compute-port \\='ircs-u)) (NICK (erc-compute-nick)) (USER (erc-compute-user)) PASSWORD (FULL-NAME (erc-compute-full-name)) CLIENT-CERTIFICATE ID)" t)
 (autoload 'erc-handle-irc-url "erc" "\
@@ -14339,6 +14395,19 @@ Add the window configuration CONF to `gnus-buffer-configuration'.
 ;;; Generated autoloads from net/gnutls.el
 
 (register-definition-prefixes "gnutls" '("gnutls-" "open-gnutls-stream"))
+
+
+;;; Generated autoloads from progmodes/go-ts-mode.el
+
+(autoload 'go-ts-mode "go-ts-mode" "\
+Major mode for editing Go, powered by tree-sitter.
+
+(fn)" t)
+(autoload 'go-mod-ts-mode "go-ts-mode" "\
+Major mode for editing go.mod files, powered by tree-sitter.
+
+(fn)" t)
+(register-definition-prefixes "go-ts-mode" '("go-"))
 
 
 ;;; Generated autoloads from play/gomoku.el
@@ -18622,7 +18691,7 @@ Major mode for editing JSON, powered by tree-sitter.
 
 ;;; Generated autoloads from jsonrpc.el
 
-(push (purecopy '(jsonrpc 1 0 15)) package--builtin-versions)
+(push (purecopy '(jsonrpc 1 0 16)) package--builtin-versions)
 (register-definition-prefixes "jsonrpc" '("jsonrpc-"))
 
 
@@ -22310,7 +22379,7 @@ Coloring:
 
 ;;; Generated autoloads from org/org.el
 
-(push (purecopy '(org 9 6)) package--builtin-versions)
+(push (purecopy '(org 9 6 1)) package--builtin-versions)
 (autoload 'org-babel-do-load-languages "org" "\
 Load the languages defined in `org-babel-load-languages'.
 
@@ -23478,7 +23547,7 @@ uses `package-vc-heuristic-alist' to guess the backend.
 Note that by default, a VC package will be prioritized over a
 regular package, but it will not remove a VC package.
 
-(fn PACKAGE &optional NAME REV BACKEND)" t)
+(fn PACKAGE &optional REV BACKEND)" t)
 (autoload 'package-vc-checkout "package-vc" "\
 Clone the sources for PKG-DESC into DIRECTORY and visit that directory.
 Unlike `package-vc-install', this does not yet set up the package
@@ -24489,6 +24558,7 @@ Ignores leading comment characters.
 (autoload 'pp-emacs-lisp-code "pp" "\
 Insert SEXP into the current buffer, formatted as Emacs Lisp code.
 Use the `pp-max-width' variable to control the desired line length.
+Note that this could be slow for large SEXPs.
 
 (fn SEXP)")
 (register-definition-prefixes "pp" '("pp-"))
@@ -25075,7 +25145,7 @@ Open profile FILENAME.
 
 ;;; Generated autoloads from progmodes/project.el
 
-(push (purecopy '(project 0 9 3)) package--builtin-versions)
+(push (purecopy '(project 0 9 6)) package--builtin-versions)
 (autoload 'project-current "project" "\
 Return the project instance in DIRECTORY, defaulting to `default-directory'.
 
@@ -27298,6 +27368,13 @@ it is disabled.
 ;;; Generated autoloads from progmodes/ruby-mode.el
 
 (push (purecopy '(ruby-mode 1 2)) package--builtin-versions)
+(autoload 'ruby-base-mode "ruby-mode" "\
+Generic major mode for editing Ruby.
+
+This mode is intended to be inherited by concrete major modes.
+Currently there are `ruby-mode' and `ruby-ts-mode'.
+
+(fn)" t)
 (autoload 'ruby-mode "ruby-mode" "\
 Major mode for editing Ruby code.
 
@@ -27305,6 +27382,16 @@ Major mode for editing Ruby code.
 (add-to-list 'auto-mode-alist (cons (purecopy (concat "\\(?:\\.\\(?:" "rbw?\\|ru\\|rake\\|thor" "\\|jbuilder\\|rabl\\|gemspec\\|podspec" "\\)" "\\|/" "\\(?:Gem\\|Rake\\|Cap\\|Thor" "\\|Puppet\\|Berks\\|Brew" "\\|Vagrant\\|Guard\\|Pod\\)file" "\\)\\'")) 'ruby-mode))
 (dolist (name (list "ruby" "rbx" "jruby" "ruby1.9" "ruby1.8")) (add-to-list 'interpreter-mode-alist (cons (purecopy name) 'ruby-mode)))
 (register-definition-prefixes "ruby-mode" '("ruby-"))
+
+
+;;; Generated autoloads from progmodes/ruby-ts-mode.el
+
+(push (purecopy '(ruby-ts-mode 0 2)) package--builtin-versions)
+(autoload 'ruby-ts-mode "ruby-ts-mode" "\
+Major mode for editing Ruby, powered by tree-sitter.
+
+(fn)" t)
+(register-definition-prefixes "ruby-ts-mode" '("ruby-ts-"))
 
 
 ;;; Generated autoloads from ruler-mode.el
@@ -27331,6 +27418,15 @@ it is disabled.
 
 (fn &optional ARG)" t)
 (register-definition-prefixes "ruler-mode" '("ruler-"))
+
+
+;;; Generated autoloads from progmodes/rust-ts-mode.el
+
+(autoload 'rust-ts-mode "rust-ts-mode" "\
+Major mode for editing Rust, powered by tree-sitter.
+
+(fn)" t)
+(register-definition-prefixes "rust-ts-mode" '("rust-ts-mode-"))
 
 
 ;;; Generated autoloads from emacs-lisp/rx.el
@@ -29558,7 +29654,8 @@ is specified in the connection settings.
 Run PRODUCT interpreter as an inferior process.
 
 If buffer `*SQL*' exists but no process is running, make a new process.
-If buffer exists and a process is running, just switch to buffer `*SQL*'.
+If buffer exists and a process is running, just make sure buffer `*SQL*'
+is displayed.
 
 To specify the SQL product, prefix the call with
 \\[universal-argument].  To set the buffer name as well, prefix
@@ -30201,7 +30298,10 @@ Return the width of STRING in pixels.
 (fn STRING)")
 (autoload 'string-glyph-split "subr-x" "\
 Split STRING into a list of strings representing separate glyphs.
-This takes into account combining characters and grapheme clusters.
+This takes into account combining characters and grapheme clusters:
+if compositions are enabled, each sequence of characters composed
+on display into a single grapheme cluster is treated as a single
+indivisible unit.
 
 (fn STRING)")
 (autoload 'add-display-text-property "subr-x" "\
@@ -32385,7 +32485,6 @@ Mode for displaying and reprioritizing top priority Todo.
 
 ;;; Generated autoloads from textmodes/toml-ts-mode.el
 
-(add-to-list 'auto-mode-alist '("\\.toml\\'" . toml-ts-mode))
 (autoload 'toml-ts-mode "toml-ts-mode" "\
 Major mode for editing TOML, powered by tree-sitter.
 
@@ -32665,7 +32764,7 @@ Add archive file name handler to `file-name-handler-alist'." (when (and tramp-ar
 
 ;;; Generated autoloads from net/trampver.el
 
-(push (purecopy '(tramp 2 6 0 -1)) package--builtin-versions)
+(push (purecopy '(tramp 2 6 0 29 1)) package--builtin-versions)
 (register-definition-prefixes "trampver" '("tramp-"))
 
 
@@ -32773,6 +32872,21 @@ See info node `(transient)Modifying Existing Transients'.
 
 ;;; Generated autoloads from treesit.el
 
+(autoload 'treesit-install-language-grammar "treesit" "\
+Build and install the tree-sitter language grammar library for LANG.
+
+Interactively, if `treesit-language-source-alist' doesn't already
+have data for building the grammar for LANG, prompt for its
+repository URL and the C/C++ compiler to use.
+
+This command requires Git, a C compiler and (sometimes) a C++ compiler,
+and the linker to be installed and on PATH.  It also requires that the
+recipe for LANG exists in `treesit-language-source-alist'.
+
+See `exec-path' for the current path where Emacs looks for
+executable programs, such as the C/C++ compiler and linker.
+
+(fn LANG)" t)
 (register-definition-prefixes "treesit" '("treesit-"))
 
 
@@ -32989,8 +33103,6 @@ FRAC should be the inverse of the fractional value; for example, a value of
 
 ;;; Generated autoloads from progmodes/typescript-ts-mode.el
 
-(add-to-list 'auto-mode-alist '("\\.ts\\'" . typescript-ts-mode))
-(add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))
 (autoload 'typescript-ts-base-mode "typescript-ts-mode" "\
 Major mode for editing TypeScript.
 
@@ -33731,7 +33843,7 @@ is \"www.fsf.co.uk\".
 
 ;;; Generated autoloads from use-package/use-package.el
 
-(push (purecopy '(use-package 2 4 4)) package--builtin-versions)
+(push (purecopy '(use-package 2 4 5)) package--builtin-versions)
 
 
 ;;; Generated autoloads from use-package/use-package-bind-key.el
@@ -34338,7 +34450,8 @@ On a distributed version control system, this runs a \"pull\"
 operation on the current branch, prompting for the precise
 command if required.  Optional prefix ARG non-nil forces a prompt
 for the VCS command to run.  If this is successful, a \"push\"
-operation will then be done.
+operation will then be done.  This is supported only in backends
+where the pull operation returns a process.
 
 On a non-distributed version control system, this signals an error.
 It also signals an error in a Bazaar bound branch.
@@ -36748,7 +36861,7 @@ If LIMIT is non-nil, then do not consider characters beyond LIMIT.
 
 ;;; Generated autoloads from progmodes/xref.el
 
-(push (purecopy '(xref 1 6 0)) package--builtin-versions)
+(push (purecopy '(xref 1 6 1)) package--builtin-versions)
 (autoload 'xref-find-backend "xref")
 (define-obsolete-function-alias 'xref-pop-marker-stack #'xref-go-back "29.1")
 (autoload 'xref-go-back "xref" "\
@@ -36912,6 +37025,15 @@ a new xwidget-webkit session, otherwise use an existing session.
 
 (fn BOOKMARK)")
 (register-definition-prefixes "xwidget" '("xwidget-"))
+
+
+;;; Generated autoloads from textmodes/yaml-ts-mode.el
+
+(autoload 'yaml-ts-mode "yaml-ts-mode" "\
+Major mode for editing YAML, powered by tree-sitter.
+
+(fn)" t)
+(register-definition-prefixes "yaml-ts-mode" '("yaml-ts-mode--"))
 
 
 ;;; Generated autoloads from yank-media.el

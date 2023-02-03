@@ -1,6 +1,6 @@
 ;;; use-package-core.el --- A configuration macro for simplifying your .emacs  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2012-2022 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2023 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@newartisans.com>
 ;; Maintainer: John Wiegley <johnw@newartisans.com>
@@ -65,7 +65,7 @@
   :link '(custom-manual "(use-package) Top")
   :version "29.1")
 
-(defconst use-package-version "2.4.4"
+(defconst use-package-version "2.4.5"
   "This version of `use-package'.")
 
 (defcustom use-package-keywords

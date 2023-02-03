@@ -1,6 +1,6 @@
 /* Display generation from window structure and buffer text.
 
-Copyright (C) 1985-2022  Free Software Foundation, Inc.
+Copyright (C) 1985-2023 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -6281,13 +6281,16 @@ static ptrdiff_t
 string_buffer_position (Lisp_Object string, ptrdiff_t around_charpos)
 {
   const int MAX_DISTANCE = 1000;
+  ptrdiff_t forward_limit = min (around_charpos + MAX_DISTANCE, ZV);
   ptrdiff_t found = string_buffer_position_lim (string, around_charpos,
-						around_charpos + MAX_DISTANCE,
-						false);
+						forward_limit, false);
 
   if (!found)
-    found = string_buffer_position_lim (string, around_charpos,
-					around_charpos - MAX_DISTANCE, true);
+    {
+      ptrdiff_t backward_limit = max (around_charpos - MAX_DISTANCE, BEGV);
+      found = string_buffer_position_lim (string, around_charpos,
+					  backward_limit, true);
+    }
   return found;
 }
 
@@ -14268,12 +14271,14 @@ redisplay_tab_bar (struct frame *f)
 	frame_default_tab_bar_height = new_height;
     }
 
-  /* If new_height or new_nrows indicate that we need to enlarge the
-     tab-bar window, we can return right away.  */
+  /* If new_height or new_nrows indicate that we need to enlarge or
+     shrink the tab-bar window, we can return right away.  */
   if (new_nrows > f->n_tab_bar_rows
       || (EQ (Vauto_resize_tab_bars, Qgrow_only)
 	  && !f->minimize_tab_bar_window_p
-	  && new_height > WINDOW_PIXEL_HEIGHT (w)))
+	  && new_height > WINDOW_PIXEL_HEIGHT (w))
+      || (! EQ (Vauto_resize_tab_bars, Qgrow_only)
+	  && new_height < WINDOW_PIXEL_HEIGHT (w)))
     {
       if (FRAME_TERMINAL (f)->change_tab_bar_height_hook)
 	FRAME_TERMINAL (f)->change_tab_bar_height_hook (f, new_height);
@@ -16835,6 +16840,13 @@ redisplay_internal (void)
 		/* Only GC scrollbars when we redisplay the whole frame.  */
 		= f->redisplay || !REDISPLAY_SOME_P ();
 	      bool f_redisplay_flag = f->redisplay;
+
+	      /* The X error handler may have deleted that frame
+		 before we went back to retry_frame.  This must come
+		 before any accesses to f->terminal.  */
+	      if (!FRAME_LIVE_P (f))
+		continue;
+
 	      /* Mark all the scroll bars to be removed; we'll redeem
 		 the ones we want when we redisplay their windows.  */
 	      if (gcscrollbars && FRAME_TERMINAL (f)->condemn_scroll_bars_hook)
@@ -16842,7 +16854,6 @@ redisplay_internal (void)
 
 	      if (FRAME_VISIBLE_P (f) && !FRAME_OBSCURED_P (f))
 		{
-
 		  /* Don't allow freeing images and faces for this
 		     frame as long as the frame's update wasn't
 		     completed.  This prevents crashes when some Lisp
@@ -19428,6 +19439,13 @@ redisplay_window (Lisp_Object window, bool just_this_one_p)
 	       y += row->height, ++row)
 	    blank_row (w, row, y);
 	  goto finish_scroll_bars;
+	}
+      else if (minibuf_level >= 1)
+	{
+	  /* We could have a message produced by set-minibuffer-message
+	     displayed in the mini-window as an overlay, so resize the
+	     mini-window if needed.  */
+	  resize_mini_window (w, false);
 	}
 
       clear_glyph_matrix (w->desired_matrix);
@@ -23304,8 +23322,9 @@ extend_face_to_end_of_line (struct it *it)
 	  it->avoid_cursor_p = true;
 	  it->object = Qnil;
 
-	  const int stretch_ascent = (((it->ascent + it->descent)
-	                               * FONT_BASE (font)) / FONT_HEIGHT (font));
+	  const int stretch_height = it->ascent + it->descent;
+	  const int stretch_ascent =
+	    (stretch_height * FONT_BASE (font)) / FONT_HEIGHT (font);
 
 	  if (indicator_column >= 0
 	      && indicator_column > it->current_x
@@ -23325,8 +23344,7 @@ extend_face_to_end_of_line (struct it *it)
 	      if (stretch_width > 0)
 		{
 		  append_stretch_glyph (it, Qnil, stretch_width,
-		                        it->ascent + it->descent,
-		                        stretch_ascent);
+		                        stretch_height, stretch_ascent);
 		}
 
 	      /* Generate the glyph indicator only if
@@ -23334,6 +23352,8 @@ extend_face_to_end_of_line (struct it *it)
 	      if (it->current_x < indicator_column)
 		{
 		  const int save_face_id = it->face_id;
+		  const int save_ascent = it->ascent;
+		  const int save_descent = it->descent;
 		  it->char_to_display
 		    = XFIXNAT (Vdisplay_fill_column_indicator_character);
 		  it->face_id
@@ -23341,6 +23361,8 @@ extend_face_to_end_of_line (struct it *it)
 		                   0, extend_face_id);
 		  PRODUCE_GLYPHS (it);
 		  it->face_id = save_face_id;
+		  it->ascent = save_ascent;
+		  it->descent = save_descent;
 		}
 	    }
 
@@ -23354,8 +23376,7 @@ extend_face_to_end_of_line (struct it *it)
 		{
 		  clear_position (it);
 		  append_stretch_glyph (it, Qnil, stretch_width,
-					it->ascent + it->descent,
-					stretch_ascent);
+					stretch_height, stretch_ascent);
 		}
 	    }
 

@@ -1,6 +1,6 @@
 ;;; window.el --- GNU Emacs window commands aside from those written in C  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1985-2023 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: internal
@@ -2162,17 +2162,14 @@ the font."
     (let* ((window-width (window-body-width window t))
 	   (font-width (window-font-width window face))
 	   (ncols (- (/ window-width font-width)
-                     (ceiling (line-number-display-width 'columns)))))
+                     (ceiling (line-number-display-width 'columns))))
+           (fringes (window-fringes window))
+           (lfringe (car fringes))
+           (rfringe (nth 1 fringes)))
       (if (and (display-graphic-p)
 	       overflow-newline-into-fringe
-               (not
-                (or (eq left-fringe-width 0)
-                    (and (null left-fringe-width)
-                         (= (frame-parameter nil 'left-fringe) 0))))
-               (not
-                (or (eq right-fringe-width 0)
-                    (and (null right-fringe-width)
-                         (= (frame-parameter nil 'right-fringe) 0)))))
+               (not (eq lfringe 0))
+               (not (eq rfringe 0)))
 	  ncols
         ;; FIXME: This should remove 1 more column when there are no
         ;; fringes, lines are truncated, and the window is hscrolled,
@@ -5673,8 +5670,11 @@ the original point in both windows."
 
 (defun split-window-below (&optional size window-to-split)
   "Split WINDOW-TO-SPLIT into two windows, one above the other.
-WINDOW-TO-SPLIT is above.  The newly split-off window is
-below and displays the same buffer.  Return the new window.
+WINDOW-TO-SPLIT defaults to the selected window if omitted or nil.
+The newly created window will be below WINDOW-TO-SPLIT and will show
+the same buffer as WINDOW-TO-SPLIT, if it is a live window, else the
+buffer shown in the WINDOW-TO-SPLIT's frame's selected window.
+Return the new window.
 
 If optional argument SIZE is omitted or nil, both windows get the
 same height, or close to it.  If SIZE is positive, the upper
@@ -5694,7 +5694,9 @@ amount of redisplay; this is convenient on slow terminals."
       ;; `split-window' would not signal an error here.
       (error "Size of new window too small"))
     (setq new-window (split-window window-to-split size))
-    (unless split-window-keep-point
+    (when (and (null split-window-keep-point)
+               (or (null window-to-split)
+                   (eq window-to-split (selected-window))))
       (with-current-buffer (window-buffer window-to-split)
 	;; Use `save-excursion' around vertical movements below
 	;; (Bug#10971).  Note: When WINDOW-TO-SPLIT's buffer has a
@@ -5735,8 +5737,11 @@ handled as in `split-window-below'."
 
 (defun split-window-right (&optional size window-to-split)
   "Split WINDOW-TO-SPLIT into two side-by-side windows.
-WINDOW-TO-SPLIT is on the left.  The newly split-off window is on
-the right and displays the same buffer.  Return the new window.
+WINDOW-TO-SPLIT defaults to the selected window if omitted or nil.
+The newly created window will be to the right of WINDOW-TO-SPLIT and
+will show the same buffer as WINDOW-TO-SPLIT, if it is a live window,
+else the buffer shown in the WINDOW-TO-SPLIT's frame's selected window.
+Return the new window.
 
 If optional argument SIZE is omitted or nil, both windows get the
 same width, or close to it.  If SIZE is positive, the left-hand
@@ -10562,28 +10567,26 @@ displaying that processes's buffer."
 (define-key ctl-x-4-map "4" 'other-window-prefix)
 
 (defvar-keymap other-window-repeat-map
-  :doc "Keymap to repeat `other-window' key sequences.
-Used in `repeat-mode'."
+  :doc "Keymap to repeat `other-window'.  Used in `repeat-mode'."
+  :repeat t
   "o" #'other-window
   "O" (lambda ()
         (interactive)
         (setq repeat-map 'other-window-repeat-map)
         (other-window -1)))
-(put 'other-window 'repeat-map 'other-window-repeat-map)
 
 (defvar-keymap resize-window-repeat-map
   :doc "Keymap to repeat window resizing commands.
+Repeatable commands are `enlarge-window' and `shrink-window',
+and also `enlarge-window-horizontally' and `shrink-window-horizontally'.
 Used in `repeat-mode'."
+  :repeat t
   ;; Standard keys:
   "^" #'enlarge-window
   "}" #'enlarge-window-horizontally
   "{" #'shrink-window-horizontally
   ;; Additional keys:
   "v" #'shrink-window)
-(put 'enlarge-window 'repeat-map 'resize-window-repeat-map)
-(put 'enlarge-window-horizontally 'repeat-map 'resize-window-repeat-map)
-(put 'shrink-window-horizontally 'repeat-map 'resize-window-repeat-map)
-(put 'shrink-window 'repeat-map 'resize-window-repeat-map)
 
 (defvar-keymap window-prefix-map
   :doc "Keymap for subcommands of \\`C-x w'."

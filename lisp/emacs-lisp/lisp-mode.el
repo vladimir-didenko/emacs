@@ -1,6 +1,6 @@
 ;;; lisp-mode.el --- Lisp mode, and its idiosyncratic commands  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1985-1986, 1999-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1985-1986, 1999-2023 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: lisp, languages
@@ -182,6 +182,7 @@ to a package-local <package>-loaddefs.el file.")
 ;; CL
 (put 'defconstant 'doc-string-elt 3)
 (put 'defparameter 'doc-string-elt 3)
+(put 'defstruct 'doc-string-elt 2)
 
 (defvar lisp-doc-string-elt-property 'doc-string-elt
   "The symbol property that holds the docstring position info.")

@@ -1,6 +1,6 @@
 ;;; ox-odt.el --- OpenDocument Text Exporter for Org Mode -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2010-2022 Free Software Foundation, Inc.
+;; Copyright (C) 2010-2023 Free Software Foundation, Inc.
 
 ;; Author: Jambunathan K <kjambunathan at gmail dot com>
 ;; Keywords: outlines, hypermedia, calendar, wp
@@ -2935,7 +2935,7 @@ contextual information."
                       (trailing (and (string-match (rx (1+ blank) eos) output)
                                      (match-string 0 output))))
                   ;; Unfill, retaining leading/trailing space.
-                  (let ((fill-column (point-max)))
+                  (let ((fill-column most-positive-fixnum))
                     (fill-region (point-min) (point-max)))
                   (concat leading (buffer-string) trailing))))))
     ;; Return value.

@@ -1,6 +1,6 @@
 ;;; dockerfile-ts-mode.el --- tree-sitter support for Dockerfiles  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2022 Free Software Foundation, Inc.
+;; Copyright (C) 2022-2023 Free Software Foundation, Inc.
 
 ;; Author     : Randy Taylor <dev@rjt.dev>
 ;; Maintainer : Randy Taylor <dev@rjt.dev>
@@ -51,8 +51,26 @@
      ((parent-is "expose_instruction") (nth-sibling 1) 0)
      ((parent-is "label_instruction") (nth-sibling 1) 0)
      ((parent-is "shell_command") first-sibling 0)
-     ((parent-is "string_array") first-sibling 1)))
+     ((parent-is "string_array") first-sibling 1)
+     ((dockerfile-ts-mode--line-continuation-p) dockerfile-ts-mode--line-continuation-anchor 0)))
   "Tree-sitter indent rules.")
+
+(defun dockerfile-ts-mode--line-continuation-p ()
+  "Return t if the current node is a line continuation node."
+  (lambda (node _ _ &rest _)
+    (string= (treesit-node-type node) "\n")))
+
+(defun dockerfile-ts-mode--line-continuation-anchor (_ _ &rest _)
+  "This anchor is used to align any nodes that are part of a line
+continuation to the previous entry."
+  (save-excursion
+    (forward-line -1)
+    (let ((prev-node (treesit-node-at (point))))
+      (if (string= (treesit-node-type prev-node) "\\\n")
+          (back-to-indentation)
+        (forward-word)
+        (forward-char))
+      (+ 1 (- (point) (pos-bol))))))
 
 (defvar dockerfile-ts-mode--keywords
   '("ADD" "ARG" "AS" "CMD" "COPY" "CROSS_BUILD" "ENTRYPOINT" "ENV"
@@ -133,12 +151,6 @@ the subtrees."
       `((,name . ,marker))))))
 
 ;;;###autoload
-(add-to-list 'auto-mode-alist
-             ;; NOTE: We can't use `rx' here, as it breaks bootstrap.
-             '("\\(?:Dockerfile\\(?:\\..*\\)?\\|\\.[Dd]ockerfile\\)\\'"
-               . dockerfile-ts-mode))
-
-;;;###autoload
 (define-derived-mode dockerfile-ts-mode prog-mode "Dockerfile"
   "Major mode for editing Dockerfiles, powered by tree-sitter."
   :group 'dockerfile
@@ -171,6 +183,12 @@ the subtrees."
                   (bracket delimiter error operator)))
 
     (treesit-major-mode-setup)))
+
+(if (treesit-ready-p 'dockerfile)
+    (add-to-list 'auto-mode-alist
+                 ;; NOTE: We can't use `rx' here, as it breaks bootstrap.
+                 '("\\(?:Dockerfile\\(?:\\..*\\)?\\|\\.[Dd]ockerfile\\)\\'"
+                   . dockerfile-ts-mode)))
 
 (provide 'dockerfile-ts-mode)
 

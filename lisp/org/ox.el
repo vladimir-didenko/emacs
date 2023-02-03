@@ -1,6 +1,6 @@
 ;;; ox.el --- Export Framework for Org Mode          -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2012-2022 Free Software Foundation, Inc.
+;; Copyright (C) 2012-2023 Free Software Foundation, Inc.
 
 ;; Author: Nicolas Goaziou <mail@nicolasgoaziou.fr>
 ;; Maintainer: Nicolas Goaziou <mail@nicolasgoaziou.fr>
@@ -3040,7 +3040,7 @@ Return code as a string."
                ;; This way, we will be able to retrieve its export
                ;; options when calling
                ;; `org-export--get-subtree-options'.
-               (backward-char)
+               (when (bolp) (backward-char))
 	       (narrow-to-region (point) (point-max))))
         ;; Initialize communication channel with original buffer
         ;; attributes, unavailable in its copy.
@@ -4612,12 +4612,17 @@ If LINK refers to a remote resource, modify it to point to a local
 downloaded copy.  Otherwise, return unchanged LINK."
   (when (org-export-link-remote-p link)
     (let* ((local-path (org-export-link--remote-local-copy link)))
-      (setcdr link
-              (thread-first (cadr link)
-                            (plist-put :type "file")
-                            (plist-put :path local-path)
-                            (plist-put :raw-link (concat "file:" local-path))
-                            list))))
+      (if local-path
+          (setcdr link
+                  (thread-first (cadr link)
+                                (plist-put :type "file")
+                                (plist-put :path local-path)
+                                (plist-put :raw-link (concat "file:" local-path))
+                                list))
+        (display-warning
+         '(org export)
+         (format "unable to obtain local copy of %s"
+                 (org-element-property :raw-link link))))))
   link)
 
 ;;;; For References
@@ -4753,23 +4758,27 @@ objects of the same type."
      (let ((counter 0))
        ;; Increment counter until ELEMENT is found again.
        (org-element-map (plist-get info :parse-tree)
-	   (or types (org-element-type element))
+	   (or (and types (cons (org-element-type element) types))
+               (org-element-type element))
 	 (lambda (el)
            (let ((cached (org-element-property :org-export--counter el)))
 	     (cond
 	      ((eq element el) (1+ counter))
               ;; Use cached result.
-              ((and cached (equal predicate (car cached)))
-               (cdr cached))
+              ((and cached
+                    (equal predicate (car cached))
+                    (equal types (cadr cached)))
+               (setq counter (nth 2 cached))
+               nil)
 	      ((not predicate)
                (cl-incf counter)
                (org-element-put-property
-                el :org-export--counter (cons predicate counter))
+                el :org-export--counter (list predicate types counter))
                nil)
 	      ((funcall predicate el info)
                (cl-incf counter)
                (org-element-put-property
-                el :org-export--counter (cons predicate counter))
+                el :org-export--counter (list predicate types counter))
                nil))))
 	 info 'first-match)))))
 
@@ -6398,7 +6407,7 @@ them."
      ("nb" :default "Innhold")
      ("nn" :default "Innhald")
      ("pl" :html "Spis tre&#x015b;ci")
-     ("pt_BR" :html "&Iacute;ndice" :utf8 "Índice" :ascii "Indice")
+     ("pt_BR" :html "&Iacute;ndice" :utf-8 "Índice" :ascii "Indice")
      ("ro" :default "Cuprins")
      ("ru" :html "&#1057;&#1086;&#1076;&#1077;&#1088;&#1078;&#1072;&#1085;&#1080;&#1077;"
       :utf-8 "Содержание")
@@ -6591,14 +6600,14 @@ see.
 Optional argument POST-PROCESS is a function which should accept
 no argument.  It is always called within the current process,
 from BUFFER, with point at its beginning.  Export back-ends can
-use it to set a major mode there, e.g,
+use it to set a major mode there, e.g.,
 
   (defun org-latex-export-as-latex
     (&optional async subtreep visible-only body-only ext-plist)
     (interactive)
     (org-export-to-buffer \\='latex \"*Org LATEX Export*\"
       async subtreep visible-only body-only ext-plist
-      #'LaTeX-mode))
+      #\\='LaTeX-mode))
 
 When expressed as an anonymous function, using `lambda',
 POST-PROCESS needs to be quoted.
@@ -6748,7 +6757,6 @@ Return file name as a string."
 	  (cond
 	   (pub-dir (concat (file-name-as-directory pub-dir)
 			    (file-name-nondirectory base-name)))
-	   ((file-name-absolute-p base-name) base-name)
 	   (t base-name))))
     ;; If writing to OUTPUT-FILE would overwrite original file, append
     ;; EXTENSION another time to final name.

@@ -1,6 +1,6 @@
 /* Buffer manipulation primitives for GNU Emacs.
 
-Copyright (C) 1985-2022  Free Software Foundation, Inc.
+Copyright (C) 1985-2023 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -525,14 +525,14 @@ get_truename_buffer (register Lisp_Object filename)
   return Qnil;
 }
 
-/* Run buffer-list-update-hook if Vrun_hooks is non-nil, and BUF is NULL
-   or does not have buffer hooks inhibited.  BUF is NULL when called by
-   make-indirect-buffer, since it does not inhibit buffer hooks.  */
+/* Run buffer-list-update-hook if Vrun_hooks is non-nil and BUF does
+   not have buffer hooks inhibited.  */
 
 static void
 run_buffer_list_update_hook (struct buffer *buf)
 {
-  if (! (NILP (Vrun_hooks) || (buf && buf->inhibit_buffer_hooks)))
+  eassert (buf);
+  if (! (NILP (Vrun_hooks) || buf->inhibit_buffer_hooks))
     call1 (Vrun_hooks, Qbuffer_list_update_hook);
 }
 
@@ -907,7 +907,7 @@ does not run the hooks `kill-buffer-hook',
       set_buffer_internal_1 (old_b);
     }
 
-  run_buffer_list_update_hook (NULL);
+  run_buffer_list_update_hook (b);
 
   return buf;
 }
@@ -1757,6 +1757,7 @@ other_buffer_safely (Lisp_Object buffer)
     {
       AUTO_STRING (scratch, "*scratch*");
       buf = Fget_buffer_create (scratch, Qnil);
+      Fset_buffer_major_mode (buf);
     }
   return buf;
 }

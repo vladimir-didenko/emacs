@@ -1,6 +1,6 @@
 ;;; font-lock.el --- Electric font lock mode  -*- lexical-binding:t -*-
 
-;; Copyright (C) 1992-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1992-2023 Free Software Foundation, Inc.
 
 ;; Author: Jamie Zawinski
 ;;	Richard Stallman
@@ -1183,7 +1183,7 @@ This function is the default `font-lock-fontify-region-function'."
            (setq font-lock-syntactically-fontified end))
          (font-lock-fontify-syntactic-keywords-region start end)))
      (unless font-lock-keywords-only
-       (funcall font-lock-fontify-syntactically-function beg end loudly))
+       (font-lock-fontify-syntactically-region beg end loudly))
      (font-lock-fontify-keywords-region beg end loudly)
      `(jit-lock-bounds ,beg . ,end))))
 
@@ -1530,6 +1530,12 @@ START should be at the beginning of a line."
 
 (defvar font-lock-comment-end-skip nil
   "If non-nil, Font Lock mode uses this instead of `comment-end-skip'.")
+
+(defun font-lock-fontify-syntactically-region (beg end &optional loudly)
+  "Syntactically fontify the text between BEG and END.
+If LOUDLY is non-nil, print status messages while fontifying.
+This works by calling `font-lock-fontify-syntactically-function'."
+  (funcall font-lock-fontify-syntactically-function beg end loudly))
 
 (defun font-lock-default-fontify-syntactically (start end &optional loudly)
   "Put proper face on each string and comment between START and END.
@@ -2073,6 +2079,12 @@ as the constructs of Haddock, Javadoc and similar systems."
   "Font Lock mode face used to highlight preprocessor directives."
   :group 'font-lock-faces)
 
+(defface font-lock-regexp-face
+  '((t :inherit font-lock-string-face))
+  "Font Lock mode face used to highlight regexp literals."
+  :group 'font-lock-faces
+  :version "29.1")
+
 (defface font-lock-regexp-grouping-backslash
   '((t :inherit bold))
   "Font Lock mode face for backslashes in Lisp regexp grouping constructs."
@@ -2110,7 +2122,7 @@ For example, the declaration and use of fields in a struct."
 
 (defface font-lock-punctuation-face
   '((t nil))
-  "Font Lock mode face used to highlight punctuation."
+  "Font Lock mode face used to highlight punctuation characters."
   :group 'font-lock-faces
   :version "29.1")
 
@@ -2122,7 +2134,9 @@ For example, the declaration and use of fields in a struct."
 
 (defface font-lock-delimiter-face
   '((t :inherit font-lock-punctuation-face))
-  "Font Lock mode face used to highlight delimiters."
+  "Font Lock mode face used to highlight delimiters.
+What exactly is a delimiter depends on the major mode, but usually
+these are characters like comma, colon, and semi-colon."
   :group 'font-lock-faces
   :version "29.1")
 

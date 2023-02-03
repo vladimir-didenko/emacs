@@ -1,6 +1,6 @@
 ;;; cc-vars.el --- user customization variables for CC Mode -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985, 1987, 1992-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1985, 1987, 1992-2023 Free Software Foundation, Inc.
 
 ;; Authors:    2002- Alan Mackenzie
 ;;             1998- Martin Stjernholm
@@ -1609,8 +1609,7 @@ as a type name.")
   :type 'c-extra-types-widget
   :group 'c)
 
-(defcustom objc-font-lock-extra-types
-  (list (concat "[" c-upper "]\\sw*[" c-lower "]\\sw*"))
+(defcustom objc-font-lock-extra-types nil
   (c-make-font-lock-extra-types-blurb "ObjC" "objc-mode" (concat
 "For example, a value of (\"[" c-upper "]\\\\sw*[" c-lower "]\\\\sw*\") means
 capitalized words are treated as type names (the requirement for a

@@ -1,6 +1,6 @@
 /* xfaces.c -- "Face" primitives.
 
-Copyright (C) 1993-1994, 1998-2022 Free Software Foundation, Inc.
+Copyright (C) 1993-1994, 1998-2023 Free Software Foundation, Inc.
 
 This file is part of GNU Emacs.
 
@@ -2780,8 +2780,7 @@ merge_face_ref (struct window *w,
 	      else if (EQ (keyword, QCstipple))
 		{
 #if defined (HAVE_WINDOW_SYSTEM)
-		  Lisp_Object pixmap_p = Fbitmap_spec_p (value);
-		  if (!NILP (pixmap_p))
+		  if (NILP (value) || !NILP (Fbitmap_spec_p (value)))
 		    to[LFACE_STIPPLE_INDEX] = value;
 		  else
 		    err = true;
@@ -6012,7 +6011,6 @@ realize_non_ascii_face (struct frame *f, Lisp_Object font_object,
 
   return face;
 }
-#endif	/* HAVE_WINDOW_SYSTEM */
 
 /* Remove the attribute at INDEX from the font object if SYMBOL
    appears in `font-fallback-ignored-attributes'.  */
@@ -6031,6 +6029,7 @@ font_maybe_unset_attribute (Lisp_Object font_object,
 	ASET (font_object, index, Qnil);
     }
 }
+#endif /* HAVE_WINDOW_SYSTEM */
 
 /* Realize the fully-specified face with attributes ATTRS in face
    cache CACHE for ASCII characters.  Do it for GUI frame CACHE->f.
@@ -7280,7 +7279,7 @@ syms_of_xfaces (void)
   DEFVAR_BOOL ("face-filters-always-match", face_filters_always_match,
     doc: /* Non-nil means that face filters are always deemed to match.
 This variable is intended for use only by code that evaluates
-the "specifity" of a face specification and should be let-bound
+the "specificity" of a face specification and should be let-bound
 only for this purpose.  */);
 
   DEFVAR_LISP ("face--new-frame-defaults", Vface_new_frame_defaults,

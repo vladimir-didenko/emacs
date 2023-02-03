@@ -1,6 +1,6 @@
 ;;; tramp-archive-tests.el --- Tests of file archive access  -*- lexical-binding:t -*-
 
-;; Copyright (C) 2017-2022 Free Software Foundation, Inc.
+;; Copyright (C) 2017-2023 Free Software Foundation, Inc.
 
 ;; Author: Michael Albinus <michael.albinus@gmx.de>
 
@@ -694,6 +694,7 @@ This tests also `access-file', `file-readable-p' and `file-regular-p'."
 	  ;; Symlink.
 	  (should (file-exists-p tmp-name2))
 	  (should (file-symlink-p tmp-name2))
+	  (should (file-regular-p tmp-name2))
 	  (setq attr (file-attributes tmp-name2))
 	  (should (string-equal (car attr) (file-name-nondirectory tmp-name1)))
 
@@ -784,12 +785,14 @@ This tests also `file-executable-p', `file-writable-p' and `set-file-modes'."
     (unwind-protect
 	(progn
 	  (should (file-exists-p tmp-name1))
+	  (should (file-regular-p tmp-name1))
 	  (should (string-equal tmp-name1 (file-truename tmp-name1)))
 	  ;; `make-symbolic-link' is not implemented.
 	  (should-error
 	   (make-symbolic-link tmp-name1 tmp-name2)
 	   :type 'file-error)
 	  (should (file-symlink-p tmp-name2))
+	  (should (file-regular-p tmp-name2))
 	  (should
 	   (string-equal
 	    ;; This is "/foo.txt".

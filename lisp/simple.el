@@ -1,6 +1,6 @@
 ;;; simple.el --- basic editing commands for Emacs  -*- lexical-binding: t -*-
 
-;; Copyright (C) 1985-1987, 1993-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1985-1987, 1993-2023 Free Software Foundation, Inc.
 
 ;; Maintainer: emacs-devel@gnu.org
 ;; Keywords: internal
@@ -2207,15 +2207,39 @@ to get different commands to edit and resubmit."
   "Predicate to use to determine which commands to include when completing.
 If it's nil, include all the commands.
 If it's a function, it will be called with two parameters: the
-symbol of the command and a buffer.  The predicate should return
-non-nil if the command should be present when doing \\`M-x TAB'
-in that buffer."
+symbol of the command and the current buffer.  The predicate should
+return non-nil if the command should be considered as a completion
+candidate for \\`M-x' in that buffer.
+
+Several predicate functions suitable for various optional behaviors
+are available:
+
+  `command-completion-default-include-p'
+         This excludes from completion candidates those commands
+         which have been marked specific to modes other than the
+         current buffer's mode.  Commands that are not specific
+         to any mode are included.
+
+  `command-completion-using-modes-p'
+         This includes in completion candidates only commands
+         marked as specific to the current buffer's mode.
+
+  `command-completion-using-modes-and-keymaps-p'
+         This includes commands marked as specific to the current
+         buffer's modes and commands that have keybindings in the
+         current buffer's active local keymaps.  It also includes
+         several commands, like Customize commands, which should
+         always be available."
   :version "28.1"
   :group 'completion
   :type '(choice (const :tag "Don't exclude any commands" nil)
                  (const :tag "Exclude commands irrelevant to current buffer's mode"
                         command-completion-default-include-p)
-                 (function :tag "Other function")))
+                 (const :tag "Include only commands relevant to current buffer's mode"
+                        command-completion-using-modes-p)
+                 (const :tag "Commands relevant to current buffer's mode or bound in its keymaps"
+                        command-completion-using-modes-and-keymaps-p)
+                 (function :tag "Other predicate function")))
 
 (defun execute-extended-command-cycle ()
   "Choose the next version of the extended command predicates.
@@ -2401,6 +2425,35 @@ or (if one of MODES is a minor mode), if it is switched on in BUFFER."
                         #'eq)
       (seq-intersection modes global-minor-modes #'eq)))
 
+(defun command-completion-using-modes-and-keymaps-p (symbol buffer)
+  "Return non-nil if SYMBOL is marked for BUFFER's mode or bound in its keymaps."
+  (with-current-buffer buffer
+      (let ((keymaps
+             ;; The major mode's keymap and any active minor modes.
+             (nconc
+              (and (current-local-map) (list (current-local-map)))
+              (mapcar
+               #'cdr
+               (seq-filter
+                (lambda (elem)
+                  (symbol-value (car elem)))
+                minor-mode-map-alist)))))
+        (or (command-completion-using-modes-p symbol buffer)
+            ;; Include commands that are bound in a keymap in the
+            ;; current buffer.
+            (and (where-is-internal symbol keymaps)
+                 ;; But not if they have a command predicate that
+                 ;; says that they shouldn't.  (This is the case
+                 ;; for `ignore' and `undefined' and similar
+                 ;; commands commonly found in keymaps.)
+                 (or (null (get symbol 'completion-predicate))
+                     (funcall (get symbol 'completion-predicate)
+                              symbol buffer)))
+            ;; Include customize-* commands (do we need a list of such
+            ;; "always available" commands? customizable?)
+            (string-match-p "customize-" (symbol-name symbol))))))
+
+
 (defun command-completion-button-p (category buffer)
   "Return non-nil if there's a button of CATEGORY at point in BUFFER."
   (with-current-buffer buffer
@@ -2502,7 +2555,11 @@ Also see `suggest-key-bindings'."
 (defun execute-extended-command (prefixarg &optional command-name typed)
   "Read a command name, then read the arguments and call the command.
 To pass a prefix argument to the command you are
-invoking, give a prefix argument to `execute-extended-command'."
+invoking, give a prefix argument to `execute-extended-command'.
+
+This command provides completion when reading the command name.
+Which completion candidates are shown can be controlled by
+customizing `read-extended-command-predicate'."
   (declare (interactive-only command-execute))
   ;; FIXME: Remember the actual text typed by the user before completion,
   ;; so that we don't later on suggest the same shortening.
@@ -2929,11 +2986,12 @@ that was current when the minibuffer was activated."
                       (window-buffer (minibuffer-selected-window))))
 
 (defun goto-history-element (nabs)
-  "Puts element of the minibuffer history in the minibuffer.
-The argument NABS specifies the absolute history position in
-descending order, where 0 means the current element and a
-positive number N means the Nth previous element.  NABS being a
-negative number -N means the Nth entry of \"future history.\""
+  "Insert into the minibuffer the element of minibuffer history specified by NABS.
+Interactively, NABS is the prefix numeric argument, and defaults to 1.
+It specifies the absolute history position in descending order,
+where 0 means the current element and a positive number N means
+the Nth previous element.  NABS that is a negative number -N means
+the Nth entry of \"future history.\""
   (interactive "p")
   (when (and (not minibuffer-default-add-done)
 	     (functionp minibuffer-default-add-function)
@@ -2989,17 +3047,17 @@ negative number -N means the Nth entry of \"future history.\""
     (goto-char (or minibuffer-temporary-goal-position (point-max)))))
 
 (defun next-history-element (n)
-  "Puts next element of the minibuffer history in the minibuffer.
-With argument N, it uses the Nth following element.  The position
-in the history can go beyond the current position and invoke \"future
-history.\""
+  "Insert into the minibuffer the Nth next element of minibuffer history.
+Interactively, N is the prefix numeric argument and defaults to 1.
+The value N can go beyond the current position in the minibuffer
+history,  and invoke \"future history.\""
   (interactive "p")
   (or (zerop n)
       (goto-history-element (- minibuffer-history-position n))))
 
 (defun previous-history-element (n)
-  "Puts previous element of the minibuffer history in the minibuffer.
-With argument N, it uses the Nth previous element."
+  "Insert into the minibuffer the Nth previous element of minibuffer history.
+Interactively, N is the prefix numeric argument and defaults to 1."
   (interactive "p")
   (or (zerop n)
       (goto-history-element (+ minibuffer-history-position n))))
@@ -3589,7 +3647,7 @@ Return what remains of the list."
                    ;; said it would do.
                    (unless (and (= start start-mark)
                                 (= (+ delta end) end-mark))
-                     (error "Changes to be undone by function different from announced"))
+                     (error "Changes undone by function are different from the announced ones"))
                    (set-marker start-mark nil)
                    (set-marker end-mark nil))
                (apply fun-args))
@@ -4489,6 +4547,9 @@ If the output is short enough to display in the echo area
 \(determined by the variable `max-mini-window-height' if
 `resize-mini-windows' is non-nil), it is shown there.
 Otherwise, the buffer containing the output is displayed.
+Note that if `shell-command-dont-erase-buffer' is non-nil,
+the echo area could display more than just the output of the
+last command.
 
 If there is output and an error, and you did not specify \"insert it
 in the current buffer\", a message about the error goes at the end
@@ -4771,6 +4832,9 @@ If the output is short enough to display in the echo area
 `resize-mini-windows' is non-nil), it is shown there.
 Otherwise it is displayed in the buffer named by `shell-command-buffer-name'.
 The output is available in that buffer in both cases.
+Note that if `shell-command-dont-erase-buffer' is non-nil,
+the echo area could display more than just the output of the
+last command.
 
 If there is output and an error, a message about the error
 appears at the end of the output.
@@ -5788,6 +5852,25 @@ The value 0 disables blinking."
   :group 'killing
   :version "28.1")
 
+(defcustom copy-region-blink-predicate #'region-indistinguishable-p
+  "Whether the cursor must be blinked after a copy.
+When this condition holds, and the copied region fits in the
+current window, `kill-ring-save' will blink the cursor between
+point and mark for `copy-region-blink-delay' seconds."
+  :type '(radio (function-item region-indistinguishable-p)
+                (function-item :doc "Always blink point and mark." always)
+                (function-item :doc "Never blink point and mark." ignore)
+                (function :tag "Other predicate function"))
+  :group 'killing
+  :version "29.1")
+
+(defun region-indistinguishable-p ()
+  "Whether the current region is not denoted visually.
+This holds when the region is inactive, or when the `region' face
+cannot be distinguished from the `default' face."
+  (not (and (region-active-p)
+            (face-differs-from-default-p 'region))))
+
 (defun indicate-copied-region (&optional message-len)
   "Indicate that the region text has been copied interactively.
 If the mark is visible in the selected window, blink the cursor between
@@ -5808,8 +5891,7 @@ of this sample text; it defaults to 40."
 	;; was selected.  Don't do it if the region is highlighted.
 	(when (and (numberp copy-region-blink-delay)
 		   (> copy-region-blink-delay 0)
-		   (or (not (region-active-p))
-		       (not (face-background 'region nil t))))
+		   (funcall copy-region-blink-predicate))
 	  ;; Swap point and mark.
 	  (set-marker (mark-marker) (point) (current-buffer))
 	  (goto-char mark)
@@ -9664,7 +9746,11 @@ the completions is popped up and down."
   "Move to the first item in the completion list."
   (interactive)
   (goto-char (point-min))
-  (unless (get-text-property (point) 'mouse-face)
+  (if (get-text-property (point) 'mouse-face)
+      (unless (get-text-property (point) 'first-completion)
+        (let ((inhibit-read-only t))
+          (add-text-properties (point) (min (1+ (point)) (point-max))
+                               '(first-completion t))))
     (when-let ((pos (next-single-property-change (point) 'mouse-face)))
       (goto-char pos))))
 
@@ -9697,6 +9783,14 @@ Also see the `completion-auto-wrap' variable."
   (let ((tabcommand (member (this-command-keys) '("\t" [backtab])))
         pos)
     (catch 'bound
+      (when (and (bobp)
+                 (> n 0)
+                 (get-text-property (point) 'mouse-face)
+                 (not (get-text-property (point) 'first-completion)))
+        (let ((inhibit-read-only t))
+          (add-text-properties (point) (1+ (point)) '(first-completion t)))
+        (setq n (1- n)))
+
       (while (> n 0)
         (setq pos (point))
         ;; If in a completion, move to the end of it.
@@ -10052,6 +10146,8 @@ PREFIX is the string that represents this modifier in an event type symbol."
 	    event-type
 	  (cons event-type (cdr event)))))))
 
+;; This is what makes "C-x @" followed by [hsmaSc] work even though
+;; you won't find any (define-key ctl-x-map "@" ...) binding.
 (define-key function-key-map [?\C-x ?@ ?h] 'event-apply-hyper-modifier)
 (define-key function-key-map [?\C-x ?@ ?s] 'event-apply-super-modifier)
 (define-key function-key-map [?\C-x ?@ ?m] 'event-apply-meta-modifier)
@@ -10314,7 +10410,7 @@ call `normal-erase-is-backspace-mode' (which see) instead."
        (if (if (eq normal-erase-is-backspace 'maybe)
                (and (not noninteractive)
                     (or (memq system-type '(ms-dos windows-nt))
-			(memq window-system '(w32 ns pgtk))
+			(memq window-system '(w32 ns pgtk haiku))
                         (and (eq window-system 'x)
                              (fboundp 'x-backspace-delete-keys-p)
                              (x-backspace-delete-keys-p))

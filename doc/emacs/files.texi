@@ -1,5 +1,5 @@
 @c This is part of the Emacs manual.
-@c Copyright (C) 1985--1987, 1993--1995, 1997, 1999--2022 Free Software
+@c Copyright (C) 1985--1987, 1993--1995, 1997, 1999--2023 Free Software
 @c Foundation, Inc.
 @c See file emacs.texi for copying conditions.
 @node Files
@@ -214,6 +214,17 @@ size, which is limited by the amount of memory Emacs can allocate and
 by the integers that Emacs can represent (@pxref{Buffers}).  If you
 try, Emacs displays an error message saying that the maximum buffer
 size has been exceeded.
+
+@vindex treesit-max-buffer-size
+  If you try to visit a file whose major mode (@pxref{Major Modes})
+uses the tree-sitter parsing library, Emacs will display a warning if
+the file's size in bytes is larger than the value of the variable
+@code{treesit-max-buffer-size}.  The default value is 40 megabytes for
+64-bit Emacs and 15 megabytes for 32-bit Emacs.  This avoids the
+danger of having Emacs run out of memory by preventing the activation
+of major modes based on tree-sitter in such large buffers, because a
+typical tree-sitter parser needs about 10 times as much memory as the
+text it parses.
 
 @cindex wildcard characters in file names
 @vindex find-file-wildcards

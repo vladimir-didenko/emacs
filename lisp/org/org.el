@@ -1,15 +1,15 @@
 ;;; org.el --- Outline-based notes management and organizer -*- lexical-binding: t; -*-
 
 ;; Carstens outline-mode for keeping track of everything.
-;; Copyright (C) 2004-2022 Free Software Foundation, Inc.
+;; Copyright (C) 2004-2023 Free Software Foundation, Inc.
 ;;
 ;; Author: Carsten Dominik <carsten.dominik@gmail.com>
 ;; Maintainer: Bastien Guerry <bzg@gnu.org>
 ;; Keywords: outlines, hypermedia, calendar, wp
 ;; URL: https://orgmode.org
-;; Package-Requires: ((emacs "25.1"))
+;; Package-Requires: ((emacs "26.1"))
 
-;; Version: 9.6
+;; Version: 9.6.1
 
 ;; This file is part of GNU Emacs.
 ;;
@@ -102,6 +102,7 @@
 
 (require 'org-cycle)
 (defvaralias 'org-hide-block-startup 'org-cycle-hide-block-startup)
+(defvaralias 'org-hide-drawer-startup 'org-cycle-hide-drawer-startup)
 (defvaralias 'org-pre-cycle-hook 'org-cycle-pre-hook)
 (defvaralias 'org-tab-first-hook 'org-cycle-tab-first-hook)
 (defalias 'org-global-cycle #'org-cycle-global)
@@ -4596,8 +4597,8 @@ is available.  This option applies only if FILE is a URL."
 This checks every pattern in `org-safe-remote-resources', and
 returns non-nil if any of them match."
   (let ((uri-patterns org-safe-remote-resources)
-        (file-uri (and buffer-file-name
-                       (concat "file://" (file-truename buffer-file-name))))
+        (file-uri (and (buffer-file-name (buffer-base-buffer))
+                       (concat "file://" (file-truename (buffer-file-name (buffer-base-buffer))))))
         match-p)
     (while (and (not match-p) uri-patterns)
       (setq match-p (or (string-match-p (car uri-patterns) uri)
@@ -4608,7 +4609,8 @@ returns non-nil if any of them match."
 (defun org--confirm-resource-safe (uri)
   "Ask the user if URI should be considered safe, returning non-nil if so."
   (unless noninteractive
-    (let ((current-file (and buffer-file-name (file-truename buffer-file-name)))
+    (let ((current-file (and (buffer-file-name (buffer-base-buffer))
+                             (file-truename (buffer-file-name (buffer-base-buffer)))))
           (domain (and (string-match
                         (rx (seq "http" (? "s") "://")
                             (optional (+ (not (any "@/\n"))) "@")
@@ -4896,16 +4898,20 @@ The following commands are available:
 	     (= (point-min) (point-max)))
     (insert "#    -*- mode: org -*-\n\n"))
   (unless org-inhibit-startup
+    (when (or org-startup-align-all-tables org-startup-shrink-all-tables)
+      (org-table-map-tables
+       (cond ((and org-startup-align-all-tables
+		   org-startup-shrink-all-tables)
+	      (lambda () (org-table-align) (org-table-shrink)))
+	     (org-startup-align-all-tables #'org-table-align)
+	     (t #'org-table-shrink))
+       t))
+    ;; Suppress modification hooks to speed up the startup.
+    ;; However, do it only when text properties/overlays, but not
+    ;; buffer text are actually modified.  We still need to track text
+    ;; modifications to make cache updates work reliably.
     (org-unmodified
      (when org-startup-with-beamer-mode (org-beamer-mode))
-     (when (or org-startup-align-all-tables org-startup-shrink-all-tables)
-       (org-table-map-tables
-	(cond ((and org-startup-align-all-tables
-		    org-startup-shrink-all-tables)
-	       (lambda () (org-table-align) (org-table-shrink)))
-	      (org-startup-align-all-tables #'org-table-align)
-	      (t #'org-table-shrink))
-	t))
      (when org-startup-with-inline-images (org-display-inline-images))
      (when org-startup-with-latex-preview (org-latex-preview '(16)))
      (unless org-inhibit-startup-visibility-stuff (org-cycle-set-startup-visibility))
@@ -8602,6 +8608,7 @@ or to another Org file, automatically push the old position onto the ring."
 (defvar org-agenda-buffer-name)
 (defun org-follow-timestamp-link ()
   "Open an agenda view for the time-stamp date/range at point."
+  (require 'org-agenda)
   ;; Avoid changing the global value.
   (let ((org-agenda-buffer-name org-agenda-buffer-name))
     (cond
@@ -8853,7 +8860,7 @@ keywords relative to each registered export back-end."
     "EXCLUDE_TAGS:" "FILETAGS:" "INCLUDE:" "INDEX:" "KEYWORDS:" "LANGUAGE:"
     "MACRO:" "OPTIONS:" "PROPERTY:" "PRINT_BIBLIOGRAPHY" "PRIORITIES:"
     "SELECT_TAGS:" "SEQ_TODO:" "SETUPFILE:" "STARTUP:" "TAGS:" "TITLE:" "TODO:"
-    "TYP_TODO:" "SELECT_TAGS:" "EXCLUDE_TAGS:"))
+    "TYP_TODO:" "SELECT_TAGS:" "EXCLUDE_TAGS:" "EXPORT_FILE_NAME:"))
 
 (defcustom org-structure-template-alist
   '(("a" . "export ascii")
@@ -16399,6 +16406,10 @@ buffer boundaries with possible narrowing."
   "Remove inline-display overlay if a corresponding region is modified."
   (when (and ov after)
     (delete ov org-inline-image-overlays)
+    ;; Clear image from cache to avoid image not updating upon
+    ;; changing on disk.  See Emacs bug#59902.
+    (when (overlay-get ov 'org-image-overlay)
+      (image-flush (overlay-get ov 'display)))
     (delete-overlay ov)))
 
 (defun org-remove-inline-images (&optional beg end)
@@ -20207,7 +20218,10 @@ interactive command with similar behavior."
 (defun org-back-to-heading (&optional invisible-ok)
   "Go back to beginning of heading."
   (beginning-of-line)
-  (or (org-at-heading-p (not invisible-ok))
+  (or (and (org-at-heading-p (not invisible-ok))
+           (not (and (featurep 'org-inlinetask)
+                   (fboundp 'org-inlinetask-end-p)
+                   (org-inlinetask-end-p))))
       (if (org-element--cache-active-p)
           (let ((heading (org-element-lineage (org-element-at-point)
                                            '(headline inlinetask)

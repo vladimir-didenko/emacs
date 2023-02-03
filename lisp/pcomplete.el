@@ -1,6 +1,6 @@
 ;;; pcomplete.el --- programmable completion -*- lexical-binding: t -*-
 
-;; Copyright (C) 1999-2022 Free Software Foundation, Inc.
+;; Copyright (C) 1999-2023 Free Software Foundation, Inc.
 
 ;; Author: John Wiegley <johnw@gnu.org>
 ;; Keywords: processes abbrev
@@ -632,6 +632,13 @@ This will modify the current buffer."
 ;;; Internal Functions:
 
 ;; argument handling
+(defsubst pcomplete-actual-arg (&optional index offset)
+  "Return the actual text representation of the last argument.
+This is different from `pcomplete-arg', which returns the textual value
+that the last argument evaluated to.  This function returns what the
+user actually typed in."
+  (buffer-substring (pcomplete-begin index offset) (point)))
+
 (defun pcomplete-arg (&optional index offset)
   "Return the textual content of the INDEXth argument.
 INDEX is based from the current processing position.  If INDEX is
@@ -645,13 +652,35 @@ parts of the list.
 
 The OFFSET argument is added to/taken away from the index that will be
 used.  This is really only useful with `first' and `last', for
-accessing absolute argument positions."
-  (nth (+ (pcase index
-	   ('first 0)
-	   ('last  pcomplete-last)
-	   (_      (- pcomplete-index (or index 0))))
-	  (or offset 0))
-       pcomplete-args))
+accessing absolute argument positions.
+
+When the argument has been transformed into something that is not
+a string by `pcomplete-parse-arguments-function', the text
+representation of the argument, namely what the user actually
+typed in, is returned, and the value of the argument is stored in
+the pcomplete-arg-value text property of that string."
+  (let ((arg
+         (nth (+ (pcase index
+	           ('first 0)
+	           ('last  pcomplete-last)
+	           (_      (- pcomplete-index (or index 0))))
+	         (or offset 0))
+              pcomplete-args)))
+    (if (or (stringp arg)
+            ;; FIXME: 'last' is handled specially in Emacs 29, because
+            ;; 'pcomplete-parse-arguments' accepts a list of strings
+            ;; (which are completion candidates) as return value for
+            ;; (pcomplete-arg 'last).  See below: "it means it's a
+            ;; list of completions computed during parsing,
+            ;; e.g. Eshell uses that to turn globs into lists of
+            ;; completions".  This special case will be dealt with
+            ;; differently in Emacs 30: the pcomplete-arg-value
+            ;; property will be used by 'pcomplete-parse-arguments'.
+            (eq index 'last))
+        arg
+      (propertize
+       (car (split-string (pcomplete-actual-arg index offset)))
+       'pcomplete-arg-value arg))))
 
 (defun pcomplete-begin (&optional index offset)
   "Return the beginning position of the INDEXth argument.
@@ -665,13 +694,6 @@ See the documentation for `pcomplete-arg'."
   (if offset
       (setq index (+ index offset)))
   (nth index pcomplete-begins))
-
-(defsubst pcomplete-actual-arg (&optional index offset)
-  "Return the actual text representation of the last argument.
-This is different from `pcomplete-arg', which returns the textual value
-that the last argument evaluated to.  This function returns what the
-user actually typed in."
-  (buffer-substring (pcomplete-begin index offset) (point)))
 
 (defsubst pcomplete-next-arg ()
   "Move the various pointers to the next argument."
