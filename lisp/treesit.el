@@ -166,10 +166,13 @@ parser in `treesit-parser-list', or nil if there is no parser."
 A leaf node is a node that doesn't have any child nodes.
 
 The returned node's span covers POS: the node's beginning is before
-or at POS, and the node's end is at or after POS.
+or at POS, and the node's end is after POS.
 
-If no leaf node's span covers POS (e.g., POS is on whitespace
-between two leaf nodes), return the first leaf node after POS.
+If no such node exists, but there's a leaf node which ends at POS,
+return that node.
+
+Otherwise (e.g., when POS is on whitespace between two leaf
+nodes), return the first leaf node after POS.
 
 If there is no leaf node after POS, return the first leaf node
 before POS.
@@ -555,8 +558,35 @@ omitted, default END to BEG."
               "Generic tree-sitter font-lock error"
               'treesit-error)
 
+(defvar-local treesit-font-lock-settings nil
+  "A list of SETTINGs for treesit-based fontification.
+
+The exact format of each SETTING is considered internal.  Use
+`treesit-font-lock-rules' to set this variable.
+
+Each SETTING has the form:
+
+    (QUERY ENABLE FEATURE OVERRIDE)
+
+QUERY must be a compiled query.  See Info node `(elisp)Pattern
+Matching' for how to write a query and compile it.
+
+For SETTING to be activated for font-lock, ENABLE must be t.  To
+disable this SETTING, set ENABLE to nil.
+
+FEATURE is the \"feature name\" of the query.  Users can control
+which features are enabled with `treesit-font-lock-level' and
+`treesit-font-lock-feature-list'.
+
+OVERRIDE is the override flag for this query.  Its value can be
+t, nil, append, prepend, keep.  See more in
+`treesit-font-lock-rules'.")
+
 (defun treesit--font-lock-level-setter (sym val)
-  "Custom setter for `treesit-font-lock-level'."
+  "Custom setter for `treesit-font-lock-level'.
+Set the default value of SYM to VAL, recompute fontification
+features and refontify for every buffer where tree-sitter-based
+fontification is enabled."
   (set-default sym val)
   (and (treesit-available-p)
        (named-let loop ((res nil)
@@ -571,7 +601,7 @@ omitted, default END to BEG."
                    res)
            (let ((buffer (car buffers)))
              (with-current-buffer buffer
-               (if (treesit-parser-list)
+               (if treesit-font-lock-settings
                    (loop (append res (list buffer)) (cdr buffers))
                  (loop res (cdr buffers)))))))))
 
@@ -585,9 +615,10 @@ fontifications.
 Level 1 usually contains only comments and definitions.
 Level 2 usually adds keywords, strings, data types, etc.
 Level 3 usually represents full-blown fontifications, including
-assignments, constants, numbers and literals, properties, etc.
+assignments, constants, numbers and literals, etc.
 Level 4 adds everything else that can be fontified: delimiters,
-operators, brackets, punctuation, all functions and variables, etc.
+operators, brackets, punctuation, all functions, properties,
+variables, etc.
 
 In addition to the decoration level, individual features can be
 turned on/off by calling `treesit-font-lock-recompute-features'.
@@ -633,30 +664,6 @@ See the manual for more explanations on some of the features.
 
 For changes to this variable to take effect, run
 `treesit-font-lock-recompute-features'.")
-
-(defvar-local treesit-font-lock-settings nil
-  "A list of SETTINGs for treesit-based fontification.
-
-The exact format of each SETTING is considered internal.  Use
-`treesit-font-lock-rules' to set this variable.
-
-Each SETTING has the form:
-
-    (QUERY ENABLE FEATURE OVERRIDE)
-
-QUERY must be a compiled query.  See Info node `(elisp)Pattern
-Matching' for how to write a query and compile it.
-
-For SETTING to be activated for font-lock, ENABLE must be t.  To
-disable this SETTING, set ENABLE to nil.
-
-FEATURE is the \"feature name\" of the query.  Users can control
-which features are enabled with `treesit-font-lock-level' and
-`treesit-font-lock-feature-list'.
-
-OVERRIDE is the override flag for this query.  Its value can be
-t, nil, append, prepend, keep.  See more in
-`treesit-font-lock-rules'.")
 
 (defun treesit-font-lock-rules (&rest query-specs)
   "Return a value suitable for `treesit-font-lock-settings'.
@@ -1179,12 +1186,18 @@ See `treesit-simple-indent-presets'.")
                   (skip-syntax-backward "-")
                   (point))))
         (cons 'prev-adaptive-prefix
-              (lambda (_n parent &rest _)
-                (let ((comment-start-bol
-                       (save-excursion
-                         (goto-char (treesit-node-start parent))
-                         (line-beginning-position))))
+              (lambda (_n parent bol &rest _)
+                (let (comment-start-bol
+                      this-line-has-prefix)
                   (save-excursion
+                    (goto-char (treesit-node-start parent))
+                    (setq comment-start-bol (line-beginning-position))
+
+                    (goto-char bol)
+                    (setq this-line-has-prefix
+                          (and (looking-at adaptive-fill-regexp)
+                               (match-string 1)))
+
                     (forward-line -1)
                     (and (>= (point) comment-start-bol)
                          adaptive-fill-regexp
@@ -1192,11 +1205,23 @@ See `treesit-simple-indent-presets'.")
                          ;; If previous line is an empty line, don't
                          ;; indent.
                          (not (looking-at (rx (* whitespace) eol)))
-                         (match-end 0))))))
+                         ;; Return the anchor.  If the indenting line
+                         ;; has a prefix and the previous line also
+                         ;; has a prefix, indent to the beginning of
+                         ;; prev line's prefix rather than the end of
+                         ;; prev line's prefix. (Bug#61314).
+                         (or (and this-line-has-prefix
+                                  (match-beginning 1))
+                             (match-end 0)))))))
         ;; TODO: Document.
         (cons 'grand-parent
               (lambda (_n parent &rest _)
                 (treesit-node-start (treesit-node-parent parent))))
+        (cons 'great-grand-parent
+              (lambda (_n parent &rest _)
+                (treesit-node-start
+                 (treesit-node-parent
+                  (treesit-node-parent parent)))))
         (cons 'parent-bol (lambda (_n parent &rest _)
                             (save-excursion
                               (goto-char (treesit-node-start parent))
@@ -1324,8 +1349,11 @@ prev-adaptive-prefix
 
     Goes to the beginning of previous non-empty line, and tries
     to match `adaptive-fill-regexp'.  If it matches, return the
-    end of the match, otherwise return nil.  This is useful for a
-    `indent-relative'-like indent behavior for block comments.")
+    end of the match, otherwise return nil.  However, if the
+    current line begins with a prefix, return the beginning of
+    the prefix of the previous line instead, so that the two
+    prefixes aligns.  This is useful for a `indent-relative'-like
+    indent behavior for block comments.")
 
 (defun treesit--simple-indent-eval (exp)
   "Evaluate EXP.
@@ -2373,7 +2401,8 @@ to the offending pattern and highlight the pattern."
          (with-current-buffer buf
            (let* ((data (cdr err))
                   (message (nth 0 data))
-                  (start (nth 1 data)))
+                  (start (nth 1 data))
+                  (inhibit-read-only t))
              (erase-buffer)
              (insert (treesit-query-expand query))
              (goto-char start)
@@ -2881,7 +2910,17 @@ function signals an error."
           ;; Copy out.
           (unless (file-exists-p out-dir)
             (make-directory out-dir t))
-          (copy-file lib-name (file-name-as-directory out-dir) t t)
+          (let* ((library-fname (expand-file-name lib-name out-dir))
+                 (old-fname (concat library-fname ".old")))
+            ;; Rename the existing shared library, if any, then
+            ;; install the new one, and try deleting the old one.
+            ;; This is for Windows systems, where we cannot simply
+            ;; overwrite a DLL that is being used.
+            (if (file-exists-p library-fname)
+                (rename-file library-fname old-fname t))
+            (copy-file lib-name (file-name-as-directory out-dir) t t)
+            ;; Ignore errors, in case the old version is still used.
+            (ignore-errors (delete-file old-fname)))
           (message "Library installed to %s/%s" out-dir lib-name))
       (when (file-exists-p workdir)
         (delete-directory workdir t)))))
@@ -2949,7 +2988,7 @@ function signals an error."
 
   "Parsers"
   (treesit-parser-create
-   :no-eval (treesit-parser-create)
+   :no-eval (treesit-parser-create 'c)
    :eg-result-string "#<treesit-parser for c>")
   (treesit-parser-delete
    :no-value (treesit-parser-delete parser))
