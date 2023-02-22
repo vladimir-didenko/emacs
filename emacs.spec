@@ -11,7 +11,7 @@
 
 Name: emacs
 Version: 29.0.60
-Release: alt2.gitf04680e
+Release: alt4.git19480aa
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -272,7 +272,7 @@ autoreconf -i -I m4
 %define _configure_mostly --disable-build-details --sharedstatedir=/var \\\
 	--with-pop --with-png --with-jpeg --with-xpm --with-gif --with-tiff \\\
 	--with-xft --with-dbus --with-rsvg --with-wide-int --with-lcms2 --with-modules \\\
-	--with-native-compilation --without-gconf --without-gsettings
+	--with-native-compilation=aot --without-gconf --without-gsettings
 
 pushd build-pgtk
 %configure %_configure_mostly --without-gpm --with-pgtk --with-cairo --with-toolkit-scroll-bars
@@ -354,6 +354,7 @@ rm -vf %buildroot%_bindir/emacs-%version
 rm -vf %buildroot%_emacs_archlibdir/emacs.pdmp
 
 install -pm644 -D .gear/emacs.desktop %buildroot%_desktopdir/emacs.desktop
+install -pm644 -D .gear/emacs-pgtk.desktop %buildroot%_desktopdir/emacs-pgtk.desktop
 
 # Site start configuration:
 # Link to a file provided by emacsen-startscripts pkg:
@@ -433,6 +434,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_altdir/%name-pgtk
 %_bindir/%name-pgtk
 %_emacs_archlibdir/%name-pgtk.pdmp
+%_desktopdir/%name-pgtk.desktop
 
 %if_enabled athena
 %files athena
@@ -480,6 +482,7 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_emacs_sitestart_dir/*
 
 %_desktopdir/*.desktop
+%exclude %_desktopdir/%name-pgtk.desktop
 %_iconsdir/*/*/*/*
 %_man1dir/*.1*
 
@@ -503,6 +506,13 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Mon Feb 20 2023 Vladimir Didenko <cow@altlinux.org> 29.0.60-alt4.git19480aa
+- 29.0.60-git19480aa
+- enable AOT
+
+* Fri Feb 3 2023 Vladimir Didenko <cow@altlinux.org> 29.0.60-alt3.gite444115
+- 29.0.60-gite444115
+
 * Fri Dec 16 2022 Vladimir Didenko <cow@altlinux.org> 29.0.60-alt2.gitf04680e
 - 29.0.60-gitf04680e
 
