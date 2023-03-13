@@ -292,11 +292,11 @@ values of OVERRIDE"
 
    :language language
    :feature 'global
-   '((global_variable) @font-lock-variable-name-face)
+   '((global_variable) @font-lock-variable-use-face)
 
    :language language
    :feature 'instance
-   '((instance_variable) @font-lock-variable-name-face)
+   '((instance_variable) @font-lock-variable-use-face)
 
    :language language
    :feature 'method-definition
@@ -350,7 +350,7 @@ values of OVERRIDE"
    :language language
    :feature 'function
    '((call
-      method: (identifier) @font-lock-function-name-face))
+      method: (identifier) @font-lock-function-call-face))
 
    :language language
    :feature 'assignment
@@ -557,7 +557,7 @@ a statement container is a node that matches
   (let ((common
          `(
            ;; Slam all top level nodes to the left margin
-           ((parent-is "program") point-min 0)
+           ((parent-is "program") column-0 0)
 
            ;; Do not indent here docs or the end.  Not sure why it
            ;; takes the grand-parent but ok fine.
@@ -1026,7 +1026,7 @@ leading double colon is not added."
                               (:match "\\`?[#\"'`:?]" @char))
                              ;; Symbols like :+, :<=> or :foo=.
                              ((simple_symbol) @symbol
-                              (:match "[[:punct:]]" @symbol))
+                              (:match "\\s." @symbol))
                              ;; Method calls with name ending with ? or !.
                              ((call method: (identifier) @ident)
                               (:match "[?!]\\'" @ident))
@@ -1058,7 +1058,9 @@ leading double colon is not added."
          (put-text-property (1- (treesit-node-end node)) (treesit-node-end node)
                             'syntax-table (string-to-syntax "_")))
         ('symbol
-         (put-text-property (1+ (treesit-node-start node)) (treesit-node-end node)
+         (goto-char (treesit-node-end node))
+         (skip-syntax-backward "." (treesit-node-start node))
+         (put-text-property (point) (treesit-node-end node)
                             'syntax-table (string-to-syntax "_")))
         ('heredoc
          (put-text-property (treesit-node-start node) (1+ (treesit-node-start node))

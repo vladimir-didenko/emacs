@@ -36,6 +36,7 @@
 (declare-function treesit-node-child "treesit.c")
 (declare-function treesit-node-child-by-field-name "treesit.c")
 (declare-function treesit-node-start "treesit.c")
+(declare-function treesit-node-end "treesit.c")
 (declare-function treesit-node-type "treesit.c")
 (declare-function treesit-node-parent "treesit.c")
 (declare-function treesit-query-compile "treesit.c")
@@ -70,7 +71,7 @@
 
 (defvar rust-ts-mode--indent-rules
   `((rust
-     ((parent-is "source_file") point-min 0)
+     ((parent-is "source_file") column-0 0)
      ((node-is ")") parent-bol 0)
      ((node-is "]") parent-bol 0)
      ((node-is "}") (and parent parent-bol) 0)
@@ -90,6 +91,7 @@
      ((parent-is "let_declaration") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "macro_definition") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "parameters") parent-bol rust-ts-mode-indent-offset)
+     ((parent-is "struct_pattern") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "token_tree") parent-bol rust-ts-mode-indent-offset)
      ((parent-is "use_list") parent-bol rust-ts-mode-indent-offset)))
   "Tree-sitter indent rules for `rust-ts-mode'.")
@@ -156,7 +158,7 @@
    '((function_item name: (identifier) @font-lock-function-name-face)
      (macro_definition "macro_rules!" @font-lock-constant-face)
      (macro_definition (identifier) @font-lock-preprocessor-face)
-     (field_declaration name: (field_identifier) @font-lock-property-face)
+     (field_declaration name: (field_identifier) @font-lock-property-name-face)
      (parameter pattern: (_) @rust-ts-mode--fontify-pattern)
      (closure_parameters (_) @rust-ts-mode--fontify-pattern)
      (let_declaration pattern: (_) @rust-ts-mode--fontify-pattern)
@@ -173,17 +175,17 @@
    :feature 'function
    '((call_expression
       function:
-      [(identifier) @font-lock-function-name-face
+      [(identifier) @font-lock-function-call-face
        (field_expression
-        field: (field_identifier) @font-lock-function-name-face)
+        field: (field_identifier) @font-lock-function-call-face)
        (scoped_identifier
-        name: (identifier) @font-lock-function-name-face)])
+        name: (identifier) @font-lock-function-call-face)])
      (generic_function
-      function: [(identifier) @font-lock-function-name-face
+      function: [(identifier) @font-lock-function-call-face
                  (field_expression
-                  field: (field_identifier) @font-lock-function-name-face)
+                  field: (field_identifier) @font-lock-function-call-face)
                  (scoped_identifier
-                  name: (identifier) @font-lock-function-name-face)])
+                  name: (identifier) @font-lock-function-call-face)])
      (macro_invocation macro: (identifier) @font-lock-preprocessor-face))
 
    :language 'rust
@@ -234,12 +236,13 @@
        "^\\(u8\\|u16\\|u32\\|u64\\|u128\\|usize\\|i8\\|i16\\|i32\\|i64\\|i128\\|isize\\|char\\|str\\)$"
        @font-lock-type-face))
      ((scoped_identifier path: (identifier) @rust-ts-mode--fontify-scope))
+     ((scoped_type_identifier path: (identifier) @rust-ts-mode--fontify-scope))
      (type_identifier) @font-lock-type-face)
 
    :language 'rust
    :feature 'property
-   '((field_identifier) @font-lock-property-face
-     (shorthand_field_initializer (identifier) @font-lock-property-face))
+   '((field_identifier) @font-lock-property-use-face
+     (shorthand_field_initializer (identifier) @font-lock-property-use-face))
 
    ;; Must be under type, otherwise some imports can be highlighted as constants.
    :language 'rust
@@ -250,25 +253,25 @@
 
    :language 'rust
    :feature 'variable
-   '((arguments (identifier) @font-lock-variable-name-face)
-     (array_expression (identifier) @font-lock-variable-name-face)
-     (assignment_expression right: (identifier) @font-lock-variable-name-face)
-     (binary_expression left: (identifier) @font-lock-variable-name-face)
-     (binary_expression right: (identifier) @font-lock-variable-name-face)
-     (block (identifier) @font-lock-variable-name-face)
-     (compound_assignment_expr right: (identifier) @font-lock-variable-name-face)
-     (field_expression value: (identifier) @font-lock-variable-name-face)
-     (field_initializer value: (identifier) @font-lock-variable-name-face)
-     (if_expression condition: (identifier) @font-lock-variable-name-face)
-     (let_condition value: (identifier) @font-lock-variable-name-face)
-     (let_declaration value: (identifier) @font-lock-variable-name-face)
-     (match_arm value: (identifier) @font-lock-variable-name-face)
-     (match_expression value: (identifier) @font-lock-variable-name-face)
-     (reference_expression value: (identifier) @font-lock-variable-name-face)
-     (return_expression (identifier) @font-lock-variable-name-face)
-     (tuple_expression (identifier) @font-lock-variable-name-face)
-     (unary_expression (identifier) @font-lock-variable-name-face)
-     (while_expression condition: (identifier) @font-lock-variable-name-face))
+   '((arguments (identifier) @font-lock-variable-use-face)
+     (array_expression (identifier) @font-lock-variable-use-face)
+     (assignment_expression right: (identifier) @font-lock-variable-use-face)
+     (binary_expression left: (identifier) @font-lock-variable-use-face)
+     (binary_expression right: (identifier) @font-lock-variable-use-face)
+     (block (identifier) @font-lock-variable-use-face)
+     (compound_assignment_expr right: (identifier) @font-lock-variable-use-face)
+     (field_expression value: (identifier) @font-lock-variable-use-face)
+     (field_initializer value: (identifier) @font-lock-variable-use-face)
+     (if_expression condition: (identifier) @font-lock-variable-use-face)
+     (let_condition value: (identifier) @font-lock-variable-use-face)
+     (let_declaration value: (identifier) @font-lock-variable-use-face)
+     (match_arm value: (identifier) @font-lock-variable-use-face)
+     (match_expression value: (identifier) @font-lock-variable-use-face)
+     (reference_expression value: (identifier) @font-lock-variable-use-face)
+     (return_expression (identifier) @font-lock-variable-use-face)
+     (tuple_expression (identifier) @font-lock-variable-use-face)
+     (unary_expression (identifier) @font-lock-variable-use-face)
+     (while_expression condition: (identifier) @font-lock-variable-use-face))
 
    :language 'rust
    :feature 'escape-sequence

@@ -2406,8 +2406,9 @@ If the variable `delay-mode-hooks' is non-nil, does not do anything,
 just adds the HOOKS to the list `delayed-mode-hooks'.
 Otherwise, runs hooks in the sequence: `change-major-mode-after-body-hook',
 `delayed-mode-hooks' (in reverse order), HOOKS, then runs
-`hack-local-variables', runs the hook `after-change-major-mode-hook', and
-finally evaluates the functions in `delayed-after-hook-functions' (see
+`hack-local-variables' (if the buffer is visiting a file),
+runs the hook `after-change-major-mode-hook', and finally
+evaluates the functions in `delayed-after-hook-functions' (see
 `define-derived-mode').
 
 Major mode functions should use this instead of `run-hooks' when
@@ -3958,6 +3959,7 @@ to other portions of the buffer, use `without-restriction' with the
 same LABEL argument.
 
 \(fn START END [:label LABEL] BODY)"
+  (declare (indent 0) (debug t))
   (if (eq (car rest) :label)
       `(internal--with-restriction ,start ,end (lambda () ,@(cddr rest))
                                  ,(cadr rest))
@@ -3980,6 +3982,7 @@ restrictions set by `with-restriction' with the same LABEL argument
 are lifted.
 
 \(fn [:label LABEL] BODY)"
+  (declare (indent 0) (debug t))
   (if (eq (car rest) :label)
       `(internal--without-restriction (lambda () ,@(cddr rest))
                                     ,(cadr rest))

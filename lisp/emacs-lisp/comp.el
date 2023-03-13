@@ -698,11 +698,22 @@ Useful to hook into pass checkers.")
 (defvar comp-no-spawn nil
   "Non-nil don't spawn native compilation processes.")
 
+(defconst comp-warn-primitives
+  '(null memq gethash and subrp not subr-native-elisp-p
+         comp--install-trampoline concat if symbolp symbol-name make-string
+         length aset aref length> mapcar expand-file-name
+         file-name-as-directory file-exists-p native-elisp-load)
+  "List of primitives we want to warn about in case of redefinition.
+This are essential for the trampoline machinery to work properly.")
+
 ;; Moved early to avoid circularity when comp.el is loaded and
 ;; `macroexpand' needs to be advised (bug#47049).
 ;;;###autoload
 (defun comp-subr-trampoline-install (subr-name)
   "Make SUBR-NAME effectively advice-able when called from native code."
+  (when (memq subr-name comp-warn-primitives)
+    (warn "Redefining `%s' might break native compilation of trampolines."
+          subr-name))
   (unless (or (null native-comp-enable-subr-trampolines)
               (memq subr-name native-comp-never-optimize-functions)
               (gethash subr-name comp-installed-trampolines-h))
@@ -1126,10 +1137,12 @@ with `message'.  Otherwise, log with `comp-log-to-buffer'."
           (comp-cstr-to-type-spec mvar)))
 
 (defun comp-prettyformat-insn (insn)
-  (cl-typecase insn
-    (comp-mvar (comp-prettyformat-mvar insn))
-    (atom (prin1-to-string insn))
-    (cons (concat "(" (mapconcat #'comp-prettyformat-insn insn " ") ")"))))
+  (cond
+   ((comp-mvar-p insn)
+    (comp-prettyformat-mvar insn))
+   ((proper-list-p insn)
+    (concat "(" (mapconcat #'comp-prettyformat-insn insn " ") ")"))
+   (t (prin1-to-string insn))))
 
 (defun comp-log-func (func verbosity)
   "Log function FUNC at VERBOSITY.
@@ -3713,7 +3726,8 @@ Prepare every function for final compilation and drive the C back-end."
              (temp-file (make-temp-file
 			 (concat "emacs-int-comp-"
 				 (file-name-base output) "-")
-			 nil ".el")))
+			 nil ".el"))
+             (default-directory invocation-directory))
 	(with-temp-file temp-file
           (insert ";; -*-coding: utf-8-emacs-unix; -*-\n")
           (mapc (lambda (e)
@@ -3812,10 +3826,8 @@ Return the trampoline if found or nil otherwise."
    ;; Default to some temporary directory if no better option was
    ;; found.
    finally (cl-return
-            (expand-file-name
-             (make-temp-file-internal (file-name-sans-extension rel-filename)
-                                      0 ".eln" nil)
-             temporary-file-directory))))
+            (make-temp-file (file-name-sans-extension rel-filename) nil ".eln"
+                            nil))))
 
 (defun comp-trampoline-compile (subr-name)
   "Synthesize compile and return a trampoline for SUBR-NAME."
@@ -4012,6 +4024,7 @@ display a message."
                         (comp-log "\n")
                         (mapc #'comp-log expr-strings)))
                    (load1 load)
+                   (default-directory invocation-directory)
                    (process (make-process
                              :name (concat "Compiling: " source-file)
                              :buffer (with-current-buffer
