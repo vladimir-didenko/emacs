@@ -795,13 +795,14 @@ part of the buffer.
 
 +++
 ** New user option 'set-message-functions'.
-It allows selecting more functions for 'set-message-function'
-in addition to the default function that handles messages
-in the active minibuffer.  The most useful are 'inhibit-message'
-that allows specifying a list of messages to inhibit via
-'inhibit-message-regexps', and 'set-multi-message' that
-accumulates recent messages and displays them stacked
-in the echo area.
+It allows more flexible control of how echo-area messages are displayed
+by adding functions to this list.  The default value is a list of one
+element: 'set-minibuffer-message', which displays echo-area messages
+at the end of the minibuffer text when the minibuffer is active.
+Other useful functions include 'inhibit-message', which allows
+specifying, via 'inhibit-message-regexps', the list of messages whose
+display shall be inhibited; and 'set-multi-message' that accumulates
+recent messages and displays them stacked together.
 
 ---
 ** New user option 'find-library-include-other-files'.
@@ -2540,8 +2541,16 @@ the project by a VC project based on that VCS.
 
 +++
 *** New command 'xref-go-forward'.
-It is bound to 'C-M-,' and jumps to the location where 'xref-go-back'
-('M-,', also known as 'xref-pop-marker-stack') was invoked previously.
+It is bound to 'C-M-,' and jumps to the location where you previously
+invoked 'xref-go-back' ('M-,', also known as 'xref-pop-marker-stack').
+
++++
+*** The depth of the Xref marker stack is now infinite.
+The implementation of the Xref marker stack was changed in a way that
+allows as many places to be saved on the stack as needed, limited only
+by the available memory.  Therefore, the variables
+'find-tag-marker-ring-length' and 'xref-marker-ring-length' are now
+obsolete and unused; setting them has no effect.
 
 +++
 *** 'xref-query-replace-in-results' prompting change.
@@ -3215,7 +3224,7 @@ Emacs now comes with the Eglot package, which enhances various Emacs
 features, such as completion, documentation, error detection, etc.,
 based on data provided by language servers using the Language Server
 Protocol (LSP).  See the new Info manual "(eglot) Top" for more.  Also
-see etc/EGLOT-NEWS.
+see "etc/EGLOT-NEWS".
 
 +++
 ** use-package: Declarative package configuration.
@@ -3557,11 +3566,13 @@ font spec.  In these cases, replacing ":weight 'normal" with ":weight
 'medium" should fix the issue.
 
 ---
-** Keymap descriptions have changed.
+** Keymap descriptions by Help commands have changed.
 'help--describe-command', 'C-h b' and associated functions that output
 keymap descriptions have changed.  In particular, prefix commands are
-not output at all, and instead of "??" for closures/functions,
-"[closure]"/"[lambda]" is output.
+not output at all, and instead of "??" for closures/functions, these
+functions output "[closure]"/"[lambda]".  You can get back the old
+behavior of including prefix commands by customizing the new option
+'describe-bindings-show-prefix-commands' to a non-nil value.
 
 ---
 ** 'downcase' details have changed slightly.
@@ -4889,7 +4900,7 @@ two buttons: "Yes" and "No".
 
 +++
 *** The 'ns-popup-font-panel' command has been removed.
-Use the general command "M-x menu-set-font" instead.
+Use the general command 'M-x menu-set-font' instead.
 
 
 ----------------------------------------------------------------------

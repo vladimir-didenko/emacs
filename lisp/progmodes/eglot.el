@@ -2,12 +2,11 @@
 
 ;; Copyright (C) 2018-2023 Free Software Foundation, Inc.
 
-;; Version: 1.12
+;; Version: 1.12-emacs29
 ;; Author: João Távora <joaotavora@gmail.com>
 ;; Maintainer: João Távora <joaotavora@gmail.com>
 ;; URL: https://github.com/joaotavora/eglot
 ;; Keywords: convenience, languages
-;; Package-Requires: ((emacs "26.3") (jsonrpc "1.0.16") (flymake "1.2.1") (project "0.9.8") (xref "1.6.2") (eldoc "1.11.0") (seq "2.23") (external-completion "0.1"))
 
 ;; This is a GNU ELPA :core package.  Avoid adding functionality
 ;; that is not available in the version of Emacs recorded above or any
@@ -759,7 +758,9 @@ treated as in `eglot--dbind'."
              :completion      (list :dynamicRegistration :json-false
                                     :completionItem
                                     `(:snippetSupport
-                                      ,(if (eglot--snippet-expansion-fn)
+                                      ,(if (and
+                                            (not (eglot--stay-out-of-p 'yasnippet))
+                                            (eglot--snippet-expansion-fn))
                                            t
                                          :json-false)
                                       :deprecatedSupport t
@@ -818,6 +819,7 @@ treated as in `eglot--dbind'."
                                        `(:valueSet
                                          [,@(mapcar
                                              #'car eglot--tag-faces)])))
+            :window `(:workDoneProgress t)
             :general (list :positionEncodings ["utf-32" "utf-8" "utf-16"])
             :experimental eglot--{})))
 
@@ -1257,7 +1259,7 @@ This docstring appeases checkdoc, that's all."
                               ;; very much data so we turn it off
                               ;; unconditionally -- just for our
                               ;; process.
-                              (tramp-use-ssh-controlmaster-options t)
+                              (tramp-use-ssh-controlmaster-options 'suppress)
                               (tramp-ssh-controlmaster-options
                                "-o ControlMaster=no -o ControlPath=none"))
                           (make-process
@@ -1603,6 +1605,7 @@ If optional MARKER, return a marker instead"
                (directory-file-name (file-local-name truepath))
                eglot--uri-path-allowed-chars)))))
 
+(declare-function w32-long-file-name "w32proc.c" (fn))
 (defun eglot--uri-to-path (uri)
   "Convert URI to file path, helped by `eglot--current-server'."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
@@ -1618,18 +1621,19 @@ If optional MARKER, return a marker instead"
                (normalized (if (and (not remote-prefix)
                                     (eq system-type 'windows-nt)
                                     (cl-plusp (length retval)))
-                               (substring retval 1)
+                               (w32-long-file-name (substring retval 1))
                              retval)))
           (concat remote-prefix normalized))
-
       uri)))
 
 (defun eglot--snippet-expansion-fn ()
   "Compute a function to expand snippets.
 Doubles as an indicator of snippet support."
-  (and (boundp 'yas-minor-mode)
-       (symbol-value 'yas-minor-mode)
-       'yas-expand-snippet))
+  (and (fboundp 'yas-minor-mode)
+       (lambda (&rest args)
+         (with-no-warnings
+           (unless (bound-and-true-p yas-minor-mode) (yas-minor-mode 1))
+           (apply #'yas-expand-snippet args)))))
 
 (defun eglot--format-markup (markup)
   "Format MARKUP according to LSP's spec."
@@ -1882,6 +1886,7 @@ Use `eglot-managed-p' to determine if current buffer is managed.")
 (defun eglot--managed-mode-off ()
   "Turn off `eglot--managed-mode' unconditionally."
   (remove-overlays nil nil 'eglot--overlay t)
+  (eglot-inlay-hints-mode -1)
   (eglot--managed-mode -1))
 
 (defun eglot-current-server ()
@@ -1940,8 +1945,8 @@ If it is activated, also signal textDocument/didOpen."
 
 (put 'eglot--mode-line-format 'risky-local-variable t)
 
-(defun eglot--mouse-call (what)
-  "Make an interactive lambda for calling WHAT from mode-line."
+(defun eglot--mouse-call (what &optional update-mode-line)
+  "Make an interactive lambda for calling WHAT with the mouse."
   (lambda (event)
     (interactive "e")
     (let ((start (event-start event))) (with-selected-window (posn-window start)
@@ -1949,7 +1954,8 @@ If it is activated, also signal textDocument/didOpen."
                                            (goto-char (or (posn-point start)
                                                           (point)))
                                            (call-interactively what)
-                                           (force-mode-line-update t))))))
+                                           (when update-mode-line
+                                             (force-mode-line-update t)))))))
 
 (defun eglot-manual () "Open documentation."
        (declare (obsolete info "29.1"))
@@ -2023,7 +2029,7 @@ Uses THING, FACE, DEFS and PREPEND."
   (cl-loop with map = (make-sparse-keymap)
            for (elem . rest) on defs
            for (key def help) = elem
-           do (define-key map `[mode-line ,key] (eglot--mouse-call def))
+           do (define-key map `[mode-line ,key] (eglot--mouse-call def t))
            concat (format "%s: %s" key help) into blurb
            when rest concat "\n" into blurb
            finally (return `(:propertize ,thing
@@ -2084,15 +2090,18 @@ still unanswered LSP requests to the server\n"))))))))
 (defalias 'eglot--make-diag 'flymake-make-diagnostic)
 (defalias 'eglot--diag-data 'flymake-diagnostic-data)
 
+(defvar eglot-diagnostics-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-2] 'eglot-code-actions-at-mouse)
+    map)
+  "Keymap active in Eglot-backed Flymake diagnostic overlays.")
+
 (cl-loop for i from 1
          for type in '(eglot-note eglot-warning eglot-error)
          do (put type 'flymake-overlay-control
                  `((mouse-face . highlight)
                    (priority . ,(+ 50 i))
-                   (keymap . ,(let ((map (make-sparse-keymap)))
-                                (define-key map [mouse-1]
-                                            (eglot--mouse-call 'eglot-code-actions))
-                                map)))))
+                   (keymap . ,eglot-diagnostics-map))))
 
 
 ;;; Protocol implementation (Requests, notifications, etc)
@@ -2151,22 +2160,24 @@ COMMAND is a symbol naming the command."
   (server (_method (eql $/progress)) &key token value)
   "Handle $/progress notification identified by TOKEN from SERVER."
   (when eglot-report-progress
-    (cl-flet ((fmt (&rest args) (mapconcat #'identity args " ")))
+    (cl-flet ((fmt (&rest args) (mapconcat #'identity args " "))
+              (upd (pcnt msg &optional
+                         (pr (gethash token (eglot--progress-reporters server))))
+                (when pr (progress-reporter-update pr pcnt msg))))
       (eglot--dbind ((WorkDoneProgress) kind title percentage message) value
         (pcase kind
           ("begin"
-           (let* ((prefix (format (concat "[eglot] %s %s:" (when percentage " "))
-                                  (eglot-project-nickname server) token))
-                  (pr (puthash token
-                       (if percentage
-                           (make-progress-reporter prefix 0 100 percentage 1 0)
-                         (make-progress-reporter prefix nil nil nil 1 0))
-                       (eglot--progress-reporters server))))
-             (progress-reporter-update pr percentage (fmt title message))))
-          ("report"
-           (when-let ((pr (gethash token (eglot--progress-reporters server))))
-             (progress-reporter-update pr percentage (fmt title message))))
-          ("end" (remhash token (eglot--progress-reporters server))))))))
+           (let ((prefix (format (concat "[eglot] %s %s:" (when percentage " "))
+                                 (eglot-project-nickname server) token)))
+             (upd percentage (fmt title message)
+                  (puthash token
+                           (if percentage
+                               (make-progress-reporter prefix 0 100 percentage 1 0)
+                             (make-progress-reporter prefix nil nil nil 1 0))
+                           (eglot--progress-reporters server)))))
+          ("report" (upd percentage (fmt title message)))
+          ("end" (upd (or percentage 100) (fmt title message))
+           (remhash token (eglot--progress-reporters server))))))))
 
 (cl-defmethod eglot-handle-notification
   (_server (_method (eql textDocument/publishDiagnostics)) &key uri diagnostics
@@ -2349,7 +2360,6 @@ THINGS are either registrations or unregisterations (sic)."
 
 (defun eglot--before-change (beg end)
   "Hook onto `before-change-functions' with BEG and END."
-  (remove-overlays beg end 'eglot--overlay t)
   (when (listp eglot--recent-changes)
     ;; Records BEG and END, crucially convert them into LSP
     ;; (line/char) positions before that information is lost (because
@@ -2369,25 +2379,23 @@ THINGS are either registrations or unregisterations (sic)."
   "Hook onto `after-change-functions'.
 Records BEG, END and PRE-CHANGE-LENGTH locally."
   (cl-incf eglot--versioned-identifier)
-  (pcase (and (listp eglot--recent-changes)
-              (car eglot--recent-changes))
+  (pcase (car-safe eglot--recent-changes)
     (`(,lsp-beg ,lsp-end
                 (,b-beg . ,b-beg-marker)
                 (,b-end . ,b-end-marker))
-     ;; github#259 and github#367: With `capitalize-word' or somesuch,
-     ;; `before-change-functions' always records the whole word's
-     ;; `b-beg' and `b-end'.  Similarly, when coalescing two lines
-     ;; into one, `fill-paragraph' they mark the end of the first line
-     ;; up to the end of the second line.  In both situations, args
-     ;; received here contradict that information: `beg' and `end'
-     ;; will differ by 1 and will likely only encompass the letter
-     ;; that was capitalized or, in the sentence-joining situation,
-     ;; the replacement of the newline with a space.  That's we keep
-     ;; markers _and_ positions so we're able to detect and correct
-     ;; this.  We ignore `beg', `len' and `pre-change-len' and send
-     ;; "fuller" information about the region from the markers.  I've
-     ;; also experimented with doing this unconditionally but it seems
-     ;; to break when newlines are added.
+     ;; github#259 and github#367: with `capitalize-word' & friends,
+     ;; `before-change-functions' records the whole word's `b-beg' and
+     ;; `b-end'.  Similarly, when `fill-paragraph' coalesces two
+     ;; lines, `b-beg' and `b-end' mark end of first line and end of
+     ;; second line, resp.  In both situations, `beg' and `end'
+     ;; received here seemingly contradict that: they will differ by 1
+     ;; and encompass the capitalized character or, in the coalescing
+     ;; case, the replacement of the newline with a space.  We keep
+     ;; both markers and positions to detect and correct this.  In
+     ;; this specific case, we ignore `beg', `len' and
+     ;; `pre-change-len' and send richer information about the region
+     ;; from the markers.  I've also experimented with doing this
+     ;; unconditionally but it seems to break when newlines are added.
      (if (and (= b-end b-end-marker) (= b-beg b-beg-marker)
               (or (/= beg b-beg) (/= end b-end)))
          (setcar eglot--recent-changes
@@ -2475,7 +2483,7 @@ use the root of SERVER's `eglot--project'."
                ;; Set the major mode to be the first of the managed
                ;; modes.  This is the one the user started eglot in.
                (setq major-mode (car (eglot--major-modes server)))
-               (hack-dir-local-variables-non-file-buffer)()
+               (hack-dir-local-variables-non-file-buffer)
                (if (functionp eglot-workspace-configuration)
                    (funcall eglot-workspace-configuration server)
                  eglot-workspace-configuration))))
@@ -2888,8 +2896,7 @@ for which LSP on-type-formatting should be requested."
                                 ;; it'll be adjusted.  If no usable
                                 ;; insertText at all, label is best,
                                 ;; too.
-                                (cond ((or (and (eql insertTextFormat 2)
-                                                (eglot--snippet-expansion-fn))
+                                (cond ((or (eql insertTextFormat 2)
                                            textEdit
                                            (null insertText)
                                            (string-empty-p insertText))
@@ -3216,8 +3223,9 @@ Returns a list as described in docstring of `imenu--index-alist'."
                                  ,(eglot--TextDocumentIdentifier))
                                :cancel-on-input non-essential))))))
 
-(defun eglot--apply-text-edits (edits &optional version)
+(cl-defun eglot--apply-text-edits (edits &optional version)
   "Apply EDITS for current buffer if at VERSION, or if it's nil."
+  (unless edits (cl-return-from eglot--apply-text-edits))
   (unless (or (not version) (equal version eglot--versioned-identifier))
     (jsonrpc-error "Edits on `%s' require version %d, you have %d"
                    (current-buffer) version eglot--versioned-identifier))
@@ -3335,6 +3343,9 @@ at point.  With prefix argument, prompt for ACTION-KIND."
         (eglot--read-execute-code-action actions server action-kind)
       actions)))
 
+(defalias 'eglot-code-actions-at-mouse (eglot--mouse-call 'eglot-code-actions)
+  "Like `eglot-code-actions', but intended for mouse events.")
+
 (defun eglot--read-execute-code-action (actions server &optional action-kind)
   "Helper for interactive calls to `eglot-code-actions'."
   (let* ((menu-items
@@ -3372,7 +3383,7 @@ at point.  With prefix argument, prompt for ACTION-KIND."
   `(defun ,name (beg &optional end)
      ,(format "Execute `%s' code actions between BEG and END." kind)
      (interactive (eglot--region-bounds))
-     (eglot-code-actions beg end ,kind)))
+     (eglot-code-actions beg end ,kind t)))
 
 (eglot--code-action eglot-code-action-organize-imports "source.organizeImports")
 (eglot--code-action eglot-code-action-extract "refactor.extract")
@@ -3423,8 +3434,9 @@ at point.  With prefix argument, prompt for ACTION-KIND."
       (unwind-protect
           (progn
             (dolist (dir dirs-to-watch)
-              (push (file-notify-add-watch dir '(change) #'handle-event)
-                    (gethash id (eglot--file-watches server))))
+              (when (file-readable-p dir)
+                (push (file-notify-add-watch dir '(change) #'handle-event)
+                      (gethash id (eglot--file-watches server)))))
             (setq
              success
              `(:message ,(format "OK, watching %s directories in %s watchers"
@@ -3603,31 +3615,41 @@ If NOERROR, return predicate, else erroring function."
           (eglot--lambda ((InlayHint) position kind label paddingLeft paddingRight)
             (goto-char (eglot--lsp-position-to-point position))
             (when (or (> (point) to) (< (point) from)) (cl-return))
-            (let ((left-pad (and paddingLeft
-                                 (not (eq paddingLeft :json-false))
-                                 (not (memq (char-before) '(32 9))) " "))
-                  (right-pad (and paddingRight
-                                  (not (eq paddingRight :json-false))
-                                  (not (memq (char-after) '(32 9))) " ")))
-              (cl-flet
-                  ((do-it (text lpad rpad)
-                     (let ((ov (make-overlay (point) (point))))
-                       (overlay-put ov 'before-string
+            (let* ((left-pad (and paddingLeft
+                                  (not (eq paddingLeft :json-false))
+                                  (not (memq (char-before) '(32 9))) " "))
+                   (right-pad (and paddingRight
+                                   (not (eq paddingRight :json-false))
+                                   (not (memq (char-after) '(32 9))) " "))
+                   (peg-after-p (eql kind 1)))
+              (cl-labels
+                  ((make-ov ()
+                     (if peg-after-p
+                         (make-overlay (point) (1+ (point)) nil t)
+                       (make-overlay (1- (point)) (point) nil nil nil)))
+                   (do-it (label lpad rpad firstp)
+                     (let* ((tweak-cursor-p (and firstp peg-after-p))
+                            (ov (make-ov))
+                            (text (concat lpad label rpad)))
+                       (when tweak-cursor-p (put-text-property 0 1 'cursor 1 text))
+                       (overlay-put ov (if peg-after-p 'before-string 'after-string)
                                     (propertize
-                                     (concat lpad text rpad)
+                                     text
                                      'face (pcase kind
                                              (1 'eglot-type-hint-face)
                                              (2 'eglot-parameter-hint-face)
                                              (_ 'eglot-inlay-hint-face))))
                        (overlay-put ov 'eglot--inlay-hint t)
+                       (overlay-put ov 'evaporate t)
                        (overlay-put ov 'eglot--overlay t))))
-                (if (stringp label) (do-it label left-pad right-pad)
+                (if (stringp label) (do-it label left-pad right-pad t)
                   (cl-loop
                    for i from 0 for ldetail across label
                    do (eglot--dbind ((InlayHintLabelPart) value) ldetail
                         (do-it value
                                (and (zerop i) left-pad)
-                               (and (= i (1- (length label))) right-pad))))))))))
+                               (and (= i (1- (length label))) right-pad)
+                               (zerop i))))))))))
     (jsonrpc-async-request
      (eglot--current-server-or-lose)
      :textDocument/inlayHint
@@ -3655,13 +3677,11 @@ If NOERROR, return predicate, else erroring function."
 
 ;;; Hacks
 ;;;
-;; FIXME: Although desktop.el compatibility is Emacs bug#56407, the
-;; optimal solution agreed to there is a bit more work than what I
-;; have time to right now.  See
-;; e.g. https://debbugs.gnu.org/cgi/bugreport.cgi?bug=bug%2356407#68.
-;; For now, just use `with-eval-after-load'
+;; Emacs bug#56407, the optimal solution is in desktop.el, but that's
+;; harder. For now, use `with-eval-after-load'. See also github#1183.
 (with-eval-after-load 'desktop
-  (add-to-list 'desktop-minor-mode-handlers '(eglot--managed-mode . ignore)))
+  (add-to-list 'desktop-minor-mode-handlers '(eglot--managed-mode . ignore))
+  (add-to-list 'desktop-minor-mode-handlers '(eglot-inlay-hints-mode . ignore)))
 
 
 ;;; Misc

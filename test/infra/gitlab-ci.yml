@@ -246,6 +246,9 @@ test-gnustep:
     target: emacs-gnustep
     make_params: install
 
+# The next two jobs are commented out due to high workload on
+# emba.gnu.org.
+
 # build-native-comp-speed0:
 #   stage: native-comp-images
 #   extends: [.job-template, .build-template, .native-comp-template]

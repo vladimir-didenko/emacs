@@ -45,7 +45,8 @@ declaration.  A FILE with an \"ext:\" prefix is an external file.
 `check-declare' will check such files if they are found, and skip
 them without error if they are not.
 
-Optional ARGLIST specifies FN's arguments, or is t to not specify
+Optional ARGLIST specifies FN's arguments, in the same form as
+in `defun' (including the parentheses); or it is t to not specify
 FN's arguments.  An omitted ARGLIST defaults to t, not nil: a nil
 ARGLIST specifies an empty argument list, and an explicit t
 ARGLIST is a placeholder that allows supplying a later arg.
@@ -163,7 +164,7 @@ of previous VARs.
 (defmacro setq-local (&rest pairs)
   "Make each VARIABLE buffer-local and assign to it the corresponding VALUE.
 
-The arguments are variable/value pairs  For each VARIABLE in a pair,
+The arguments are variable/value pairs.  For each VARIABLE in a pair,
 make VARIABLE buffer-local and assign to it the corresponding VALUE
 of the pair.  The VARIABLEs are literal symbols and should not be quoted.
 
@@ -3196,34 +3197,40 @@ This function is used by the `interactive' code letter \"n\"."
     n))
 
 (defvar read-char-choice-use-read-key nil
-  "Prefer `read-key' when reading a character by `read-char-choice'.
-Otherwise, use the minibuffer.
+  "If non-nil, use `read-key' when reading a character by `read-char-choice'.
+Otherwise, use the minibuffer (this is the default).
 
-When using the minibuffer, the user is less constrained, and can
-use the normal commands available in the minibuffer, and can, for
-instance, switch to another buffer, do things there, and then
-switch back again to the minibuffer before entering the
-character.  This is not possible when using `read-key', but using
-`read-key' may be less confusing to some users.")
+When reading via the minibuffer, you can use the normal commands
+available in the minibuffer, and can, for instance, temporarily
+switch to another buffer, do things there, and then switch back
+to the minibuffer before entering the character.  This is not
+possible when using `read-key', but using `read-key' may be less
+confusing to some users.")
 
 (defun read-char-choice (prompt chars &optional inhibit-keyboard-quit)
-  "Read and return one of CHARS, prompting for PROMPT.
-Any input that is not one of CHARS is ignored.
+  "Read and return one of the characters in CHARS, prompting with PROMPT.
+CHARS should be a list of single characters.
+The function discards any input character that is not one of CHARS,
+and by default shows a message to the effect that it is not one of
+the expected characters.
 
-By default, the minibuffer is used to read the key
-non-modally (see `read-char-from-minibuffer').  If
+By default, this function uses the minibuffer to read the key
+non-modally (see `read-char-from-minibuffer'), and the optional
+argument INHIBIT-KEYBOARD-QUIT is ignored.  However, if
 `read-char-choice-use-read-key' is non-nil, the modal `read-key'
-function is used instead (see `read-char-choice-with-read-key')."
+function is used instead (see `read-char-choice-with-read-key'),
+and INHIBIT-KEYBOARD-QUIT is passed to it."
   (if (not read-char-choice-use-read-key)
       (read-char-from-minibuffer prompt chars)
     (read-char-choice-with-read-key prompt chars inhibit-keyboard-quit)))
 
 (defun read-char-choice-with-read-key (prompt chars &optional inhibit-keyboard-quit)
-  "Read and return one of CHARS, prompting for PROMPT.
+  "Read and return one of the characters in CHARS, prompting with PROMPT.
+CHARS should be a list of single characters.
 Any input that is not one of CHARS is ignored.
 
 If optional argument INHIBIT-KEYBOARD-QUIT is non-nil, ignore
-`keyboard-quit' events while waiting for a valid input.
+`keyboard-quit' events while waiting for valid input.
 
 If you bind the variable `help-form' to a non-nil value
 while calling this function, then pressing `help-char'
@@ -3519,22 +3526,22 @@ Also discard all previous input in the minibuffer."
     (sit-for 2)))
 
 (defvar y-or-n-p-use-read-key nil
-  "Prefer `read-key' when answering a \"y or n\" question by `y-or-n-p'.
-Otherwise, use the minibuffer.
+  "Use `read-key' when reading answers to \"y or n\" questions by `y-or-n-p'.
+Otherwise, use the `read-from-minibuffer' to read the answers.
 
-When using the minibuffer, the user is less constrained, and can
-use the normal commands available in the minibuffer, and can, for
-instance, switch to another buffer, do things there, and then
-switch back again to the minibuffer before entering the
-character.  This is not possible when using `read-key', but using
-`read-key' may be less confusing to some users.")
+When reading via the minibuffer, you can use the normal commands
+available in the minibuffer, and can, for instance, temporarily
+switch to another buffer, do things there, and then switch back
+to the minibuffer before entering the character.  This is not
+possible when using `read-key', but using `read-key' may be less
+confusing to some users.")
 
 (defvar from--tty-menu-p nil
   "Non-nil means the current command was invoked from a TTY menu.")
 (defun use-dialog-box-p ()
-  "Say whether the current command should prompt the user via a dialog box."
+  "Return non-nil if the current command should prompt the user via a dialog box."
   (and last-input-event                 ; not during startup
-       (or (listp last-nonmenu-event)   ; invoked by a mouse event
+       (or (consp last-nonmenu-event)   ; invoked by a mouse event
            from--tty-menu-p)            ; invoked via TTY menu
        use-dialog-box))
 
@@ -7069,7 +7076,7 @@ CONDITION is either:
 - the symbol t, to always match,
 - the symbol nil, which never matches,
 - a regular expression, to match a buffer name,
-- a predicate function that takes a buffer object and ARG as
+- a predicate function that takes BUFFER-OR-NAME and ARG as
   arguments, and returns non-nil if the buffer matches,
 - a cons-cell, where the car describes how to interpret the cdr.
   The car can be one of the following:
@@ -7095,8 +7102,8 @@ CONDITION is either:
                        (string-match-p condition (buffer-name buffer)))
                       ((pred functionp)
                        (if (eq 1 (cdr (func-arity condition)))
-                           (funcall condition buffer)
-                         (funcall condition buffer arg)))
+                           (funcall condition buffer-or-name)
+                         (funcall condition buffer-or-name arg)))
                       (`(major-mode . ,mode)
                        (eq
                         (buffer-local-value 'major-mode buffer)
