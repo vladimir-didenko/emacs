@@ -3,15 +3,15 @@
 %def_disable athena
 %def_disable nox
 
-%define gcc_branch 12
+%define gcc_branch 13
 %ifarch ppc
 # On ppc32, we build a 64-bit compiler with default 32-bit mode.
 %define _target_platform ppc64-alt-linux
 %endif
 
 Name: emacs
-Version: 29.0.60
-Release: alt6.git6b9f9df
+Version: 29.0.92
+Release: alt1.git67def1f
 
 Summary: GNU Emacs text editor
 License: GPLv3+
@@ -506,6 +506,9 @@ sed -ne '/\/leim\//p' < elgz.ls > leim.el.ls
 %_infodir/elisp*
 
 %changelog
+* Tue Jul 4 2023 Vladimir Didenko <cow@altlinux.org> 29.0.92-alt1.git67def1f
+- 29.0.92-git67def1f
+
 * Wed Apr 5 2023 Vladimir Didenko <cow@altlinux.org> 29.0.60-alt6.git6b9f9df
 - 29.0.60-git6b9f9df
 
