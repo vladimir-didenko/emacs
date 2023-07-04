@@ -2428,7 +2428,12 @@ narrowed.
 
 (fn &optional BUFFER)" t)
 (autoload 'browse-url-of-dired-file "browse-url" "\
-In Dired, ask a WWW browser to display the file named on this line." t)
+In Dired, ask a WWW browser to display the file named on this line.
+With prefix arg, use the secondary browser instead (e.g. EWW if
+`browse-url-secondary-browser-function' is set to
+`eww-browse-url'.
+
+(fn &optional SECONDARY)" t)
 (autoload 'browse-url-of-region "browse-url" "\
 Use a web browser to display the current region.
 See `browse-url' for details.
@@ -2964,6 +2969,10 @@ To use tree-sitter C/C++ modes by default, evaluate
                  \\='(c-or-c++-mode . c-or-c++-ts-mode))
 
 in your configuration.
+
+Since this mode uses a parser, unbalanced brackets might cause
+some breakage in indentation/fontification.  Therefore, it's
+recommended to enable `electric-pair-mode' with this mode.
 
 (fn)" t)
 (autoload 'c-or-c++-ts-mode "c-ts-mode" "\
@@ -8239,14 +8248,17 @@ TURN-ON is a function that will be called with no args in every buffer
 and that should try to turn MODE on if applicable for that buffer.
 
 Each of KEY VALUE is a pair of CL-style keyword arguments.
-The :predicate argument specifies in which major modes should the
+The :predicate key specifies in which major modes should the
 globalized minor mode be switched on.  The value should be t (meaning
 switch on the minor mode in all major modes), nil (meaning don't
 switch on in any major mode), a list of modes (meaning switch on only
 in those modes and their descendants), or a list (not MODES...),
 meaning switch on in any major mode except MODES.  The value can also
 mix all of these forms, see the info node `Defining Minor Modes' for
-details.
+details.  The :predicate key causes the macro to create a user option
+named the same as MODE, but ending with \"-modes\" instead of \"-mode\".
+That user option can then be used to customize in which modes this
+globalized minor mode will be switched on.
 As the minor mode defined by this function is always global, any
 :global keyword is ignored.
 Other keywords have the same meaning as in `define-minor-mode',
@@ -9228,6 +9240,7 @@ Turn on EDT Emulation." t)
 
 ;;; Generated autoloads from progmodes/eglot.el
 
+(push (purecopy '(eglot 1 12 29)) package--builtin-versions)
 (autoload 'eglot "eglot" "\
 Start LSP server in support of PROJECT's buffers under MANAGED-MAJOR-MODE.
 
@@ -9270,6 +9283,11 @@ INTERACTIVE is ignored and provided for backward compatibility.
 (fn MANAGED-MAJOR-MODE PROJECT CLASS CONTACT LANGUAGE-ID &optional INTERACTIVE)" t)
 (autoload 'eglot-ensure "eglot" "\
 Start Eglot session for current buffer if there isn't one.")
+(autoload 'eglot-upgrade-eglot "eglot" "\
+Update Eglot to latest version.
+
+(fn &rest _)" t)
+(define-obsolete-function-alias 'eglot-update 'eglot-upgrade-eglot "29.1")
 (put 'eglot-workspace-configuration 'safe-local-variable 'listp)
 (put 'eglot--debbugs-or-github-bug-uri 'bug-reference-url-format t)
 (defun eglot--debbugs-or-github-bug-uri nil (format (if (string= (match-string 2) "github") "https://github.com/joaotavora/eglot/issues/%s" "https://debbugs.gnu.org/%s") (match-string 3)))
@@ -9813,6 +9831,8 @@ FACTOR is the multiplication factor for the size.
 (fn &optional FACTOR)" t)
 (autoload 'emoji-zoom-decrease "emoji" "\
 Decrease the size of the character under point." t)
+(autoload 'emoji-zoom-reset "emoji" "\
+Reset the size of the character under point." t)
 (register-definition-prefixes "emoji" '("emoji-"))
 
 
@@ -10190,7 +10210,7 @@ Look at CONFIG and try to expand GROUP.
 
 ;;; Generated autoloads from erc/erc.el
 
-(push (purecopy '(erc 5 5)) package--builtin-versions)
+(push (purecopy '(erc 5 5 0 29 1)) package--builtin-versions)
 (autoload 'erc-select-read-args "erc" "\
 Prompt the user for values of nick, server, port, and password.")
 (autoload 'erc "erc" "\
@@ -12333,7 +12353,7 @@ Variables of interest include:
    If non-nil, always attempt to create the other file if it was not found.
 
  - `ff-quiet-mode'
-   If non-nil, traces which directories are being searched.
+   If non-nil, does not trace which directories are being searched.
 
  - `ff-special-constructs'
    A list of regular expressions specifying how to recognize special
@@ -17232,8 +17252,8 @@ Put image IMAGE in front of POS in the current buffer.
 IMAGE must be an image created with `create-image' or `defimage'.
 IMAGE is displayed by putting an overlay into the current buffer with a
 `before-string' STRING that has a `display' property whose value is the
-image.  STRING is defaulted if you omit it.
-The overlay created will have the `put-image' property set to t.
+image.  STRING defaults to \"x\" if it's nil or omitted.
+The overlay created by this function has the `put-image' property set to t.
 POS may be an integer or marker.
 AREA is where to display the image.  AREA nil or omitted means
 display it in the text area, a value of `left-margin' means
@@ -17367,14 +17387,12 @@ Cut a rectangle from the image under point, filling it with COLOR.
 COLOR defaults to the value of `image-cut-color'.
 Interactively, with prefix argument, prompt for COLOR to use.
 
-(fn &optional COLOR)" t)
-(autoload 'image-crop "image-crop" "\
-Crop the image under point.
-If CUT is non-nil, remove a rectangle from the image instead of
-cropping the image.  In that case CUT should be the name of a
-color to fill the rectangle.
+This command presents the image with a rectangular area superimposed
+on it, and allows moving and resizing the area to define which
+part of it to cut.
 
-While cropping the image, the following key bindings are available:
+While moving/resizing the cutting area, the following key bindings
+are available:
 
 `q':   Exit without changing anything.
 `RET': Crop/cut the image.
@@ -17382,8 +17400,31 @@ While cropping the image, the following key bindings are available:
        rectangle shape.
 `s':   Same as `m', but make the rectangle into a square first.
 
-After cropping an image, you can save it by `M-x image-save' or
+After cutting the image, you can save it by `M-x image-save' or
 \\<image-map>\\[image-save] when point is over the image.
+
+(fn &optional COLOR)" t)
+(autoload 'image-crop "image-crop" "\
+Crop the image under point.
+This command presents the image with a rectangular area superimposed
+on it, and allows moving and resizing the area to define which
+part of it to crop.
+
+While moving/resizing the cropping area, the following key bindings
+are available:
+
+`q':   Exit without changing anything.
+`RET': Crop/cut the image.
+`m':   Make mouse movements move the rectangle instead of altering the
+       rectangle shape.
+`s':   Same as `m', but make the rectangle into a square first.
+
+After cropping the image, you can save it by `M-x image-save' or
+\\<image-map>\\[image-save] when point is over the image.
+
+When called from Lisp, if CUT is non-nil, remove a rectangle from
+the image instead of cropping the image.  In that case, CUT should
+be the name of a color to fill the rectangle.
 
 (fn &optional CUT)" t)
 (register-definition-prefixes "image-crop" '("image-c"))
@@ -18494,6 +18535,11 @@ If optional INTERIOR-FRAG is non-nil, then the word may be a character
 sequence inside of a word.
 
 Standard ispell choices are then available.
+
+This command uses a word-list file specified
+by `ispell-alternate-dictionary' or by `ispell-complete-word-dict';
+if none of those name an existing word-list file, this command
+signals an error.
 
 (fn &optional INTERIOR-FRAG)" t)
 (autoload 'ispell-complete-word-interior-frag "ispell" "\
@@ -22427,7 +22473,7 @@ Coloring:
 
 ;;; Generated autoloads from org/org.el
 
-(push (purecopy '(org 9 6 2)) package--builtin-versions)
+(push (purecopy '(org 9 6 6)) package--builtin-versions)
 (autoload 'org-babel-do-load-languages "org" "\
 Load the languages defined in `org-babel-load-languages'.
 
@@ -23419,8 +23465,7 @@ If PACKAGE is a `package-desc' object, MIN-VERSION is ignored.
 (autoload 'package-install "package" "\
 Install the package PKG.
 PKG can be a `package-desc' or a symbol naming one of the
-available packages in an archive in `package-archives'.  When
-called interactively, prompt for the package name.
+available packages in an archive in `package-archives'.
 
 Mark the installed package as selected by adding it to
 `package-selected-packages'.
@@ -23432,15 +23477,29 @@ non-nil, install the package but do not add it to
 If PKG is a `package-desc' and it is already installed, don't try
 to install it but still mark it as selected.
 
+If the command is invoked with a prefix argument, it will allow
+upgrading of built-in packages, as if `package-install-upgrade-built-in'
+had been enabled.
+
 (fn PKG &optional DONT-SELECT)" t)
-(autoload 'package-update "package" "\
-Update package NAME if a newer version exists.
+(autoload 'package-upgrade "package" "\
+Upgrade package NAME if a newer version exists.
+
+Currently, packages which are part of the Emacs distribution
+cannot be upgraded that way.  To enable upgrades of such a
+package using this command, first upgrade the package to a
+newer version from ELPA by using `\\<package-menu-mode-map>\\[package-menu-mark-install]' after `\\[list-packages]'.
 
 (fn NAME)" t)
-(autoload 'package-update-all "package" "\
+(autoload 'package-upgrade-all "package" "\
 Refresh package list and upgrade all packages.
-If QUERY, ask the user before updating packages.  When called
+If QUERY, ask the user before upgrading packages.  When called
 interactively, QUERY is always true.
+
+Currently, packages which are part of the Emacs distribution are
+not upgraded by this command.  To enable upgrading such a package
+using this command, first upgrade  the package to a newer version
+from ELPA by using `\\<package-menu-mode-map>\\[package-menu-mark-install]' after `\\[list-packages]'.
 
 (fn &optional QUERY)" t)
 (autoload 'package-install-from-buffer "package" "\
@@ -23521,10 +23580,10 @@ Location of the file used to speed up activation of packages at startup." :type 
 
 (autoload 'package-vc-install-selected-packages "package-vc" "\
 Ensure packages specified in `package-vc-selected-packages' are installed." t)
-(autoload 'package-vc-update-all "package-vc" "\
-Attempt to update all installed VC packages." t)
-(autoload 'package-vc-update "package-vc" "\
-Attempt to update the package PKG-DESC.
+(autoload 'package-vc-upgrade-all "package-vc" "\
+Attempt to upgrade all installed VC packages." t)
+(autoload 'package-vc-upgrade "package-vc" "\
+Attempt to upgrade the package PKG-DESC.
 
 (fn PKG-DESC)" t)
 (autoload 'package-vc-install "package-vc" "\
@@ -23540,11 +23599,13 @@ indicating the package name and SPEC is a plist as described in
 symbol whose name is the package name, and the URL for the
 package will be taken from the package's metadata.
 
-By default, this function installs the last version of the package
-available from its repository, but if REV is given and non-nil, it
-specifies the revision to install.  If REV has the special value
-`:last-release' (interactively, the prefix argument), that stands
-for the last released version of the package.
+By default, this function installs the last revision of the
+package available from its repository.  If REV is a string, it
+describes the revision to install, as interpreted by the VC
+backend.  The special value `:last-release' (interactively, the
+prefix argument), will use the commit of the latest release, if
+it exists.  The last release is the latest revision which changed
+the \"Version:\" header of the package's main Lisp file.
 
 Optional argument BACKEND specifies the VC backend to use for cloning
 the package's repository; this is only possible if NAME-OR-URL is a URL,
@@ -23581,7 +23642,7 @@ Rebuilding an installation means scraping for new autoload
 cookies, re-compiling Emacs Lisp files, building and installing
 any documentation, downloading any missing dependencies.  This
 command does not fetch new revisions from a remote server.  That
-is the responsibility of `package-vc-update'.  Interactively,
+is the responsibility of `package-vc-upgrade'.  Interactively,
 prompt for the name of the package to rebuild.
 
 (fn PKG-DESC)" t)
@@ -23636,7 +23697,9 @@ The values returned are identical to those of `decode-time', but
 any unknown values other than DST are returned as nil, and an
 unknown DST value is returned as -1.
 
-(fn STRING)")
+See `decode-time' for the meaning of FORM.
+
+(fn STRING &optional FORM)")
 (register-definition-prefixes "parse-time" '("parse-"))
 
 
@@ -24464,7 +24527,7 @@ Create a plstore instance associated with FILE.
 
 (fn FILE)")
 (autoload 'plstore-mode "plstore" "\
-Major mode for editing PLSTORE files.
+Major mode for editing plstore files.
 
 (fn)" t)
 (register-definition-prefixes "plstore" '("plstore-"))
@@ -25170,6 +25233,11 @@ See the doc string of `project-find-functions' for the general form
 of the project instance object.
 
 (fn &optional MAYBE-PROMPT DIRECTORY)")
+(put 'project-vc-ignores 'safe-local-variable #'listp)
+(put 'project-vc-merge-submodules 'safe-local-variable #'booleanp)
+(put 'project-vc-include-untracked 'safe-local-variable #'booleanp)
+(put 'project-vc-name 'safe-local-variable #'stringp)
+(put 'project-vc-extra-root-markers 'safe-local-variable (lambda (val) (and (listp val) (not (memq nil (mapcar #'stringp val))))))
 (defvar project-prefix-map (let ((map (make-sparse-keymap))) (define-key map "!" 'project-shell-command) (define-key map "&" 'project-async-shell-command) (define-key map "f" 'project-find-file) (define-key map "F" 'project-or-external-find-file) (define-key map "b" 'project-switch-to-buffer) (define-key map "s" 'project-shell) (define-key map "d" 'project-find-dir) (define-key map "D" 'project-dired) (define-key map "v" 'project-vc-dir) (define-key map "c" 'project-compile) (define-key map "e" 'project-eshell) (define-key map "k" 'project-kill-buffers) (define-key map "p" 'project-switch-project) (define-key map "g" 'project-find-regexp) (define-key map "G" 'project-or-external-find-regexp) (define-key map "r" 'project-query-replace-regexp) (define-key map "x" 'project-execute-extended-command) (define-key map "\2" 'project-list-buffers) map) "\
 Keymap for project commands.")
  (define-key ctl-x-map "p" project-prefix-map)
@@ -25319,6 +25387,7 @@ start with a space (which are for internal use).  With prefix argument
 ARG, show only buffers that are visiting files.
 
 (fn &optional ARG)" t)
+(put 'project-kill-buffers-display-buffer-list 'safe-local-variable #'booleanp)
 (autoload 'project-kill-buffers "project" "\
 Kill the buffers belonging to the current project.
 Two buffers belong to the same project if their project
@@ -25993,7 +26062,7 @@ ENCRYPTION, CERTFP, SERVER-ALIAS are interpreted as in
 `rcirc-server-alist'.  STARTUP-CHANNELS is a list of channels
 that are joined after authentication.
 
-(fn SERVER &optional PORT NICK USER-NAME FULL-NAME STARTUP-CHANNELS PASSWORD ENCRYPTION CERTFP SERVER-ALIAS)")
+(fn SERVER &optional PORT NICK USER-NAME FULL-NAME STARTUP-CHANNELS PASSWORD ENCRYPTION SERVER-ALIAS CERTFP)")
 (defvar rcirc-track-minor-mode nil "\
 Non-nil if Rcirc-Track minor mode is enabled.
 See the `rcirc-track-minor-mode' command
@@ -31742,7 +31811,7 @@ Entering Texinfo mode calls the value of `text-mode-hook', and then the
 value of `texinfo-mode-hook'.
 
 (fn)" t)
-(register-definition-prefixes "texinfo" '("texinfo-"))
+(register-definition-prefixes "texinfo" '("fill-paragraph-separate" "texinfo-"))
 
 
 ;;; Generated autoloads from textmodes/texnfo-upd.el
@@ -32887,7 +32956,9 @@ Build and install the tree-sitter language grammar library for LANG.
 
 Interactively, if `treesit-language-source-alist' doesn't already
 have data for building the grammar for LANG, prompt for its
-repository URL and the C/C++ compiler to use.
+repository URL and the C/C++ compiler to use.  The recipe built
+by the prompts are saved for the current session if the
+installation is successful and the grammar is loadable.
 
 This command requires Git, a C compiler and (sometimes) a C++ compiler,
 and the linker to be installed and on PATH.  It also requires that the
@@ -33128,6 +33199,9 @@ This major mode defines two additional JSX-specific faces:
 `typescript-ts-jsx-attribute-face' and
 `typescript-ts-jsx-attribute-face' that are used for HTML tags
 and attributes, respectively.
+
+The JSX-specific faces are used when `treesit-font-lock-level' is
+at least 3 (which is the default value).
 
 (fn)" t)
 (register-definition-prefixes "typescript-ts-mode" '("typescript-ts-mode-"))
@@ -34334,35 +34408,58 @@ Visit the next conflicted file in the current project." t)
 (autoload 'vc-create-tag "vc" "\
 Descending recursively from DIR, make a tag called NAME.
 For each registered file, the working revision becomes part of
-the named configuration.  If the prefix argument BRANCHP is
-given, the tag is made as a new branch and the files are
-checked out in that new branch.
+the configuration identified by the tag.
+If BRANCHP is non-nil (interactively, the prefix argument), the
+tag NAME is a new branch, and the files are checked out and
+updated to reflect their revisions on that branch.
+In interactive use, DIR is `default-directory' for repository-granular
+VCSes (all the modern decentralized VCSes belong to this group),
+otherwise the command will prompt for DIR.
 
 (fn DIR NAME BRANCHP)" t)
 (autoload 'vc-create-branch "vc" "\
-Descending recursively from DIR, make a branch called NAME.
-After a new branch is made, the files are checked out in that new branch.
-Uses `vc-create-tag' with the non-nil arg `branchp'.
+Make a branch called NAME in directory DIR.
+After making the new branch, check out the branch, i.e. update the
+files in the tree to their revisions on the branch.
+
+Interactively, prompt for the NAME of the branch.
+
+With VCSes that maintain version information per file, this command also
+prompts for the directory DIR whose files, recursively, will be tagged
+with the NAME of new branch.  For VCSes that maintain version
+information for the entire repository (all the modern decentralized
+VCSes belong to this group), DIR is always the `default-directory'.
+
+Finally, this command might prompt for the branch or tag from which to
+start (\"fork\") the new branch, with completion candidates including
+all the known branches and tags in the repository.
+
+This command invokes `vc-create-tag' with the non-nil BRANCHP argument.
 
 (fn DIR NAME)" t)
 (autoload 'vc-retrieve-tag "vc" "\
-For each file in or below DIR, retrieve their tagged version NAME.
+For each file in or below DIR, retrieve their version identified by tag NAME.
 NAME can name a branch, in which case this command will switch to the
 named branch in the directory DIR.
 Interactively, prompt for DIR only for VCS that works at file level;
-otherwise use the repository root of the current buffer.
+otherwise use the root directory of the current buffer's VC tree.
 If NAME is empty, it refers to the latest revisions of the current branch.
 If locking is used for the files in DIR, then there must not be any
 locked files at or below DIR (but if NAME is empty, locked files are
 allowed and simply skipped).
-If the prefix argument BRANCHP is given, switch the branch
-and check out the files in that branch.
+If BRANCHP is non-nil (interactively, the prefix argument), switch to the
+branch and check out and update the files to their version on that branch.
 This function runs the hook `vc-retrieve-tag-hook' when finished.
 
 (fn DIR NAME &optional BRANCHP)" t)
 (autoload 'vc-switch-branch "vc" "\
 Switch to the branch NAME in the directory DIR.
-If NAME is empty, it refers to the latest revisions of the current branch.
+If NAME is empty, it refers to the latest revision of the current branch.
+Interactively, prompt for DIR only for VCS that works at file level;
+otherwise use the root directory of the current buffer's VC tree.
+Interactively, prompt for the NAME of the branch.
+After switching to the branch, check out and update the files to their
+version on that branch.
 Uses `vc-retrieve-tag' with the non-nil arg `branchp'.
 
 (fn DIR NAME)" t)
@@ -34395,7 +34492,8 @@ with its diffs (if the underlying VCS backend supports that).
 
 (fn &optional LIMIT REVISION)" t)
 (autoload 'vc-print-branch-log "vc" "\
-Show the change log for BRANCH root in a window.
+Show the change log for BRANCH in another window.
+The command prompts for the branch whose change log to show.
 
 (fn BRANCH)" t)
 (autoload 'vc-log-incoming "vc" "\
@@ -37120,9 +37218,9 @@ run a specific program.  The program must be a member of
 (provide 'loaddefs)
 
 ;; Local Variables:
-;; no-byte-compile: t
 ;; version-control: never
 ;; no-update-autoloads: t
+;; no-byte-compile: t
 ;; no-native-compile: t
 ;; coding: utf-8-emacs-unix
 ;; End:

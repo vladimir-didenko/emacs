@@ -58,6 +58,7 @@
     (modify-syntax-entry ?<   "."      table)
     (modify-syntax-entry ?>   "."      table)
     (modify-syntax-entry ?\\  "\\"     table)
+    (modify-syntax-entry ?\'  "\""     table)
     (modify-syntax-entry ?/   ". 124b" table)
     (modify-syntax-entry ?*   ". 23"   table)
     (modify-syntax-entry ?\n  "> b"    table)
@@ -78,6 +79,7 @@
      ((parent-is "const_declaration") parent-bol go-ts-mode-indent-offset)
      ((parent-is "default_case") parent-bol go-ts-mode-indent-offset)
      ((parent-is "expression_case") parent-bol go-ts-mode-indent-offset)
+     ((parent-is "selector_expression") parent-bol go-ts-mode-indent-offset)
      ((parent-is "expression_switch_statement") parent-bol 0)
      ((parent-is "field_declaration_list") parent-bol go-ts-mode-indent-offset)
      ((parent-is "import_spec_list") parent-bol go-ts-mode-indent-offset)
@@ -105,6 +107,11 @@
     ">>" "%=" ">>=" "--" "!"  "..."  "&^" "&^=" "~")
   "Go operators for tree-sitter font-locking.")
 
+(defun go-ts-mode--iota-query-supported-p ()
+  "Return t if the iota query is supported by the tree-sitter-go grammar."
+  (ignore-errors
+    (or (treesit-query-string "" '((iota) @font-lock-constant-face) 'go) t)))
+
 (defvar go-ts-mode--font-lock-settings
   (treesit-font-lock-rules
    :language 'go
@@ -117,7 +124,9 @@
 
    :language 'go
    :feature 'constant
-   '([(false) (iota) (nil) (true)] @font-lock-constant-face
+   `([(false) (nil) (true)] @font-lock-constant-face
+     ,@(when (go-ts-mode--iota-query-supported-p)
+         '((iota) @font-lock-constant-face))
      (const_declaration
       (const_spec name: (identifier) @font-lock-constant-face)))
 
@@ -288,7 +297,7 @@ Return nil if there is no name or if NODE is not a defun node."
    (treesit-search-subtree node "type_alias" nil nil 1)))
 
 (defun go-ts-mode--other-type-node-p (node)
-  "Return t if NODE is a type, other than interface, struct or alias."
+  "Return t if NODE is a type other than interface, struct, or alias."
   (and
    (string-equal "type_declaration" (treesit-node-type node))
    (not (go-ts-mode--interface-node-p node))
@@ -317,7 +326,7 @@ Return nil if there is no name or if NODE is not a defun node."
   "Tree-sitter indent rules for `go-mod-ts-mode'.")
 
 (defun go-mod-ts-mode--in-directive-p ()
-  "Return non-nil if inside a directive.
+  "Return non-nil if point is inside a directive.
 When entering an empty directive or adding a new entry to one, no node
 will be present meaning none of the indentation rules will match,
 because there is no parent to match against.  This function determines

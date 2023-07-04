@@ -378,13 +378,16 @@ See `treesit-query-capture' for QUERY."
 (defun treesit-query-range (node query &optional beg end)
   "Query the current buffer and return ranges of captured nodes.
 
-QUERY, NODE, BEG, END are the same as in
-`treesit-query-capture'.  This function returns a list
-of (START . END), where START and END specifics the range of each
-captured node.  Capture names don't matter."
+QUERY, NODE, BEG, END are the same as in `treesit-query-capture'.
+This function returns a list of (START . END), where START and
+END specifics the range of each captured node.  Capture names
+generally don't matter, but names that starts with an underscore
+are ignored."
   (cl-loop for capture
            in (treesit-query-capture node query beg end)
+           for name = (car capture)
            for node = (cdr capture)
+           if (not (string-prefix-p "_" (symbol-name name)))
            collect (cons (treesit-node-start node)
                          (treesit-node-end node))))
 
@@ -398,6 +401,9 @@ When updating the range of each parser in the buffer,
 `treesit-update-ranges' queries each QUERY, and sets LANGUAGE's
 range to the range spanned by captured nodes.  QUERY must be a
 compiled query.
+
+Capture names generally don't matter, but names that starts with
+an underscore are ignored.
 
 QUERY can also be a function, in which case it is called with 2
 arguments, START and END.  It should ensure parsers' ranges are
@@ -417,6 +423,9 @@ like this:
 
 Each QUERY is a tree-sitter query in either the string,
 s-expression or compiled form.
+
+Capture names generally don't matter, but names that starts with
+an underscore are ignored.
 
 For each QUERY, :KEYWORD and VALUE pairs add meta information to
 it.  For example,
@@ -1063,7 +1072,8 @@ parser notifying of the change."
       (when treesit--font-lock-verbose
         (message "Notifier received range: %s-%s"
                  (car range) (cdr range)))
-      (put-text-property (car range) (cdr range) 'fontified nil))))
+      (with-silent-modifications
+        (put-text-property (car range) (cdr range) 'fontified nil)))))
 
 ;;; Indent
 
@@ -1159,7 +1169,6 @@ See `treesit-simple-indent-presets'.")
                              (save-excursion
                                (goto-char bol)
                                (looking-at-p comment-end-skip))))
-        ;; TODO: Document.
         (cons 'catch-all (lambda (&rest _) t))
 
         (cons 'query (lambda (pattern)
@@ -1173,7 +1182,6 @@ See `treesit-simple-indent-presets'.")
         (cons 'first-sibling (lambda (_n parent &rest _)
                                (treesit-node-start
                                 (treesit-node-child parent 0))))
-        ;; TODO: Document.
         (cons 'nth-sibling (lambda (n &optional named)
                              (lambda (_n parent &rest _)
                                (treesit-node-start
@@ -1215,7 +1223,6 @@ See `treesit-simple-indent-presets'.")
                          (or (and this-line-has-prefix
                                   (match-beginning 1))
                              (match-end 0)))))))
-        ;; TODO: Document.
         (cons 'grand-parent
               (lambda (_n parent &rest _)
                 (treesit-node-start (treesit-node-parent parent))))
@@ -1286,10 +1293,10 @@ See `treesit-simple-indent-presets'.")
                         (mapcar (lambda (fn)
                                   (funcall fn node parent bol))
                                 fns)))))
-  "A list of presets.
-These presets that can be used as MATHER and ANCHOR in
-`treesit-simple-indent-rules'.  MACHTERs and ANCHORs are
-functions that take 3 arguments: NODE, PARENT and BOL.
+  "A list of indent rule presets.
+These presets can be used as MATCHER and ANCHOR values in
+`treesit-simple-indent-rules'.  MATCHERs and ANCHORs are
+functions that take 3 arguments: NODE, PARENT, and BOL.
 
 MATCHER:
 
@@ -1320,6 +1327,10 @@ no-node
 
     Checks that NODE's type matches regexp TYPE.
 
+\(field-is NAME)
+
+    Checks that NODE's field name in PARENT matches regexp NAME.
+
 \(n-p-gp NODE-TYPE PARENT-TYPE GRANDPARENT-TYPE)
 
     Checks for NODE's, its parent's, and its grandparent's type.
@@ -1333,15 +1344,32 @@ comment-end
 
     Matches if text after point matches `treesit-comment-end'.
 
+catch-all
+
+    Always matches.
+
 ANCHOR:
 
 first-sibling
 
     Returns the start of the first child of PARENT.
 
+\(nth-sibling N &optional NAMED)
+
+    Returns the start of the Nth child of PARENT.
+    NAMED non-nil means count only named nodes.
+
 parent
 
     Returns the start of PARENT.
+
+grand-parent
+
+    Returns the start of PARENT's parent.
+
+great-grand-parent
+
+    Returns the start of PARENT's parent's parent.
 
 parent-bol
 
@@ -1350,8 +1378,8 @@ parent-bol
 
 standalone-parent
 
-    Finds the first ancestor node (parent, grandparent, etc) that
-    starts on its own line, and return the start of that node.
+    Finds the first ancestor node (parent, grandparent, etc.) that
+    starts on its own line, and returns the start of that node.
 
 prev-sibling
 
@@ -1382,7 +1410,7 @@ prev-adaptive-prefix
     end of the match, otherwise return nil.  However, if the
     current line begins with a prefix, return the beginning of
     the prefix of the previous line instead, so that the two
-    prefixes aligns.  This is useful for a `indent-relative'-like
+    prefixes aligns.  This is useful for an `indent-relative'-like
     indent behavior for block comments.")
 
 (defun treesit--simple-indent-eval (exp)
@@ -1853,6 +1881,10 @@ This is a tree-sitter equivalent of `beginning-of-defun'.
 Behavior of this function depends on `treesit-defun-type-regexp'
 and `treesit-defun-skipper'."
   (interactive "^p")
+  (or (not (eq this-command 'treesit-beginning-of-defun))
+      (eq last-command 'treesit-beginning-of-defun)
+      (and transient-mark-mode mark-active)
+      (push-mark))
   (let ((orig-point (point))
         (success nil))
     (catch 'done
@@ -1883,6 +1915,10 @@ this function depends on `treesit-defun-type-regexp' and
   (interactive "^p\nd")
   (let ((orig-point (point)))
     (if (or (null arg) (= arg 0)) (setq arg 1))
+    (or (not (eq this-command 'treesit-end-of-defun))
+        (eq last-command 'treesit-end-of-defun)
+        (and transient-mark-mode mark-active)
+        (push-mark))
     (catch 'done
       (dotimes (_ 2) ; Not making progress is better than infloop.
 
@@ -2283,7 +2319,10 @@ instead of emitting a warning."
     ;; Check for each condition and set MSG.
     (catch 'term
       (when (not (treesit-available-p))
-        (setq msg "tree-sitter library is not compiled with Emacs")
+        (setq msg (if (fboundp 'treesit-node-p)
+                      ;; Windows loads tree-sitter dynakically.
+                      "tree-sitter library is not available or failed to load"
+                    "Emacs is not compiled with tree-sitter library"))
         (throw 'term nil))
       (when (> (position-bytes (max (point-min) (1- (point-max))))
                treesit-max-buffer-size)
@@ -2312,24 +2351,24 @@ instead of emitting a warning."
 (defun treesit-major-mode-setup ()
   "Activate tree-sitter to power major-mode features.
 
-If `treesit-font-lock-settings' is non-nil, setup fontification and
-enable `font-lock-mode'.
+If `treesit-font-lock-settings' is non-nil, set up fontification
+and enable `font-lock-mode'.
 
-If `treesit-simple-indent-rules' is non-nil, setup indentation.
+If `treesit-simple-indent-rules' is non-nil, set up indentation.
 
-If `treesit-defun-type-regexp' is non-nil, setup
-`beginning/end-of-defun' functions.
+If `treesit-defun-type-regexp' is non-nil, set up
+`beginning-of-defun-function' and `end-of-defun-function'.
 
-If `treesit-defun-name-function' is non-nil, setup
+If `treesit-defun-name-function' is non-nil, set up
 `add-log-current-defun'.
 
-If `treesit-simple-imenu-settings' is non-nil, setup Imenu.
+If `treesit-simple-imenu-settings' is non-nil, set up Imenu.
 
 Make sure necessary parsers are created for the current buffer
 before calling this function."
   ;; Font-lock.
   (when treesit-font-lock-settings
-    ;; `font-lock-mode' wouldn't setup properly if
+    ;; `font-lock-mode' wouldn't set up properly if
     ;; `font-lock-defaults' is nil, see `font-lock-specified-p'.
     (setq-local font-lock-defaults
                 '( nil nil nil nil
@@ -2783,7 +2822,7 @@ window."
           (display-buffer treesit--explorer-buffer
                           (cons nil '((inhibit-same-window . t))))
           (treesit--explorer-refresh)
-          ;; Setup variables and hooks.
+          ;; Set up variables and hooks.
           (add-hook 'post-command-hook
                     #'treesit--explorer-post-command 0 t)
           (add-hook 'kill-buffer-hook
@@ -2864,7 +2903,9 @@ See `treesit-language-source-alist' for details."
 
 Interactively, if `treesit-language-source-alist' doesn't already
 have data for building the grammar for LANG, prompt for its
-repository URL and the C/C++ compiler to use.
+repository URL and the C/C++ compiler to use.  The recipe built
+by the prompts are saved for the current session if the
+installation is successful and the grammar is loadable.
 
 This command requires Git, a C compiler and (sometimes) a C++ compiler,
 and the linker to be installed and on PATH.  It also requires that the
@@ -2881,27 +2922,31 @@ executable programs, such as the C/C++ compiler and linker."
                   (treesit--install-language-grammar-build-recipe
                    lang))))
     (condition-case err
-        (apply #'treesit--install-language-grammar-1
-               ;; The nil is OUT-DIR.
-               (cons nil recipe))
+        (progn
+          (apply #'treesit--install-language-grammar-1
+                 ;; The nil is OUT-DIR.
+                 (cons nil recipe))
+
+          ;; Check that the installed language grammar is loadable.
+          (pcase-let ((`(,available . ,err)
+                       (treesit-language-available-p lang t)))
+            (if (not available)
+                (display-warning
+                 'treesit
+                 (format "The installed language grammar for %s cannot be located or has problems (%s): %s"
+                         lang (nth 0 err)
+                         (string-join
+                          (mapcar (lambda (x) (format "%s" x))
+                                  (cdr err))
+                          " ")))
+              ;; If success, Save the recipe for the current session.
+              (setf (alist-get lang treesit-language-source-alist)
+                    recipe))))
       (error
        (display-warning
         'treesit
         (format "Error encountered when installing language grammar: %s"
-                err)))))
-
-  ;; Check that the installed language grammar is loadable.
-  (pcase-let ((`(,available . ,err)
-               (treesit-language-available-p lang t)))
-    (when (not available)
-      (display-warning
-       'treesit
-       (format "The installed language grammar for %s cannot be located or has problems (%s): %s"
-               lang (nth 0 err)
-               (string-join
-                (mapcar (lambda (x) (format "%s" x))
-                        (cdr err))
-                " "))))))
+                err))))))
 
 (defun treesit--call-process-signal (&rest args)
   "Run `call-process' with ARGS.

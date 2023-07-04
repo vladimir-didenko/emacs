@@ -1482,7 +1482,7 @@ the symbol as a function, Emacs signals a @code{void-function} error.
   Note that void is not the same as @code{nil} or the symbol
 @code{void}.  The symbols @code{nil} and @code{void} are Lisp objects,
 and can be stored into a function cell just as any other object can be
-(and they can be valid functions if you define them in turn with
+(and @code{void} can be a valid function if you define it with
 @code{defun}).  A void function cell contains no object whatsoever.
 
   You can test the voidness of a symbol's function definition with
@@ -2360,6 +2360,11 @@ this:
 (set-advertised-calling-convention
   'sit-for '(seconds &optional nodisp) "22.1")
 @end example
+
+@noindent
+The alternative to using this function is the
+@code{advertised-calling-convention} @code{declare} spec, see
+@ref{Declare Form}.
 @end defun
 
 @node Inline Functions
@@ -2536,6 +2541,7 @@ Each element in @var{specs} should have the form @code{(@var{property}
 following effects:
 
 @table @code
+@cindex @code{advertised-calling-convention} (@code{declare} spec)
 @item (advertised-calling-convention @var{signature} @var{when})
 This acts like a call to @code{set-advertised-calling-convention}
 (@pxref{Obsolete Functions}); @var{signature} specifies the correct
@@ -2561,6 +2567,7 @@ This is typically used for macros, though it works for functions too.
 Set the function's @code{interactive-only} property to @var{value}.
 @xref{The interactive-only property}.
 
+@cindex @code{obsolete} (@code{declare} spec)
 @item (obsolete @var{current-name} @var{when})
 Mark the function or macro as obsolete, similar to a call to
 @code{make-obsolete} (@pxref{Obsolete Functions}).  @var{current-name}
@@ -2602,14 +2609,18 @@ be passed to @code{gv-define-setter}.
 
 @item (completion @var{completion-predicate})
 Declare @var{completion-predicate} as a function to determine whether
-to include the symbol in the list of functions when asking for
-completions in @kbd{M-x}.  @var{completion-predicate} is called with
-two parameters: The first parameter is the symbol, and the second is
-the current buffer.
+to include a function's symbol in the list of functions when asking
+for completions in @kbd{M-x}.  This predicate function will only be
+called when @code{read-extended-command-predicate} is customized to
+@code{command-completion-default-include-p}; by default the value of
+@code{read-extended-command-predicate} is nil (@pxref{Interactive
+Call, execute-extended-command}).  The predicate
+@var{completion-predicate} is called with two arguments: the
+function's symbol and the current buffer.
 
 @item (modes @var{modes})
-Specify that this command is meant to be applicable for @var{modes}
-only.
+Specify that this command is meant to be applicable only to specified
+@var{modes}.  @xref{Command Modes}.
 
 @item (interactive-args @var{arg} ...)
 Specify the arguments that should be stored for @code{repeat-command}.

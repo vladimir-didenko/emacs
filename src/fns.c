@@ -3185,16 +3185,21 @@ has been confirmed.
 If the `use-short-answers' variable is non-nil, instead of asking for
 \"yes\" or \"no\", this function will ask for \"y\" or \"n\".
 
-If dialog boxes are supported, a dialog box will be used
-if `last-nonmenu-event' is nil, and `use-dialog-box' is non-nil.  */)
+If dialog boxes are supported, this function will use a dialog box
+if `use-dialog-box' is non-nil and the last input event was produced
+by a mouse, or by some window-system gesture, or via a menu.  */)
   (Lisp_Object prompt)
 {
-  Lisp_Object ans;
+  Lisp_Object ans, val;
 
   CHECK_STRING (prompt);
 
-  if ((NILP (last_nonmenu_event) || CONSP (last_nonmenu_event))
-      && use_dialog_box && ! NILP (last_input_event))
+  if (!NILP (last_input_event)
+      && (CONSP (last_nonmenu_event)
+	  || (NILP (last_nonmenu_event) && CONSP (last_input_event))
+	  || (val = find_symbol_value (Qfrom__tty_menu_p),
+	      (!NILP (val) && !EQ (val, Qunbound))))
+      && use_dialog_box)
     {
       Lisp_Object pane, menu, obj;
       redisplay_preserve_echo_area (4);
@@ -6116,29 +6121,40 @@ second optional argument ABSOLUTE is non-nil, the value counts the lines
 from the absolute start of the buffer, disregarding the narrowing.  */)
   (register Lisp_Object position, Lisp_Object absolute)
 {
-  ptrdiff_t pos, start = BEGV_BYTE;
+  ptrdiff_t pos_byte, start_byte = BEGV_BYTE;
 
   if (MARKERP (position))
-    pos = marker_position (position);
+    {
+      /* We don't trust the byte position if the marker's buffer is
+         not the current buffer.  */
+      if (XMARKER (position)->buffer != current_buffer)
+	pos_byte = CHAR_TO_BYTE (marker_position (position));
+      else
+	pos_byte = marker_byte_position (position);
+    }
   else if (NILP (position))
-    pos = PT;
+    pos_byte = PT_BYTE;
   else
     {
       CHECK_FIXNUM (position);
-      pos = XFIXNUM (position);
+      ptrdiff_t pos = XFIXNUM (position);
+      /* Check that POSITION is valid. */
+      if (pos < BEG || pos > Z)
+	args_out_of_range_3 (position, make_int (BEG), make_int (Z));
+      pos_byte = CHAR_TO_BYTE (pos);
     }
 
   if (!NILP (absolute))
-    start = BEG_BYTE;
+    start_byte = BEG_BYTE;
+  else if (NILP (absolute))
+    pos_byte = clip_to_bounds (BEGV_BYTE, pos_byte, ZV_BYTE);
 
-  /* Check that POSITION is in the accessible range of the buffer, or,
-     if we're reporting absolute positions, in the buffer. */
-  if (NILP (absolute) && (pos < BEGV || pos > ZV))
-    args_out_of_range_3 (make_int (pos), make_int (BEGV), make_int (ZV));
-  else if (!NILP (absolute) && (pos < 1 || pos > Z))
-    args_out_of_range_3 (make_int (pos), make_int (1), make_int (Z));
+  /* Check that POSITION is valid. */
+  if (pos_byte < BEG_BYTE || pos_byte > Z_BYTE)
+    args_out_of_range_3 (make_int (BYTE_TO_CHAR (pos_byte)),
+			 make_int (BEG), make_int (Z));
 
-  return make_int (count_lines (start, CHAR_TO_BYTE (pos)) + 1);
+  return make_int (count_lines (start_byte, pos_byte) + 1);
 }
 
 
@@ -6347,4 +6363,5 @@ The same variable also affects the function `read-answer'.  */);
   defsubr (&Sbuffer_line_statistics);
 
   DEFSYM (Qreal_this_command, "real-this-command");
+  DEFSYM (Qfrom__tty_menu_p, "from--tty-menu-p");
 }

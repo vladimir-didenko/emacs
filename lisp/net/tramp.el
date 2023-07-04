@@ -63,6 +63,7 @@
 (declare-function file-notify-rm-watch "filenotify")
 (declare-function netrc-parse "netrc")
 (defvar auto-save-file-name-transforms)
+(defvar ls-lisp-use-insert-directory-program)
 
 ;; Reload `tramp-compat' when we reload `tramp-autoloads' of the GNU
 ;; ELPA package.
@@ -1959,8 +1960,11 @@ version, the function does nothing."
   "Return contents of BUFFER.
 If BUFFER is not a buffer or a buffer name, return the contents
 of `current-buffer'."
-  (with-current-buffer (or buffer (current-buffer))
-    (substring-no-properties (buffer-string))))
+  (or (let ((buf (or buffer (current-buffer))))
+        (when (bufferp buf)
+          (with-current-buffer (or buffer (current-buffer))
+	    (substring-no-properties (buffer-string)))))
+      ""))
 
 (defun tramp-debug-buffer-name (vec)
   "A name for the debug buffer for VEC."
@@ -3892,8 +3896,10 @@ Let-bind it when necessary.")
 (defun tramp-handle-file-name-as-directory (file)
   "Like `file-name-as-directory' for Tramp files."
   ;; `file-name-as-directory' would be sufficient except localname is
-  ;; the empty string.
-  (let ((v (tramp-dissect-file-name file t)))
+  ;; the empty string.  Suppress adding a hop to
+  ;; `tramp-default-proxies-alist' due to non-expanded default values.
+  (let ((v (tramp-dissect-file-name file t))
+	tramp-default-proxies-alist)
     ;; Run the command on the localname portion only unless we are in
     ;; completion mode.
     (tramp-make-tramp-file-name
@@ -3983,8 +3989,10 @@ Let-bind it when necessary.")
   "Like `file-name-directory' for Tramp files."
   ;; Everything except the last filename thing is the directory.  We
   ;; cannot apply `with-parsed-tramp-file-name', because this expands
-  ;; the remote file name parts.
-  (let ((v (tramp-dissect-file-name file t)))
+  ;; the remote file name parts.  Suppress adding a hop to
+  ;; `tramp-default-proxies-alist' due to non-expanded default values.
+  (let ((v (tramp-dissect-file-name file t))
+	tramp-default-proxies-alist)
     ;; Run the command on the localname portion only.  If this returns
     ;; nil, mark also the localname part of `v' as nil.
     (tramp-make-tramp-file-name
@@ -4177,6 +4185,7 @@ Let-bind it when necessary.")
 (defun tramp-handle-insert-directory
   (filename switches &optional wildcard full-directory-p)
   "Like `insert-directory' for Tramp files."
+  (require 'ls-lisp)
   (unless switches (setq switches ""))
   ;; Mark trailing "/".
   (when (and (directory-name-p filename)
@@ -4189,7 +4198,6 @@ Let-bind it when necessary.")
     (with-tramp-progress-reporter v 0 (format "Opening directory %s" filename)
       (let (ls-lisp-use-insert-directory-program start)
 	;; Silence byte compiler.
-	(ignore ls-lisp-use-insert-directory-program)
 	(tramp-run-real-handler
 	 #'insert-directory
 	 (list filename switches wildcard full-directory-p))
@@ -4620,25 +4628,29 @@ Do not set it manually, it is used buffer-local in `tramp-get-lock-pid'.")
   "Add ad-hoc proxy definitions to `tramp-default-proxies-alist'."
   (when-let ((hops (tramp-file-name-hop vec))
 	     (item vec))
-    (dolist (proxy (reverse (split-string hops tramp-postfix-hop-regexp 'omit)))
-      (let* ((host-port (tramp-file-name-host-port item))
-	     (user-domain (tramp-file-name-user-domain item))
-	     (proxy (concat
-		     tramp-prefix-format proxy tramp-postfix-host-format))
-	     (entry
-	      (list (and (stringp host-port)
-			 (tramp-compat-rx bol (literal host-port) eol))
-		    (and (stringp user-domain)
-			 (tramp-compat-rx bol (literal user-domain) eol))
-		    (propertize proxy 'tramp-ad-hoc t))))
-	(tramp-message vec 5 "Add %S to `tramp-default-proxies-alist'" entry)
-	;; Add the hop.
-	(add-to-list 'tramp-default-proxies-alist entry)
-	(setq item (tramp-dissect-file-name proxy))))
-    ;; Save the new value.
-    (when tramp-save-ad-hoc-proxies
-      (customize-save-variable
-       'tramp-default-proxies-alist tramp-default-proxies-alist))))
+    (let (signal-hook-function changed)
+      (dolist
+	  (proxy (reverse (split-string hops tramp-postfix-hop-regexp 'omit)))
+	(let* ((host-port (tramp-file-name-host-port item))
+	       (user-domain (tramp-file-name-user-domain item))
+	       (proxy (concat
+		       tramp-prefix-format proxy tramp-postfix-host-format))
+	       (entry
+		(list (and (stringp host-port)
+			   (tramp-compat-rx bol (literal host-port) eol))
+		      (and (stringp user-domain)
+			   (tramp-compat-rx bol (literal user-domain) eol))
+		      (propertize proxy 'tramp-ad-hoc t))))
+	  ;; Add the hop.
+	  (unless (member entry tramp-default-proxies-alist)
+	    (tramp-message vec 5 "Add %S to `tramp-default-proxies-alist'" entry)
+	    (add-to-list 'tramp-default-proxies-alist entry)
+	    (setq changed t))
+	  (setq item (tramp-dissect-file-name proxy))))
+      ;; Save the new value.
+      (when (and tramp-save-ad-hoc-proxies changed)
+	(customize-save-variable
+	 'tramp-default-proxies-alist tramp-default-proxies-alist)))))
 
 (defun tramp-compute-multi-hops (vec)
   "Expands VEC according to `tramp-default-proxies-alist'."

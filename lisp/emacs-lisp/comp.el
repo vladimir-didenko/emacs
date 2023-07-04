@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2019-2023 Free Software Foundation, Inc.
 
-;; Author: Andrea Corallo <akrl@sdf.org>
+;; Author: Andrea Corallo <acorallo@gnu.org>
 ;; Keywords: lisp
 ;; Package: emacs
 
@@ -3724,6 +3724,7 @@ Prepare every function for final compilation and drive the C back-end."
                            ',native-comp-compiler-options
                            native-comp-driver-options
                            ',native-comp-driver-options
+                           byte-compile-warnings ',byte-compile-warnings
                            load-path ',load-path)
                      ,native-comp-async-env-modifier-form
                      (message "Compiling %s..." ',output)
@@ -3996,6 +3997,7 @@ display a message."
                                              native-comp-driver-options
                                              load-path
                                              backtrace-line-length
+                                             byte-compile-warnings
                                              ;; package-load-list
                                              ;; package-user-dir
                                              ;; package-directory-list
@@ -4316,6 +4318,26 @@ last directory in `native-comp-eln-load-path')."
              else
              collect (byte-compile-file file))))
 
+(defun comp-write-bytecode-file (eln-file)
+  "After native compilation write the bytecode file for ELN-FILE.
+Make sure that eln file is younger than byte-compiled one and
+return the filename of this last.
+
+This function can be used only in conjuntion with
+`byte+native-compile' `byte-to-native-output-buffer-file' (see
+`batch-byte+native-compile')."
+  (pcase byte-to-native-output-buffer-file
+    (`(,temp-buffer . ,target-file)
+     (unwind-protect
+         (progn
+           (byte-write-target-file temp-buffer target-file)
+           ;; Touch the .eln in order to have it older than the
+           ;; corresponding .elc.
+           (when (stringp eln-file)
+             (set-file-times eln-file)))
+       (kill-buffer temp-buffer))
+     target-file)))
+
 ;;;###autoload
 (defun batch-byte+native-compile ()
   "Like `batch-native-compile', but used for bootstrap.
@@ -4331,16 +4353,7 @@ variable \"NATIVE_DISABLED\" is set, only byte compile."
     (let* ((byte+native-compile t)
            (byte-to-native-output-buffer-file nil)
            (eln-file (car (batch-native-compile))))
-      (pcase byte-to-native-output-buffer-file
-        (`(,temp-buffer . ,target-file)
-         (unwind-protect
-             (progn
-               (byte-write-target-file temp-buffer target-file)
-               ;; Touch the .eln in order to have it older than the
-               ;; corresponding .elc.
-               (when (stringp eln-file)
-                 (set-file-times eln-file)))
-           (kill-buffer temp-buffer))))
+      (comp-write-bytecode-file eln-file)
       (setq command-line-args-left (cdr command-line-args-left)))))
 
 ;;;###autoload

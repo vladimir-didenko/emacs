@@ -23,7 +23,7 @@ dnl  along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.
 
 AC_PREREQ([2.65])
 dnl Note this is parsed by (at least) make-dist and lisp/cedet/ede/emacs.el.
-AC_INIT([GNU Emacs], [29.0.60], [bug-gnu-emacs@gnu.org], [],
+AC_INIT([GNU Emacs], [29.0.92], [bug-gnu-emacs@gnu.org], [],
   [https://www.gnu.org/software/emacs/])
 
 dnl Set emacs_config_options to the options of 'configure', quoted for the shell,
@@ -459,6 +459,7 @@ OPTION_DEFAULT_ON([sqlite3],[don't compile with sqlite3 support])
 OPTION_DEFAULT_ON([lcms2],[don't compile with Little CMS support])
 OPTION_DEFAULT_ON([libsystemd],[don't compile with libsystemd support])
 OPTION_DEFAULT_ON([cairo],[don't compile with Cairo drawing])
+OPTION_DEFAULT_OFF([cairo-xcb], [use XCB surfaces for Cairo support])
 OPTION_DEFAULT_ON([xml2],[don't compile with XML parsing support])
 OPTION_DEFAULT_OFF([imagemagick],[compile with ImageMagick image support])
 OPTION_DEFAULT_ON([native-image-api], [don't use native image APIs (GDI+ on Windows)])
@@ -1642,7 +1643,8 @@ case "$opsys" in
   ## Motif needs -lgen.
   unixware) LIBS_SYSTEM="-lsocket -lnsl -lelf -lgen" ;;
 
-  haiku) LIBS_SYSTEM="-lnetwork" ;;
+  # Haiku needs -lbsd for cfsetspeed.
+  haiku) LIBS_SYSTEM="-lnetwork -lbsd" ;;
 esac
 
 AC_SUBST([LIBS_SYSTEM])
@@ -3606,14 +3608,14 @@ if test "${HAVE_X11}" = "yes"; then
     CAIRO_MODULE="cairo >= $CAIRO_REQUIRED"
     EMACS_CHECK_MODULES([CAIRO], [$CAIRO_MODULE])
     if test $HAVE_CAIRO = yes; then
-      CAIRO_XCB_MODULE="cairo-xcb >= $CAIRO_REQUIRED"
-      EMACS_CHECK_MODULES([CAIRO_XCB], [$CAIRO_XCB_MODULE])
-      if test $HAVE_CAIRO_XCB = yes; then
-	CAIRO_CFLAGS="$CAIRO_CFLAGS $CAIRO_XCB_CFLAGS"
-	CAIRO_LIBS="$CAIRO_LIBS $CAIRO_XCB_LIBS"
-	AC_DEFINE([USE_CAIRO_XCB], [1],
-	  [Define to 1 if cairo XCB surfaces are available.])
-      fi
+      AS_IF([test "x$with_cairo_xcb" = "xyes"], [
+	CAIRO_XCB_MODULE="cairo-xcb >= $CAIRO_REQUIRED"
+	EMACS_CHECK_MODULES([CAIRO_XCB], [$CAIRO_XCB_MODULE])
+	AS_IF([test "x$HAVE_CAIRO_XCB" = "xyes"], [
+	  CAIRO_CFLAGS="$CAIRO_CFLAGS $CAIRO_XCB_CFLAGS"
+	  CAIRO_LIBS="$CAIRO_LIBS $CAIRO_XCB_LIBS"
+	  AC_DEFINE([USE_CAIRO_XCB], [1],
+	    [Define to 1 if cairo XCB surfaces are available.])])])
       AC_DEFINE([USE_CAIRO], [1], [Define to 1 if using cairo.])
       CFLAGS="$CFLAGS $CAIRO_CFLAGS"
       LIBS="$LIBS $CAIRO_LIBS"
